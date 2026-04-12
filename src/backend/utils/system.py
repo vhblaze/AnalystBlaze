@@ -17,8 +17,7 @@ POWER_PLAN_GUIDS = {
     "POWER_SAVER": "a1841308-3541-4fab-bc81-f71556f20b4a"
 }
 
-OPT_PROCESSES_TO_KILL: List[str] = [
-    "spotify.exe",
+OPT_PROCESSES_TO_KILL = [
     "epicgameslauncher.exe", 
     "steamwebhelper.exe", 
     "teams.exe",     
@@ -29,10 +28,6 @@ OPT_PROCESSES_TO_KILL: List[str] = [
     "qbittorrent.exe",
     "AnyDesk.exe",     
     "TeamViewer.exe",      
-    "chrome.exe",          
-    "firefox.exe",             
-    "msedge.exe", 
-    "opera.exe" ,
     "copilot.exe",
 ]
 
@@ -53,42 +48,30 @@ def format_bytes(size_in_bytes: int) -> str:
     return f"{size:.2f} {units[i]}"
 
 def execute_windows_command(command: List[str]) -> Tuple[bool, str]:
-    """Executa um comando do Windows e retorna o status e a saída (stdout + stderr)."""
-    command_str = " ".join(command)
-    
+    """Executa comando com segurança (sem shell=True)."""
+
     try:
         result = subprocess.run(
             command,
             capture_output=True,
             text=True,
-            shell=True,
-            check=False # Garante que não levante exceção em códigos de retorno diferentes de zero
+            shell=False  # 🔥 CORREÇÃO DE SEGURANÇA
         )
-        
+
         stdout_output = result.stdout.strip()
         stderr_output = result.stderr.strip()
-        
+
         if result.returncode == 0:
-            logger.debug(f"Comando executado com sucesso: {command[0]}")
             return True, stdout_output
-        
-        else:
-            # Taskkill pode retornar erro se o processo não for encontrado (tratamento específico)
-            if "not found" in stderr_output.lower() or "não encontrado" in stderr_output.lower():
-                logger.debug(f"Comando '{command[0]}' retornou erro esperado (Processo não encontrado).")
-                return True, f"AVISO: {stderr_output}" 
-            
-            error_message = f"CÓDIGO {result.returncode}: {stderr_output}"
-            logger.error(f"Falha ao executar '{command_str}'. Saída de Erro: {error_message}")
-            return False, error_message
-            
-    except FileNotFoundError:
-        logger.error(f"Comando não encontrado: {command[0]}")
-        return False, f"Comando não encontrado: {command[0]}"
-        
+
+        # tratamento especial
+        if "not found" in stderr_output.lower() or "não encontrado" in stderr_output.lower():
+            return True, f"AVISO: {stderr_output}"
+
+        return False, stderr_output or f"Código {result.returncode}"
+
     except Exception as e:
-        logger.error(f"Erro inesperado ao executar '{command_str}': {e}")
-        return False, f"Erro inesperado: {e}"
+        return False, str(e)
 
 
 # ====================================================================
@@ -96,18 +79,29 @@ def execute_windows_command(command: List[str]) -> Tuple[bool, str]:
 # ====================================================================
 
 def get_temp_paths() -> Dict[str, str]:
-    """Retorna um dicionário de caminhos temporários a serem limpos."""
     user_temp = os.environ.get('TEMP')
     local_app_data = os.environ.get('LOCALAPPDATA')
     system_drive = os.environ.get('SystemDrive', 'C:')
 
     paths = {}
+
     if user_temp:
         paths['Temp Usuário'] = user_temp
+
     if local_app_data:
-        paths['Temp/Cache Local'] = os.path.join(local_app_data, 'Temp')
-        paths['Cache Edge'] = os.path.join(local_app_data, 'Microsoft', 'Edge', 'User Data', 'Default', 'Cache')
-        paths['Cache Chrome'] = os.path.join(local_app_data, 'Google', 'Chrome', 'User Data', 'Default', 'Cache')
+        local_temp = os.path.join(local_app_data, 'Temp')
+
+        # Evita duplicação
+        if local_temp != user_temp:
+            paths['Temp Local'] = local_temp
+
+        paths['Cache Edge'] = os.path.join(
+            local_app_data, 'Microsoft', 'Edge', 'User Data', 'Default', 'Cache'
+        )
+
+        paths['Cache Chrome'] = os.path.join(
+            local_app_data, 'Google', 'Chrome', 'User Data', 'Default', 'Cache'
+        )
 
     if system_drive:
         paths['Temp Sistema'] = os.path.join(system_drive, 'Windows', 'Temp')
@@ -190,26 +184,56 @@ def optimize_disk(drive_letter: str = "C") -> Tuple[bool, str]:
         logger.error(msg)
         return False, msg
     
-def terminate_processes(processes: List[str]) -> Tuple[bool, List[str]]:
-    """Tenta encerrar uma lista de processos usando o taskkill."""
+def terminate_processes(processes: List[str], context: str = "default") -> Tuple[bool, List[str]]:
+    """Encerra processos de forma inteligente (não fecha apps críticos)."""
+
+    PROTECTED_PROCESSES = {
+        "chrome.exe",
+        "msedge.exe",
+        "firefox.exe",
+        "opera.exe",
+        "spotify.exe",
+        "discord.exe",
+        "vlc.exe",
+        "obs64.exe"
+    }
+
+    # 🔥 proteção dinâmica por contexto
+    if context == "gaming":
+        PROTECTED_PROCESSES.update({
+            "steam.exe",
+            "epicgameslauncher.exe"
+        })
+
+    if context == "media":
+        PROTECTED_PROCESSES.update({
+            "spotify.exe",
+            "chrome.exe",
+            "msedge.exe"
+        })
+
+    safe_processes = [
+        p for p in processes
+        if p.lower() not in PROTECTED_PROCESSES
+    ]
+
     terminated_list = []
-    
-    logger.info(f"Tentando encerrar {len(processes)} processos para otimização.")
-    overall_success = True 
-    
-    for process_name in processes:
+    overall_success = True
+
+    logger.info(f"🧠 Encerrando {len(safe_processes)} processos (modo seguro)")
+
+    for process_name in safe_processes:
         command = ["taskkill", "/F", "/IM", process_name]
+
         success, output = execute_windows_command(command)
-        
+
         if success:
-            if "AVISO:" in output:
-                logger.debug(f" - Processo '{process_name}' não estava rodando.")
-            else:
+            if "AVISO:" not in output:
                 terminated_list.append(process_name)
-                logger.info(f" - ENCERRADO: {process_name}")
-                
+                logger.info(f"ENCERRADO: {process_name}")
         else:
-            logger.warning(f" - FALHA crítica ao encerrar '{process_name}'. Output: {output.strip()}")
+            overall_success = False
+            logger.warning(f"Falha ao encerrar '{process_name}': {output}")
 
     return overall_success, terminated_list
 
@@ -235,13 +259,14 @@ def get_dir_size(start_path: str) -> int:
         logger.debug(f"Erro ao calcular tamanho em {start_path}: {e}")
     return total_size
 
-def clean_directory(path: str) -> int:
+def clean_directory(path: str, skip_size: bool = False) -> int:
+    
     """Remove todo o conteúdo de um diretório e retorna o tamanho liberado."""
     if not os.path.exists(path):
         return 0
         
-    cleaned_size = get_dir_size(path)
-        
+    cleaned_size = 0 if skip_size else get_dir_size(path)
+      
     # 2. Tenta remover TUDO
     try:
         # Percorre o conteúdo do diretório de destino

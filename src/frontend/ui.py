@@ -9,7 +9,7 @@ from typing import Dict, Any, Tuple
 # --- IMPORTAÇÕES CORRIGIDAS (Mudança de Relativa para Absoluta) ---
 try:
     from src.backend.cleanup import perform_cleanup
-    from src.update.updater import is_update_available
+    from update.updater_core import is_update_available
 except ImportError as e:
     logging.error(f"Erro de importação no UI: {e}")
 
