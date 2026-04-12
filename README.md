@@ -56,9 +56,6 @@ O BlazeScan verifica se há uma nova versão disponível no GitHub ao ser inicia
 - GitHub: [@vhblaze](https://github.com/vhblaze)
 - Repositório: [BlazeScan](https://github.com/vhblaze/BlazeScan)
 
-## 🙏 Agradecimentos
-
-Agradecemos a todos que contribuem com ferramentas open source.
 
 ## 📄 Licença
 
