@@ -1,64 +1,171 @@
-# BlazeScan - Otimizador de Sistema para Windows 11
+# 🔥 BlazeScan - Otimizador Inteligente para Windows
 
 ![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%2011-lightgrey.svg)
 
-**BlazeScan** é uma ferramenta de otimização de sistema simples e eficiente, projetada para usuários de Windows 11. Com apenas um clique, você libera espaço em disco e ajusta as configurações de energia para garantir o máximo desempenho do seu PC.
+O **BlazeScan** é um otimizador de sistema para Windows que utiliza **Inteligência Artificial híbrida (local + remota)** para melhorar automaticamente o desempenho do seu PC.
 
-## 🚀 Como Usar (Instalação Rápida)
+Diferente de otimizadores tradicionais, o BlazeScan **entende o que você está fazendo** (jogando, assistindo, multitarefa) e toma decisões inteligentes em tempo real.
 
-Para começar a usar o BlazeScan, você só precisa do executável final.
+---
 
-### 1. Baixe o Programa
-Você pode obter a versão mais recente do **BlazeScan.exe** diretamente na página de Releases do projeto:
+# 🚀 Como Usar (Instalação Rápida)
+
+## 1. Baixe o Programa
 ➡️ **[Baixar Último Release](https://github.com/vhblaze/BlazeScan/releases/latest)**
 
-### 2. Execute o Arquivo
-Basta clicar duas vezes no **`BlazeScan.exe`** que você baixou.
+## 2. Execute o Arquivo
 
-**⚠️ Importante:** O Windows solicitará permissão de Administrador (UAC) ao iniciar. Esta permissão é obrigatória para acessar e limpar arquivos de sistema e alterar o plano de energia. Clique em **Sim** para continuar.
+Clique duas vezes no **`BlazeScan.exe`**
 
-### 3. Inicie a Otimização
-Na interface, clique em **"Iniciar Limpeza e Otimização"** e acompanhe o log em tempo real.
+⚠️ O Windows pedirá permissão de administrador — isso é necessário para otimizações do sistema.
 
----
+## 3. Inicie
 
-## ✨ O que o BlazeScan Faz
+Clique em:
 
-O programa é dividido em duas áreas principais para melhorar o desempenho do seu sistema:
-
-### 1. Limpeza de Sistema
-O BlazeScan identifica e remove arquivos desnecessários que consomem espaço e podem causar lentidão:
-* Limpeza de arquivos temporários do usuário (`%TEMP%`).
-* Remoção de lixo digital da pasta de arquivos temporários do sistema (`C:\Windows\Temp`).
-* Exibe exatamente quanto espaço (em MB/GB) foi liberado.
-
-### 2. Otimização de Desempenho
-Ajusta as configurações de energia do seu PC:
-* Altera automaticamente o plano de energia para **"Desempenho Máximo"** ou **"Alto Desempenho"** para garantir que sua CPU use todo o seu potencial durante a sessão.
-
-### 🔄 Atualizações Automáticas
-O BlazeScan verifica se há uma nova versão disponível no GitHub ao ser iniciado. Se houver, uma notificação aparecerá perguntando se você deseja atualizar.
+👉 **"Iniciar Otimização Inteligente"**
 
 ---
 
-## ⚠️ Avisos Importantes
+# 🧠 O DIFERENCIAL (IA REAL)
 
-* **Permissões:** As funcionalidades de otimização dependem de privilégios de Administrador.
-* **Arquivos em Uso:** O programa fará o melhor para limpar tudo, mas arquivos que estejam sendo usados por outros aplicativos no momento não poderão ser deletados.
-* **Compatibilidade:** Testado e otimizado para Windows 11.
+O BlazeScan não é só um limpador — ele é um **sistema inteligente**:
 
-## 👤 Autor
+### 🔍 Analisa seu sistema
+- Uso de RAM
+- Espaço em disco
+- Arquivos temporários
+- Processos ativos
+
+### 🧠 Entende contexto
+- 🎮 Jogando
+- 🎧 Ouvindo música
+- 🎥 Assistindo vídeo
+- 💻 Multitarefa
+
+### ⚡ Decide automaticamente
+- Limpar arquivos
+- Fechar apps pesados
+- Ajustar energia
+- Ou **não fazer nada** (decisão inteligente)
+
+---
+
+# ⚙️ Funcionalidades
+
+## 🧹 Limpeza Inteligente
+- Remove arquivos temporários com segurança
+- Libera espaço automaticamente
+- Evita apagar arquivos críticos
+
+## ⚡ Otimização de Performance
+- Ajusta plano de energia automaticamente
+- Otimiza uso de CPU
+
+## 🧠 IA de Decisão
+- Sistema híbrido:
+  - IA local (funciona offline)
+  - IA remota (aprende com usuários)
+
+## 🎮 Detecção de Uso
+- Não fecha apps durante:
+  - jogos
+  - vídeos
+  - música
+
+## 🔄 Atualizações Automáticas
+- Sistema de updater integrado
+- Download com barra de progresso
+- Atualização direta via GitHub Releases
+
+---
+
+# 🧠 Arquitetura
+
+BlazeScan
+│
+├── 🧠 AI
+│ ├── analyzer.py
+│ ├── scorer.py
+│ ├── predictor.py
+│ ├── insights.py
+│ ├── context.py
+│ └── remote_brain.py
+│
+├── ⚙️ CORE
+│ ├── orchestrator.py
+│ └── cleanup.py
+│
+├── 🔧 UTILS
+│ └── system.py
+│
+├── 🚀 LAUNCHER / UPDATER
+│
+└── ☁️ SERVER (Railway)
+
+
+---
+
+# 🌐 Sistema de IA (Como Funciona)
+
+## 🟢 Local (Offline)
+- Decisões rápidas
+- Sem internet
+- Baseado em contexto
+
+## 🔵 Remoto (Online)
+- Aprende com usuários
+- Melhora decisões com o tempo
+- Base para sistema premium
+
+---
+
+# 💰 Futuro do Projeto
+
+- Sistema de contas
+- Planos Free / Premium
+- IA com aprendizado real
+- Dashboard web
+- Integração com pagamentos
+- Banco de dados (PostgreSQL)
+
+---
+
+# 🔐 Segurança
+
+- Nenhuma ação crítica sem validação
+- Sistema de fallback seguro
+- API protegida por chave
+- Código auditável (open source)
+
+---
+
+# ⚠️ Avisos Importantes
+
+- Requer permissões de administrador
+- Não remove arquivos em uso
+- Otimizado para Windows 11
+- Algumas decisões dependem do contexto detectado
+
+---
+
+# 👨‍💻 Autor
 
 **vhblaze**
 
-- GitHub: [@vhblaze](https://github.com/vhblaze)
-- Repositório: [BlazeScan](https://github.com/vhblaze/BlazeScan)
-
-
-## 📄 Licença
-
-Este projeto está licenciado sob a Licença MIT.
+- GitHub: https://github.com/vhblaze
+- Projeto: https://github.com/vhblaze/BlazeScan
 
 ---
+
+# 📄 Licença
+
+MIT License
+
+---
+
+# 🔥 BlazeScan
+
+> Um otimizador que pensa antes de agir.
