@@ -1,171 +1,58 @@
-# 🔥 BlazeScan - Otimizador Inteligente para Windows
+# AnalystBlaze Desktop
 
-![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
-![License](https://img.shields.io/badge/license-MIT-green.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%2011-lightgrey.svg)
+Aplicativo desktop Tauri com front-end React/Vite adaptado do `analystblaze-core`.
 
-O **BlazeScan** é um otimizador de sistema para Windows que utiliza **Inteligência Artificial híbrida (local + remota)** para melhorar automaticamente o desempenho do seu PC.
+## Comandos
 
-Diferente de otimizadores tradicionais, o BlazeScan **entende o que você está fazendo** (jogando, assistindo, multitarefa) e toma decisões inteligentes em tempo real.
+```bash
+npm install
+npm run dev
+npm run tauri dev
+npm run build
+```
 
----
+Em maquinas com Smart App Control ativo, `npm run tauri dev` passa pelo wrapper `scripts/tauri-sac-router.ps1`, que reutiliza os scripts de assinatura local ja existentes.
 
-# 🚀 Como Usar (Instalação Rápida)
+## Ambiente
 
-## 1. Baixe o Programa
-➡️ **[Baixar Último Release](https://github.com/vhblaze/BlazeScan/releases/latest)**
+Copie `.env.example` quando precisar configurar endpoints:
 
-## 2. Execute o Arquivo
+- `VITE_ANALYSTBLAZE_TELEMETRY_URL`: endpoint opcional para lotes de telemetria de interface.
+- `VITE_ANALYSTBLAZE_INSIGHTS_URL`: endpoint opcional para insights.
+- `ANALYSTBLAZE_API_URL` e `ANALYSTBLAZE_WEB_URL`: usados pelo agente Rust/Tauri em runtime.
 
-Clique duas vezes no **`BlazeScan.exe`**
+Sem endpoint de telemetria, os eventos ficam salvos localmente e limitados pelo tamanho maximo configurado.
 
-⚠️ O Windows pedirá permissão de administrador — isso é necessário para otimizações do sistema.
+## Autenticacao desktop
 
-## 3. Inicie
+O desktop nao gerencia pagamentos, usuarios ou planos. Ele abre o login do web app em:
 
-Clique em:
+```text
+{ANALYSTBLAZE_WEB_URL}/login?desktop=1&redirect_uri=analystblaze%3A%2F%2Fauth
+```
 
-👉 **"Iniciar Otimização Inteligente"**
+Depois que o web app validar conta e assinatura, ele deve redirecionar para `analystblaze://auth` com um `token` ou `access_token`, e opcionalmente `refresh_token`, via query string ou fragmento. Sem esse redirect, o usuario fica logado apenas no navegador e o desktop nao recebe a sessao.
 
----
+Se o usuario ja estiver logado no web app, a tela `/login?desktop=1` pode trocar a sessao web existente por uma sessao desktop em `POST /api/v1/auth/desktop-session` e abrir o deep link sem pedir senha novamente.
 
-# 🧠 O DIFERENCIAL (IA REAL)
+Para o desktop exibir a conta, o callback tambem pode enviar campos publicos como `name` ou `username`, `email`, `plan` e `has_paid_plan`. Se esses campos estiverem no JWT, o desktop tenta usa-los apenas como fallback visual. Depois do registro do hardware, o desktop tambem tenta ler o perfil em `GET /api/v1/auth/me`, `/api/v1/me`, `/api/v1/account/me` ou `/api/v1/users/me`, sem bloquear o login caso esses endpoints nao existam.
 
-O BlazeScan não é só um limpador — ele é um **sistema inteligente**:
+Campos genericos com o nome do produto, como `AnalystBlaze`, sao ignorados como nome de usuario. A validacao de conta, plano e pagamento continua sendo responsabilidade do web/API.
 
-### 🔍 Analisa seu sistema
-- Uso de RAM
-- Espaço em disco
-- Arquivos temporários
-- Processos ativos
+Exemplo:
 
-### 🧠 Entende contexto
-- 🎮 Jogando
-- 🎧 Ouvindo música
-- 🎥 Assistindo vídeo
-- 💻 Multitarefa
+```text
+analystblaze://auth?token=JWT_DO_USUARIO&username=Ana&plan=pro&has_paid_plan=1
+```
 
-### ⚡ Decide automaticamente
-- Limpar arquivos
-- Fechar apps pesados
-- Ajustar energia
-- Ou **não fazer nada** (decisão inteligente)
+Para o plano gratuito, use `starter`:
 
----
+```text
+analystblaze://auth?token=JWT_DO_USUARIO&username=Ana&plan=starter&has_paid_plan=0
+```
 
-# ⚙️ Funcionalidades
+O desktop usa o token para registrar o hardware na API e guarda as credenciais no cofre do sistema operacional.
 
-## 🧹 Limpeza Inteligente
-- Remove arquivos temporários com segurança
-- Libera espaço automaticamente
-- Evita apagar arquivos críticos
+No primeiro login de um computador, o desktop envia um fingerprint de hardware para `POST /api/v1/hardware/register`. A API cria o hardware e devolve um `hw_secret` apenas nessa primeira criacao. Se o mesmo computador ja estiver vinculado ao mesmo usuario, a API reutiliza o registro e oculta o segredo. Se o fingerprint ja pertencer a outra conta, a API bloqueia o login desktop com conflito para evitar duplicidade e troca de contas no mesmo PC.
 
-## ⚡ Otimização de Performance
-- Ajusta plano de energia automaticamente
-- Otimiza uso de CPU
-
-## 🧠 IA de Decisão
-- Sistema híbrido:
-  - IA local (funciona offline)
-  - IA remota (aprende com usuários)
-
-## 🎮 Detecção de Uso
-- Não fecha apps durante:
-  - jogos
-  - vídeos
-  - música
-
-## 🔄 Atualizações Automáticas
-- Sistema de updater integrado
-- Download com barra de progresso
-- Atualização direta via GitHub Releases
-
----
-
-# 🧠 Arquitetura
-
-BlazeScan
-│
-├── 🧠 AI
-│ ├── analyzer.py
-│ ├── scorer.py
-│ ├── predictor.py
-│ ├── insights.py
-│ ├── context.py
-│ └── remote_brain.py
-│
-├── ⚙️ CORE
-│ ├── orchestrator.py
-│ └── cleanup.py
-│
-├── 🔧 UTILS
-│ └── system.py
-│
-├── 🚀 LAUNCHER / UPDATER
-│
-└── ☁️ SERVER (Railway)
-
-
----
-
-# 🌐 Sistema de IA (Como Funciona)
-
-## 🟢 Local (Offline)
-- Decisões rápidas
-- Sem internet
-- Baseado em contexto
-
-## 🔵 Remoto (Online)
-- Aprende com usuários
-- Melhora decisões com o tempo
-- Base para sistema premium
-
----
-
-# 💰 Futuro do Projeto
-
-- Sistema de contas
-- Planos Free / Premium
-- IA com aprendizado real
-- Dashboard web
-- Integração com pagamentos
-- Banco de dados (PostgreSQL)
-
----
-
-# 🔐 Segurança
-
-- Nenhuma ação crítica sem validação
-- Sistema de fallback seguro
-- API protegida por chave
-- Código auditável (open source)
-
----
-
-# ⚠️ Avisos Importantes
-
-- Requer permissões de administrador
-- Não remove arquivos em uso
-- Otimizado para Windows 11
-- Algumas decisões dependem do contexto detectado
-
----
-
-# 👨‍💻 Autor
-
-**vhblaze**
-
-- GitHub: https://github.com/vhblaze
-- Projeto: https://github.com/vhblaze/BlazeScan
-
----
-
-# 📄 Licença
-
-MIT License
-
----
-
-# 🔥 BlazeScan
-
-> Um otimizador que pensa antes de agir.
+Nao coloque secrets em variaveis `VITE_*`: elas entram no bundle publico.

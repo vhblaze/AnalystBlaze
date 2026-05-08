@@ -1,8 +1,0 @@
-customtkinter
-requests
-packaging
-psutil
-pyinstaller
-asyncpg
-fastapi
-uvicorn
