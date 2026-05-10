@@ -22,6 +22,7 @@ export function Settings({
   busy,
   onLogin,
   onLogout,
+  onOpenAccountSettings,
   onStartAgent,
   onSetTelemetryMode,
   onCollectSample,
@@ -32,6 +33,7 @@ export function Settings({
   busy: boolean;
   onLogin: () => Promise<void>;
   onLogout: () => Promise<void>;
+  onOpenAccountSettings: () => Promise<void>;
   onStartAgent: () => Promise<void>;
   onSetTelemetryMode: (mode: "normal" | "realtime") => Promise<void>;
   onCollectSample: () => Promise<AgentTelemetrySample>;
@@ -188,7 +190,7 @@ export function Settings({
         </div>
 
         {user ? (
-          <div className="flex items-center gap-4 rounded-xl border border-cyan-500/15 bg-gradient-to-br from-slate-950/60 to-slate-900/30 p-5">
+          <div className="flex flex-col gap-4 rounded-xl border border-cyan-500/15 bg-gradient-to-br from-slate-950/60 to-slate-900/30 p-5 md:flex-row md:items-center">
             <div className="grid h-14 w-14 place-items-center rounded-full border border-cyan-400/30 bg-gradient-to-br from-cyan-500/30 to-violet-500/20 text-lg font-semibold text-cyan-100 shadow-[0_0_20px_-5px_hsl(187_100%_55%/0.7)]">
               {user.name.slice(0, 1).toUpperCase()}
             </div>
@@ -205,6 +207,13 @@ export function Settings({
                 {isReady ? t("common.online") : t("common.pending")}
               </div>
             </div>
+            <button
+              onClick={() => void onOpenAccountSettings()}
+              className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-medium text-cyan-100 transition-all hover:border-cyan-300/60 hover:bg-cyan-400/15"
+            >
+              <ExternalLink className="h-4 w-4" />
+              {t("settings.manageDevices")}
+            </button>
             {!user.hasPaidPlan && (
               <button
                 onClick={() => window.open(import.meta.env.VITE_ANALYSTBLAZE_BILLING_URL ?? "https://analystblaze.app/billing", "_blank", "noopener,noreferrer")}
@@ -255,6 +264,9 @@ export function Settings({
             <span className="break-all">{status.hw_id}</span>
           </div>
         )}
+        <p className="mt-3 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4 text-xs text-slate-400">
+          {t("settings.deviceRule")}
+        </p>
         <div className="mt-4 flex flex-wrap gap-2">
           <ActionButton disabled={busy || !isReady} onClick={onStartAgent}>{t("settings.startAgent")}</ActionButton>
           <ActionButton disabled={busy || !isReady} onClick={() => onSetTelemetryMode("realtime")}>{t("settings.forceRealtime")}</ActionButton>

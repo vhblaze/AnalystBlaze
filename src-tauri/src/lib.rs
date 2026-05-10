@@ -15,6 +15,9 @@ use tauri::{
 use tauri_plugin_deep_link::DeepLinkExt;
 use telemetry::collector::TelemetryCollector;
 use telemetry::engine::{TelemetryEngineHandle, TelemetryMode};
+use telemetry::state::{
+    new_shared_telemetry_state, SharedTelemetryState, TelemetryDashboardSnapshot,
+};
 
 use crate::api::ApiClient;
 use crate::auth::{
@@ -28,6 +31,7 @@ struct AgentState {
     api: ApiClient,
     store: SecureStore,
     telemetry: Mutex<Option<TelemetryEngineHandle>>,
+    telemetry_state: SharedTelemetryState,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,12 +46,21 @@ struct AgentStatus {
     mode: String,
     api_base_url: String,
     web_login_url: String,
+    account_settings_url: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct SingleInstancePayload {
     args: Vec<String>,
     cwd: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GameModeResult {
+    success: bool,
+    message: String,
+    details: serde_json::Value,
+    status: AgentStatus,
 }
 
 #[tauri::command]
@@ -64,20 +77,31 @@ async fn open_login(state: State<'_, AgentState>) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn open_account_settings(state: State<'_, AgentState>) -> Result<String, String> {
+    tauri_plugin_opener::open_url(&state.config.web_account_url, None::<&str>)
+        .map_err(|error| error.to_string())?;
+    Ok(state.config.web_account_url.clone())
+}
+
+#[tauri::command]
 async fn complete_auth_from_deep_link(
     raw_url: String,
     state: State<'_, AgentState>,
+    app: AppHandle,
 ) -> Result<AgentStatus, String> {
     let tokens = tokens_from_deep_link(&raw_url)?;
-    complete_auth_tokens(tokens, state).await
+    complete_auth_tokens(tokens, state, app).await
 }
 
 async fn complete_auth_tokens(
     tokens: AuthTokens,
     state: State<'_, AgentState>,
+    app: AppHandle,
 ) -> Result<AgentStatus, String> {
-    let collector = TelemetryCollector::new();
-    let profile = collector.hardware_profile();
+    let profile = {
+        let collector = TelemetryCollector::new();
+        collector.hardware_profile()
+    };
     let registration = state
         .api
         .register_hardware(&tokens.access_token, &profile)
@@ -99,7 +123,7 @@ async fn complete_auth_tokens(
 
     state.store.save(&credentials)?;
     if credentials_complete(&credentials) {
-        ensure_agent_running(&state)?;
+        ensure_agent_running(&state, &app)?;
     }
     status(&state)
 }
@@ -143,11 +167,6 @@ fn credentials_from_registration(
 
 async fn refresh_account_profile_if_needed(state: &AgentState) -> Result<(), String> {
     let credentials = state.store.load()?;
-    let local_profile = profile_from_credentials(&credentials);
-    if local_profile.user_name.is_some() {
-        return Ok(());
-    }
-
     let Some(access_token) = credentials.access_token.clone() else {
         return Ok(());
     };
@@ -193,10 +212,29 @@ fn profile_is_empty(profile: &AuthProfile) -> bool {
 }
 
 #[tauri::command]
-fn start_agent(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
+fn start_agent(state: State<'_, AgentState>, app: AppHandle) -> Result<AgentStatus, String> {
     ensure_registered(&state)?;
-    ensure_agent_running(&state)?;
+    ensure_agent_running(&state, &app)?;
     status(&state)
+}
+
+#[tauri::command]
+async fn activate_game_mode(
+    state: State<'_, AgentState>,
+    app: AppHandle,
+) -> Result<GameModeResult, String> {
+    ensure_registered(&state)?;
+    ensure_agent_running(&state, &app)?;
+
+    let result = optimizations::execute_command("APPLY_GAME_MODE", None).await;
+    let status = status(&state)?;
+
+    Ok(GameModeResult {
+        success: result.success,
+        message: result.message,
+        details: result.details,
+        status,
+    })
 }
 
 #[tauri::command]
@@ -221,6 +259,9 @@ fn set_telemetry_mode(mode: String, state: State<'_, AgentState>) -> Result<Agen
 #[tauri::command]
 fn logout(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
     state.store.clear()?;
+    if let Ok(mut telemetry_state) = state.telemetry_state.try_write() {
+        *telemetry_state = None;
+    }
     status(&state)
 }
 
@@ -228,6 +269,13 @@ fn logout(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
 fn collect_once() -> telemetry::collector::TelemetrySample {
     let mut collector = TelemetryCollector::new();
     collector.collect()
+}
+
+#[tauri::command]
+async fn telemetry_snapshot(
+    state: State<'_, AgentState>,
+) -> Result<Option<TelemetryDashboardSnapshot>, String> {
+    Ok(state.telemetry_state.read().await.clone())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -241,6 +289,7 @@ pub fn run() {
         api,
         store,
         telemetry: Mutex::new(None),
+        telemetry_state: new_shared_telemetry_state(),
     };
 
     tauri::Builder::default()
@@ -268,7 +317,7 @@ pub fn run() {
                 .map(|credentials| credentials_complete(&credentials))
                 .unwrap_or(false)
             {
-                let _ = ensure_agent_running(&state);
+                let _ = ensure_agent_running(&state, app.handle());
             }
 
             Ok(())
@@ -282,11 +331,14 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             agent_status,
             open_login,
+            open_account_settings,
             complete_auth_from_deep_link,
             start_agent,
+            activate_game_mode,
             set_telemetry_mode,
             logout,
             collect_once,
+            telemetry_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -341,7 +393,7 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-fn ensure_agent_running(state: &AgentState) -> Result<(), String> {
+fn ensure_agent_running(state: &AgentState, app: &AppHandle) -> Result<(), String> {
     let mut guard = state
         .telemetry
         .lock()
@@ -351,6 +403,8 @@ fn ensure_agent_running(state: &AgentState) -> Result<(), String> {
             state.config.clone(),
             state.api.clone(),
             state.store.clone(),
+            state.telemetry_state.clone(),
+            app.clone(),
         );
         *guard = Some(engine);
     }
@@ -401,5 +455,6 @@ fn status(state: &AgentState) -> Result<AgentStatus, String> {
         mode,
         api_base_url: state.config.api_base_url.clone(),
         web_login_url: state.config.web_login_url.clone(),
+        account_settings_url: state.config.web_account_url.clone(),
     })
 }

@@ -1,12 +1,14 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use sysinfo::{Components, System};
+use sysinfo::{Components, Disks, ProcessesToUpdate, System};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuInfo {
     pub name: String,
     pub vram_gb: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vram_used_gb: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,12 +28,27 @@ pub struct HardwareProfile {
 pub struct TelemetrySample {
     pub event_timestamp: i64,
     pub cpu_usage: f64,
+    pub cpu_temperature: f64,
+    pub cpu_temperature_available: bool,
     pub gpu_usage: f64,
+    pub gpu_usage_available: bool,
     pub gpu_name: String,
     pub vram_gb: f64,
+    pub vram_used_gb: Option<f64>,
+    pub vram_usage_percent: Option<f64>,
     pub ram_usage_mb: f64,
+    pub ram_total_mb: f64,
+    pub ram_usage_percent: f64,
     pub gpu_temperature: f64,
+    pub gpu_temperature_available: bool,
     pub latency_ms: f64,
+    pub disk_used_gb: f64,
+    pub disk_total_gb: f64,
+    pub disk_usage_percent: f64,
+    pub active_processes: usize,
+    pub system_uptime_seconds: u64,
+    pub active_window: Option<String>,
+    pub idle_seconds: u64,
     pub context_state: Value,
     pub details: Value,
 }
@@ -39,7 +56,11 @@ pub struct TelemetrySample {
 pub struct TelemetryCollector {
     system: System,
     components: Components,
+    disks: Disks,
     gpu_devices: Vec<GpuInfo>,
+    gpu_usage_reader: Option<GpuUsageReader>,
+    nvidia_sensor_reader: Option<NvidiaSensorReader>,
+    collection_count: u64,
 }
 
 impl TelemetryCollector {
@@ -47,40 +68,143 @@ impl TelemetryCollector {
         Self {
             system: System::new_all(),
             components: Components::new_with_refreshed_list(),
+            disks: Disks::new_with_refreshed_list(),
             gpu_devices: detect_gpu_devices(),
+            gpu_usage_reader: GpuUsageReader::new(),
+            nvidia_sensor_reader: NvidiaSensorReader::new(),
+            collection_count: 0,
         }
     }
 
     pub fn collect(&mut self) -> TelemetrySample {
+        self.collection_count = self.collection_count.saturating_add(1);
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
         self.components.refresh(false);
+        if self.collection_count == 1 || self.collection_count % 5 == 0 {
+            self.system.refresh_processes(ProcessesToUpdate::All, true);
+            self.disks.refresh(false);
+        }
 
         let cpu_usage = self.system.global_cpu_usage() as f64;
         let ram_usage_mb = bytes_to_mb(self.system.used_memory());
-        let gpu_temperature = self.detect_gpu_temperature().unwrap_or_default() as f64;
+        let ram_total_mb = bytes_to_mb(self.system.total_memory());
+        let ram_usage_percent = if ram_total_mb > 0.0 {
+            clamp_percent((ram_usage_mb / ram_total_mb) * 100.0)
+        } else {
+            0.0
+        };
+        let cpu_temperature = self.detect_cpu_temperature();
+        let cpu_temperature_available = cpu_temperature.is_some();
+        let cpu_temperature = cpu_temperature.unwrap_or_default() as f64;
+        let nvidia_sensors = self
+            .nvidia_sensor_reader
+            .as_ref()
+            .and_then(NvidiaSensorReader::sample);
+        let gpu_temperature = nvidia_sensors
+            .as_ref()
+            .and_then(|sample| sample.temperature_c)
+            .or_else(|| self.detect_gpu_temperature());
+        let gpu_temperature_available = gpu_temperature.is_some();
+        let gpu_temperature = gpu_temperature.unwrap_or_default() as f64;
+        let gpu_usage = nvidia_sensors
+            .as_ref()
+            .and_then(|sample| sample.utilization_percent)
+            .or_else(|| {
+                self.gpu_usage_reader
+                    .as_mut()
+                    .and_then(GpuUsageReader::sample)
+            });
         let primary_gpu = self.primary_gpu();
+        let gpu_name = primary_gpu.name.clone();
+        let vram_gb = primary_gpu.vram_gb;
+        let vram_used_gb = nvidia_sensors
+            .as_ref()
+            .and_then(|sample| sample.vram_used_gb)
+            .or(primary_gpu.vram_used_gb);
+        let vram_usage_percent = vram_used_gb.and_then(|used| {
+            if vram_gb > 0.0 {
+                Some(clamp_percent((used / vram_gb) * 100.0))
+            } else {
+                None
+            }
+        });
+        let (disk_used_gb, disk_total_gb, disk_usage_percent) = self.disk_usage();
+        let active_processes = self.system.processes().len();
+        let system_uptime_seconds = System::uptime();
+        let active_window = active_window_title();
+        let idle_seconds = idle_seconds();
+        let process_names = running_process_names(&self.system);
+        let local_context = detect_local_context(
+            active_window.as_deref(),
+            &process_names,
+            gpu_usage.unwrap_or_default(),
+            cpu_usage,
+            idle_seconds,
+        );
+        let detected_activity = local_context
+            .get("activity")
+            .cloned()
+            .unwrap_or_else(|| json!("unknown"));
 
         TelemetrySample {
             event_timestamp: chrono::Utc::now().timestamp(),
             cpu_usage: clamp_percent(cpu_usage),
-            gpu_usage: 0.0,
-            gpu_name: primary_gpu.name.clone(),
-            vram_gb: primary_gpu.vram_gb,
+            cpu_temperature,
+            cpu_temperature_available,
+            gpu_usage: gpu_usage.unwrap_or_default(),
+            gpu_usage_available: gpu_usage.is_some(),
+            gpu_name: gpu_name.clone(),
+            vram_gb,
+            vram_used_gb,
+            vram_usage_percent,
             ram_usage_mb,
+            ram_total_mb,
+            ram_usage_percent,
             gpu_temperature,
+            gpu_temperature_available,
             latency_ms: 0.0,
+            disk_used_gb,
+            disk_total_gb,
+            disk_usage_percent,
+            active_processes,
+            system_uptime_seconds,
+            active_window: active_window.clone(),
+            idle_seconds,
             context_state: json!({
                 "mode": "observed",
+                "activity": detected_activity,
+                "local_context": local_context,
                 "host_name": System::host_name().unwrap_or_else(|| "unknown".to_string()),
-                "gpu_name": primary_gpu.name,
-                "vram_gb": primary_gpu.vram_gb,
+                "gpu_name": gpu_name.clone(),
+                "vram_gb": vram_gb,
+                "cpu_temperature": cpu_temperature,
+                "cpu_temperature_available": cpu_temperature_available,
+                "gpu_temperature_available": gpu_temperature_available,
+                "ram_usage_percent": ram_usage_percent,
+                "disk_usage_percent": disk_usage_percent,
             }),
             details: json!({
-                "gpu_name": self.primary_gpu().name,
-                "vram_gb": self.primary_gpu().vram_gb,
+                "gpu_name": gpu_name,
+                "vram_gb": vram_gb,
+                "vram_used_gb": vram_used_gb,
+                "vram_usage_percent": vram_usage_percent,
+                "cpu_temperature": cpu_temperature,
+                "cpu_temperature_available": cpu_temperature_available,
+                "ram_total_mb": ram_total_mb,
+                "ram_usage_percent": ram_usage_percent,
                 "gpu_devices": self.gpu_devices,
                 "gpu_temperature": gpu_temperature,
+                "gpu_temperature_available": gpu_temperature_available,
+                "gpu_usage_available": gpu_usage.is_some(),
+                "disk_used_gb": disk_used_gb,
+                "disk_total_gb": disk_total_gb,
+                "disk_usage_percent": disk_usage_percent,
+                "active_processes": active_processes,
+                "system_uptime_seconds": system_uptime_seconds,
+                "idle_seconds": idle_seconds,
+                "active_window": active_window,
+                "process_sample": process_names.into_iter().take(30).collect::<Vec<_>>(),
                 "latency_ms": 0.0,
                 "source": "sysinfo",
             }),
@@ -142,12 +266,32 @@ impl TelemetryCollector {
     fn primary_gpu(&self) -> GpuInfo {
         self.gpu_devices
             .iter()
-            .find(|gpu| !gpu.name.eq_ignore_ascii_case("Unknown GPU"))
+            .filter(|gpu| !gpu.name.eq_ignore_ascii_case("Unknown GPU"))
+            .max_by(|left, right| left.vram_gb.total_cmp(&right.vram_gb))
             .cloned()
             .unwrap_or_else(|| GpuInfo {
                 name: "Unknown GPU".to_string(),
                 vram_gb: 0.0,
+                vram_used_gb: None,
             })
+    }
+
+    fn disk_usage(&self) -> (f64, f64, f64) {
+        let total_bytes = self.disks.iter().map(|disk| disk.total_space()).sum::<u64>();
+        let available_bytes = self
+            .disks
+            .iter()
+            .map(|disk| disk.available_space())
+            .sum::<u64>();
+        let used_bytes = total_bytes.saturating_sub(available_bytes);
+        let used_gb = bytes_to_gb(used_bytes);
+        let total_gb = bytes_to_gb(total_bytes);
+        let usage_percent = if total_bytes > 0 {
+            clamp_percent((used_bytes as f64 / total_bytes as f64) * 100.0)
+        } else {
+            0.0
+        };
+        (used_gb, total_gb, usage_percent)
     }
 
     fn detect_gpu_temperature(&self) -> Option<f32> {
@@ -155,19 +299,31 @@ impl TelemetryCollector {
             .iter()
             .find_map(|component| {
                 let label = component.label().to_ascii_lowercase();
-                if label.contains("gpu") {
+                if is_gpu_sensor_label(&label) {
                     component.temperature().filter(|value| value.is_finite())
                 } else {
                     None
                 }
             })
-            .or_else(|| {
-                self.components
-                    .iter()
-                    .filter_map(|component| component.temperature())
-                    .filter(|value| value.is_finite())
-                    .max_by(|left, right| left.total_cmp(right))
-            })
+    }
+
+    fn detect_cpu_temperature(&self) -> Option<f32> {
+        let labeled = self.components.iter().find_map(|component| {
+            let label = component.label().to_ascii_lowercase();
+            if is_cpu_sensor_label(&label) || label == "computer" {
+                component.temperature().filter(|value| sane_temperature(*value))
+            } else {
+                None
+            }
+        });
+
+        labeled.or_else(|| {
+            self.components
+                .iter()
+                .filter_map(|component| component.temperature())
+                .filter(|value| sane_temperature(*value))
+                .max_by(|left, right| left.total_cmp(right))
+        })
     }
 }
 
@@ -238,8 +394,476 @@ fn clamp_percent(value: f64) -> f64 {
     value.clamp(0.0, 100.0)
 }
 
+fn sane_temperature(value: f32) -> bool {
+    value.is_finite() && (1.0..=125.0).contains(&value)
+}
+
+fn is_gpu_sensor_label(label: &str) -> bool {
+    label.contains("gpu")
+        || label.contains("nvidia")
+        || label.contains("radeon")
+        || label.contains("geforce")
+        || label.contains("graphics")
+}
+
+fn is_cpu_sensor_label(label: &str) -> bool {
+    label.contains("cpu")
+        || label.contains("processor")
+        || label.contains("package")
+        || label.contains("core")
+        || label.contains("tctl")
+        || label.contains("tdie")
+}
+
+fn running_process_names(system: &System) -> Vec<String> {
+    system
+        .processes()
+        .values()
+        .filter_map(|process| {
+            let name = process.name().to_string_lossy().trim().to_ascii_lowercase();
+            (!name.is_empty()).then_some(name)
+        })
+        .collect()
+}
+
+fn detect_local_context(
+    active_window: Option<&str>,
+    process_names: &[String],
+    gpu_usage: f64,
+    cpu_usage: f64,
+    idle_seconds: u64,
+) -> Value {
+    let active = active_window.unwrap_or_default().to_ascii_lowercase();
+    let has_process = |needles: &[&str]| {
+        process_names
+            .iter()
+            .any(|name| needles.iter().any(|needle| name.contains(needle)))
+    };
+    let active_has = |needles: &[&str]| needles.iter().any(|needle| active.contains(needle));
+
+    let gaming_process = has_process(&[
+        "steam.exe",
+        "epicgameslauncher",
+        "riotclient",
+        "valorant",
+        "cs2",
+        "fortnite",
+        "roblox",
+        "minecraft",
+        "battle.net",
+        "leagueclient",
+    ]);
+    let gaming_window = active_has(&[
+        "steam",
+        "valorant",
+        "counter-strike",
+        "fortnite",
+        "minecraft",
+        "league of legends",
+        "game",
+    ]);
+    let music = has_process(&["spotify", "musicbee", "itunes", "foobar", "deezer", "tidal"])
+        || active_has(&["spotify", "deezer", "music", "youtube music"]);
+    let video = has_process(&["vlc", "mpv", "netflix", "primevideo", "disney", "obs64"])
+        || active_has(&["youtube", "netflix", "prime video", "disney+", "twitch", "vlc"]);
+    let gaming = gaming_process || gaming_window || (gpu_usage >= 65.0 && cpu_usage >= 25.0 && idle_seconds < 120);
+    let idle = idle_seconds >= 300;
+    let activity = if idle {
+        "idle"
+    } else if gaming {
+        "gaming"
+    } else if video {
+        "video"
+    } else if music {
+        "music"
+    } else {
+        "general"
+    };
+
+    json!({
+        "activity": activity,
+        "signals": {
+            "gaming": gaming,
+            "music": music,
+            "video": video,
+            "idle": idle,
+        },
+        "media": {
+            "music": music,
+            "video": video,
+        },
+        "active_window": active_window,
+        "gpu_usage": gpu_usage,
+        "cpu_usage": cpu_usage,
+        "idle_seconds": idle_seconds,
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct NvidiaSensorSample {
+    temperature_c: Option<f32>,
+    utilization_percent: Option<f64>,
+    vram_used_gb: Option<f64>,
+}
+
+struct NvidiaSensorReader {
+    _library: libloading::Library,
+    shutdown: unsafe extern "C" fn() -> u32,
+    device_get_count: unsafe extern "C" fn(*mut u32) -> u32,
+    device_get_handle_by_index: unsafe extern "C" fn(u32, *mut NvmlDevice) -> u32,
+    device_get_temperature: unsafe extern "C" fn(NvmlDevice, u32, *mut u32) -> u32,
+    device_get_utilization_rates: unsafe extern "C" fn(NvmlDevice, *mut NvmlUtilization) -> u32,
+    device_get_memory_info: unsafe extern "C" fn(NvmlDevice, *mut NvmlMemory) -> u32,
+}
+
+unsafe impl Send for NvidiaSensorReader {}
+unsafe impl Sync for NvidiaSensorReader {}
+
+impl NvidiaSensorReader {
+    fn new() -> Option<Self> {
+        unsafe {
+            let library = libloading::Library::new("nvml.dll").ok()?;
+            let init = *library
+                .get::<unsafe extern "C" fn() -> u32>(b"nvmlInit_v2\0")
+                .ok()?;
+            let shutdown = *library
+                .get::<unsafe extern "C" fn() -> u32>(b"nvmlShutdown\0")
+                .ok()?;
+            let device_get_count = *library
+                .get::<unsafe extern "C" fn(*mut u32) -> u32>(b"nvmlDeviceGetCount_v2\0")
+                .ok()?;
+            let device_get_handle_by_index = *library
+                .get::<unsafe extern "C" fn(u32, *mut NvmlDevice) -> u32>(
+                    b"nvmlDeviceGetHandleByIndex_v2\0",
+                )
+                .ok()?;
+            let device_get_temperature = *library
+                .get::<unsafe extern "C" fn(NvmlDevice, u32, *mut u32) -> u32>(
+                    b"nvmlDeviceGetTemperature\0",
+                )
+                .ok()?;
+            let device_get_utilization_rates = *library
+                .get::<unsafe extern "C" fn(NvmlDevice, *mut NvmlUtilization) -> u32>(
+                    b"nvmlDeviceGetUtilizationRates\0",
+                )
+                .ok()?;
+            let device_get_memory_info = *library
+                .get::<unsafe extern "C" fn(NvmlDevice, *mut NvmlMemory) -> u32>(
+                    b"nvmlDeviceGetMemoryInfo\0",
+                )
+                .ok()?;
+
+            if init() != NVML_SUCCESS {
+                return None;
+            }
+
+            Some(Self {
+                _library: library,
+                shutdown,
+                device_get_count,
+                device_get_handle_by_index,
+                device_get_temperature,
+                device_get_utilization_rates,
+                device_get_memory_info,
+            })
+        }
+    }
+
+    fn sample(&self) -> Option<NvidiaSensorSample> {
+        let mut device_count = 0;
+        if unsafe { (self.device_get_count)(&mut device_count) } != NVML_SUCCESS {
+            return None;
+        }
+        let mut best: Option<(u64, NvidiaSensorSample)> = None;
+
+        for index in 0..device_count {
+            let mut device = std::ptr::null_mut();
+            if unsafe { (self.device_get_handle_by_index)(index, &mut device) } != NVML_SUCCESS
+                || device.is_null()
+            {
+                continue;
+            }
+
+            let mut temperature = 0;
+            let temperature_c =
+                if unsafe { (self.device_get_temperature)(device, NVML_TEMPERATURE_GPU, &mut temperature) }
+                    == NVML_SUCCESS
+                {
+                    Some(temperature as f32).filter(|value| sane_temperature(*value))
+                } else {
+                    None
+                };
+
+            let mut utilization = NvmlUtilization::default();
+            let utilization_percent =
+                if unsafe { (self.device_get_utilization_rates)(device, &mut utilization) }
+                    == NVML_SUCCESS
+                {
+                    Some(clamp_percent(utilization.gpu as f64))
+                } else {
+                    None
+                };
+
+            let mut memory = NvmlMemory::default();
+            let memory_info =
+                unsafe { (self.device_get_memory_info)(device, &mut memory) } == NVML_SUCCESS;
+            let total_memory = if memory_info { memory.total } else { 0 };
+            let sample = NvidiaSensorSample {
+                temperature_c,
+                utilization_percent,
+                vram_used_gb: memory_info.then(|| bytes_to_gb(memory.used)),
+            };
+
+            if best
+                .as_ref()
+                .map(|(current_total, _)| total_memory > *current_total)
+                .unwrap_or(true)
+            {
+                best = Some((total_memory, sample));
+            }
+        }
+
+        best.map(|(_, sample)| sample)
+    }
+}
+
+impl Drop for NvidiaSensorReader {
+    fn drop(&mut self) {
+        unsafe {
+            (self.shutdown)();
+        }
+    }
+}
+
+type NvmlDevice = *mut std::ffi::c_void;
+
+const NVML_SUCCESS: u32 = 0;
+const NVML_TEMPERATURE_GPU: u32 = 0;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct NvmlUtilization {
+    gpu: u32,
+    memory: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct NvmlMemory {
+    total: u64,
+    free: u64,
+    used: u64,
+}
+
+#[cfg(windows)]
+fn widestring(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+#[cfg(windows)]
+struct GpuUsageReader {
+    query: windows::Win32::System::Performance::PDH_HQUERY,
+    counter: windows::Win32::System::Performance::PDH_HCOUNTER,
+    has_baseline: bool,
+}
+
+#[cfg(windows)]
+unsafe impl Send for GpuUsageReader {}
+
+#[cfg(windows)]
+impl GpuUsageReader {
+    fn new() -> Option<Self> {
+        use windows::core::PCWSTR;
+        use windows::Win32::System::Performance::{
+            PdhAddEnglishCounterW, PdhCollectQueryData, PdhCloseQuery, PdhOpenQueryW,
+            PDH_HCOUNTER, PDH_HQUERY,
+        };
+
+        let mut query = PDH_HQUERY::default();
+        if unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &mut query) } != 0 {
+            return None;
+        }
+
+        let path = widestring(r"\GPU Engine(*)\Utilization Percentage");
+        let mut counter = PDH_HCOUNTER::default();
+        if unsafe { PdhAddEnglishCounterW(query, PCWSTR(path.as_ptr()), 0, &mut counter) } != 0 {
+            unsafe {
+                PdhCloseQuery(query);
+            }
+            return None;
+        }
+
+        unsafe {
+            PdhCollectQueryData(query);
+        }
+
+        Some(Self {
+            query,
+            counter,
+            has_baseline: false,
+        })
+    }
+
+    fn sample(&mut self) -> Option<f64> {
+        use windows::Win32::System::Performance::{
+            PdhCollectQueryData, PdhGetFormattedCounterArrayW, PDH_FMT_COUNTERVALUE_ITEM_W,
+            PDH_FMT_DOUBLE, PDH_INVALID_DATA, PDH_MORE_DATA,
+        };
+
+        if unsafe { PdhCollectQueryData(self.query) } != 0 {
+            return None;
+        }
+
+        if !self.has_baseline {
+            self.has_baseline = true;
+            return None;
+        }
+
+        let mut buffer_size = 0;
+        let mut item_count = 0;
+        let status = unsafe {
+            PdhGetFormattedCounterArrayW(
+                self.counter,
+                PDH_FMT_DOUBLE,
+                &mut buffer_size,
+                &mut item_count,
+                None,
+            )
+        };
+        if status != PDH_MORE_DATA || buffer_size == 0 || item_count == 0 {
+            return None;
+        }
+
+        let mut buffer = vec![0u8; buffer_size as usize];
+        let items = buffer.as_mut_ptr() as *mut PDH_FMT_COUNTERVALUE_ITEM_W;
+        let status = unsafe {
+            PdhGetFormattedCounterArrayW(
+                self.counter,
+                PDH_FMT_DOUBLE,
+                &mut buffer_size,
+                &mut item_count,
+                Some(items),
+            )
+        };
+        if status != 0 && status != PDH_INVALID_DATA {
+            return None;
+        }
+
+        let values = unsafe { std::slice::from_raw_parts(items, item_count as usize) };
+        let usage = values
+            .iter()
+            .filter_map(|item| {
+                if item.FmtValue.CStatus == 0 {
+                    Some(unsafe { item.FmtValue.Anonymous.doubleValue })
+                } else {
+                    None
+                }
+            })
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .sum::<f64>();
+
+        Some(clamp_percent(usage))
+    }
+}
+
+#[cfg(windows)]
+impl Drop for GpuUsageReader {
+    fn drop(&mut self) {
+        unsafe {
+            windows::Win32::System::Performance::PdhCloseQuery(self.query);
+        }
+    }
+}
+
+#[cfg(not(windows))]
+struct GpuUsageReader;
+
+#[cfg(not(windows))]
+impl GpuUsageReader {
+    fn new() -> Option<Self> {
+        None
+    }
+
+    fn sample(&mut self) -> Option<f64> {
+        None
+    }
+}
+
 #[cfg(windows)]
 fn detect_gpu_devices() -> Vec<GpuInfo> {
+    let dxgi_devices = dxgi_gpu_devices();
+    if !dxgi_devices.is_empty() {
+        return dxgi_devices;
+    }
+
+    registry_gpu_devices()
+}
+
+#[cfg(windows)]
+fn dxgi_gpu_devices() -> Vec<GpuInfo> {
+    use std::collections::HashSet;
+    use windows::core::Interface;
+    use windows::Win32::Graphics::Dxgi::{
+        CreateDXGIFactory1, IDXGIAdapter3, IDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE,
+        DXGI_MEMORY_SEGMENT_GROUP_LOCAL, DXGI_QUERY_VIDEO_MEMORY_INFO,
+    };
+
+    let Ok(factory) = (unsafe { CreateDXGIFactory1::<IDXGIFactory1>() }) else {
+        return Vec::new();
+    };
+
+    let mut seen = HashSet::new();
+    let mut devices = Vec::new();
+    let mut index = 0;
+
+    loop {
+        let Ok(adapter) = (unsafe { factory.EnumAdapters1(index) }) else {
+            break;
+        };
+        index += 1;
+
+        let Ok(description) = (unsafe { adapter.GetDesc1() }) else {
+            continue;
+        };
+
+        if description.Flags & DXGI_ADAPTER_FLAG_SOFTWARE.0 as u32 != 0 {
+            continue;
+        }
+
+        let name = utf16_description(&description.Description);
+        if !is_real_gpu_name(&name) || !seen.insert(name.to_ascii_lowercase()) {
+            continue;
+        }
+
+        devices.push(GpuInfo {
+            name,
+            vram_gb: bytes_to_gb(description.DedicatedVideoMemory as u64),
+            vram_used_gb: adapter.cast::<IDXGIAdapter3>().ok().and_then(|adapter| {
+                let mut info = DXGI_QUERY_VIDEO_MEMORY_INFO::default();
+                unsafe {
+                    adapter
+                        .QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &mut info)
+                        .ok()?;
+                }
+                Some(bytes_to_gb(info.CurrentUsage))
+            }),
+        });
+    }
+
+    devices
+}
+
+#[cfg(windows)]
+fn utf16_description(value: &[u16]) -> String {
+    let end = value
+        .iter()
+        .position(|character| *character == 0)
+        .unwrap_or(value.len());
+    String::from_utf16_lossy(&value[..end]).trim().to_string()
+}
+
+#[cfg(windows)]
+fn registry_gpu_devices() -> Vec<GpuInfo> {
     use std::collections::HashSet;
     use winreg::enums::HKEY_LOCAL_MACHINE;
     use winreg::RegKey;
@@ -280,6 +904,7 @@ fn detect_gpu_devices() -> Vec<GpuInfo> {
             devices.push(GpuInfo {
                 name,
                 vram_gb: registry_vram_gb(&device_key).unwrap_or_default(),
+                vram_used_gb: None,
             });
         }
     }
@@ -300,6 +925,7 @@ fn unknown_gpu() -> Vec<GpuInfo> {
     vec![GpuInfo {
         name: "Unknown GPU".to_string(),
         vram_gb: 0.0,
+        vram_used_gb: None,
     }]
 }
 
@@ -362,4 +988,62 @@ fn is_real_gpu_name(value: &str) -> bool {
         && !normalized.contains("basic render")
         && !normalized.contains("remote display")
         && !normalized.contains("mirror driver")
+}
+
+#[cfg(windows)]
+fn active_window_title() -> Option<String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
+    };
+
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return None;
+    }
+
+    let length = unsafe { GetWindowTextLengthW(hwnd) };
+    if length <= 0 {
+        return None;
+    }
+
+    let mut buffer = vec![0u16; length as usize + 1];
+    let copied = unsafe { GetWindowTextW(hwnd, &mut buffer) };
+    if copied <= 0 {
+        return None;
+    }
+
+    Some(
+        String::from_utf16_lossy(&buffer[..copied as usize])
+            .trim()
+            .to_string(),
+    )
+    .filter(|title| !title.is_empty())
+}
+
+#[cfg(not(windows))]
+fn active_window_title() -> Option<String> {
+    None
+}
+
+#[cfg(windows)]
+fn idle_seconds() -> u64 {
+    use windows::Win32::System::SystemInformation::GetTickCount64;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
+
+    let mut last_input = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+
+    if !unsafe { GetLastInputInfo(&mut last_input) }.as_bool() {
+        return 0;
+    }
+
+    let now_ms = unsafe { GetTickCount64() };
+    now_ms.saturating_sub(last_input.dwTime as u64) / 1_000
+}
+
+#[cfg(not(windows))]
+fn idle_seconds() -> u64 {
+    0
 }
