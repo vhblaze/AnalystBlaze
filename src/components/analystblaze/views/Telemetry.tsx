@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Cpu, MemoryStick, MonitorPlay, Thermometer, type LucideIcon } from "lucide-react";
 import { TiltCard } from "../TiltCard";
 import type { AgentTelemetrySample } from "@/services/tauri/agent";
@@ -14,28 +14,17 @@ type Metric = {
   max: number;
   hue: number;
   read: (sample: AgentTelemetrySample) => number;
+  available?: (sample: AgentTelemetrySample) => boolean;
 };
 
 const metrics: Metric[] = [
   { key: "cpu", labelKey: "telemetry.cpu", icon: Cpu, unit: "%", min: 0, max: 100, hue: 187, read: (s) => s.cpu_usage },
-  { key: "gpu", labelKey: "telemetry.gpu", icon: MonitorPlay, unit: "%", min: 0, max: 100, hue: 265, read: (s) => s.gpu_usage },
-  { key: "ram", labelKey: "telemetry.ram", icon: MemoryStick, unit: "MB", min: 0, max: 16_000, hue: 320, read: (s) => s.ram_usage_mb },
-  { key: "temp", labelKey: "telemetry.gpuTemp", icon: Thermometer, unit: "C", min: 0, max: 95, hue: 150, read: (s) => s.gpu_temperature },
+  { key: "gpu", labelKey: "telemetry.gpu", icon: MonitorPlay, unit: "%", min: 0, max: 100, hue: 265, read: (s) => s.gpu_usage, available: (s) => Boolean(s.gpu_usage_available) },
+  { key: "ram", labelKey: "telemetry.ram", icon: MemoryStick, unit: "%", min: 0, max: 100, hue: 320, read: (s) => s.ram_usage_percent ?? 0 },
+  { key: "temp", labelKey: "telemetry.gpuTemp", icon: Thermometer, unit: "C", min: 0, max: 95, hue: 150, read: (s) => s.gpu_temperature, available: (s) => Boolean(s.gpu_temperature_available) },
 ];
 
 const HISTORY_LEN = 24;
-const POLL_MS = 5_000;
-
-const initialSample: AgentTelemetrySample = {
-  event_timestamp: Math.floor(Date.now() / 1000),
-  cpu_usage: 24,
-  gpu_usage: 18,
-  gpu_name: "GPU",
-  vram_gb: 0,
-  ram_usage_mb: 4200,
-  gpu_temperature: 48,
-  latency_ms: 14,
-};
 
 export function Telemetry({
   latestSample,
@@ -47,9 +36,9 @@ export function Telemetry({
   const { t } = useI18n();
   const track = useTelemetry("telemetry");
   const inFlight = useRef(false);
-  const [sample, setSample] = useState<AgentTelemetrySample>(latestSample ?? initialSample);
+  const [sample, setSample] = useState<AgentTelemetrySample | null>(latestSample);
   const [history, setHistory] = useState<Record<string, number[]>>(() =>
-    Object.fromEntries(metrics.map((metric) => [metric.key, Array(HISTORY_LEN).fill(metric.read(latestSample ?? initialSample))])),
+    Object.fromEntries(metrics.map((metric) => [metric.key, []])),
   );
 
   const appendSample = useCallback((nextSample: AgentTelemetrySample) => {
@@ -80,18 +69,6 @@ export function Telemetry({
     if (latestSample) appendSample(latestSample);
   }, [appendSample, latestSample]);
 
-  useEffect(() => {
-    void collect();
-    const id = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        void collect();
-      }
-    }, POLL_MS);
-    return () => window.clearInterval(id);
-  }, [collect]);
-
-  const historySeconds = useMemo(() => Math.round((HISTORY_LEN * POLL_MS) / 1000), []);
-
   return (
     <div className="flex flex-col gap-8">
       <header className="flex items-end justify-between">
@@ -103,7 +80,7 @@ export function Telemetry({
           <h1 className="mt-2 text-[36px] font-semibold tracking-tight text-slate-50">
             {t("telemetry.title")}
           </h1>
-          <p className="text-sm text-slate-400">{t("telemetry.subtitle", { seconds: historySeconds })}</p>
+          <p className="text-sm text-slate-400">{t("telemetry.subtitle", { seconds: HISTORY_LEN * 2 })}</p>
         </div>
         <div className="hidden items-center gap-2 md:flex">
           <button
@@ -122,9 +99,16 @@ export function Telemetry({
         </div>
       </header>
 
+      {!sample && (
+        <div className="rounded-2xl border border-cyan-500/10 bg-slate-950/45 p-6 text-sm text-slate-500">
+          {t("dashboard.noTelemetryDesc")}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
         {metrics.map((m) => {
-          const v = m.read(sample);
+          const available = sample ? (m.available ? m.available(sample) : true) : false;
+          const v = sample && available ? m.read(sample) : 0;
           const pct = m.unit === "%" ? v : Math.min(100, (v / m.max) * 100);
           const Icon = m.icon;
           return (
@@ -146,7 +130,7 @@ export function Telemetry({
                   <div>
                     <div className="flex items-baseline gap-1.5">
                       <span className="text-4xl font-semibold tracking-tight text-slate-50 tabular-nums">
-                        {v.toFixed(0)}
+                        {available ? v.toFixed(0) : "--"}
                       </span>
                       <span className="text-sm font-mono text-slate-500">{m.unit}</span>
                     </div>
@@ -154,7 +138,7 @@ export function Telemetry({
                       {t("telemetry.minMax", { max: m.max, min: m.min, unit: m.unit })}
                     </div>
                   </div>
-                  <HistoryLine data={history[m.key]} hue={m.hue} />
+                  <HistoryLine data={history[m.key] ?? []} hue={m.hue} />
                 </div>
               </div>
             </TiltCard>

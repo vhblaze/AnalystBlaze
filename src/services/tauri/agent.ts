@@ -13,17 +13,50 @@ export type AgentStatus = {
   mode: string;
   api_base_url: string;
   web_login_url: string;
+  account_settings_url: string;
 };
 
 export type AgentTelemetrySample = {
   event_timestamp: number;
   cpu_usage: number;
+  cpu_temperature?: number;
+  cpu_temperature_available?: boolean;
   gpu_usage: number;
+  gpu_usage_available?: boolean;
   gpu_name?: string;
   vram_gb?: number;
+  vram_used_gb?: number | null;
+  vram_usage_percent?: number | null;
   ram_usage_mb: number;
+  ram_total_mb?: number;
+  ram_usage_percent?: number;
   gpu_temperature: number;
+  gpu_temperature_available?: boolean;
   latency_ms: number;
+  disk_used_gb?: number;
+  disk_total_gb?: number;
+  disk_usage_percent?: number;
+  active_processes?: number;
+  system_uptime_seconds?: number;
+  active_window?: string | null;
+  idle_seconds?: number;
+};
+
+export type AgentTelemetrySnapshot = AgentTelemetrySample & {
+  health_score: number;
+  health_level: "excellent" | "good" | "watch" | "critical" | string;
+  health_reasons: string[];
+  optimization_status: string;
+  active_profile: string;
+  telemetry_mode: string;
+  device_online: boolean;
+};
+
+export type GameModeResult = {
+  success: boolean;
+  message: string;
+  details: unknown;
+  status: AgentStatus;
 };
 
 type SingleInstancePayload = {
@@ -42,6 +75,7 @@ const fallbackStatus: AgentStatus = {
   mode: "stopped",
   api_base_url: import.meta.env.VITE_ANALYSTBLAZE_API_URL ?? "http://localhost:8000",
   web_login_url: import.meta.env.VITE_ANALYSTBLAZE_WEB_LOGIN_URL ?? "http://localhost:3000/login",
+  account_settings_url: import.meta.env.VITE_ANALYSTBLAZE_ACCOUNT_URL ?? "http://localhost:3000/configuration",
 };
 
 export function isTauriRuntime() {
@@ -58,6 +92,11 @@ export async function openAgentLogin() {
   return invoke<string>("open_login");
 }
 
+export async function openAgentAccountSettings() {
+  if (!isTauriRuntime()) return fallbackStatus.account_settings_url;
+  return invoke<string>("open_account_settings");
+}
+
 export async function completeAuthFromDeepLink(rawUrl: string) {
   if (!isTauriRuntime()) return fallbackStatus;
   return invoke<AgentStatus>("complete_auth_from_deep_link", { rawUrl });
@@ -66,6 +105,11 @@ export async function completeAuthFromDeepLink(rawUrl: string) {
 export async function startAgent() {
   if (!isTauriRuntime()) return fallbackStatus;
   return invoke<AgentStatus>("start_agent");
+}
+
+export async function activateAgentGameMode() {
+  if (!isTauriRuntime()) throw new Error("Tauri runtime unavailable for game mode.");
+  return invoke<GameModeResult>("activate_game_mode");
 }
 
 export async function setAgentTelemetryMode(mode: "normal" | "realtime") {
@@ -79,19 +123,23 @@ export async function logoutAgent() {
 }
 
 export async function collectAgentTelemetrySample(): Promise<AgentTelemetrySample> {
-  if (!isTauriRuntime()) {
-    return {
-      event_timestamp: Math.floor(Date.now() / 1000),
-      cpu_usage: 18 + Math.random() * 20,
-      gpu_usage: 10 + Math.random() * 25,
-      gpu_name: "Desktop preview",
-      vram_gb: 0,
-      ram_usage_mb: 3_200 + Math.random() * 1_000,
-      gpu_temperature: 42 + Math.random() * 8,
-      latency_ms: 12 + Math.random() * 10,
-    };
-  }
+  if (!isTauriRuntime()) throw new Error("Tauri runtime unavailable for local telemetry.");
   return invoke<AgentTelemetrySample>("collect_once");
+}
+
+export async function getAgentTelemetrySnapshot(): Promise<AgentTelemetrySnapshot | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<AgentTelemetrySnapshot | null>("telemetry_snapshot");
+}
+
+export async function listenToAgentTelemetry(onSnapshot: (snapshot: AgentTelemetrySnapshot) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<AgentTelemetrySnapshot>("telemetry-update", (event) => onSnapshot(event.payload));
+}
+
+export async function listenToAgentSessionInvalidated(onInvalidated: () => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen("agent-session-invalidated", onInvalidated);
 }
 
 export async function registerDeepLinkHandlers(onUrl: (url: string) => void) {

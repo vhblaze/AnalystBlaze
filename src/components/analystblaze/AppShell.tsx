@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useMemo, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
+import { useAgentTelemetry } from "@/hooks/useAgentTelemetry";
 import { useAuth } from "@/hooks/useAuth";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useI18n } from "@/i18n";
@@ -15,6 +16,7 @@ const Settings = lazy(() => import("./views/Settings").then((module) => ({ defau
 export function AppShell() {
   const [view, setView] = useState<ViewKey>("dashboard");
   const auth = useAuth();
+  const telemetry = useAgentTelemetry();
   const { t } = useI18n();
   const track = useTelemetry("navigation");
 
@@ -60,11 +62,18 @@ export function AppShell() {
               <div className="text-sm text-slate-500">{t("app.loading")}</div>
             ) : view === "dashboard" ? (
               <Suspense fallback={<ViewFallback />}>
-                <Dashboard user={auth.user} status={auth.status} onStartAgent={auth.start} busy={auth.busy} />
+                <Dashboard
+                  user={auth.user}
+                  status={auth.status}
+                  telemetry={telemetry}
+                  onStartAgent={auth.start}
+                  onActivateGameMode={auth.activateGameMode}
+                  busy={auth.busy}
+                />
               </Suspense>
             ) : view === "telemetry" ? (
               <Suspense fallback={<ViewFallback />}>
-                <Telemetry latestSample={auth.sample} onCollectSample={auth.collectSample} />
+                <Telemetry latestSample={auth.sample ?? telemetry} onCollectSample={auth.collectSample} />
               </Suspense>
             ) : view === "insights" ? (
               <Suspense fallback={<ViewFallback />}>
@@ -79,6 +88,7 @@ export function AppShell() {
                   busy={auth.busy}
                   onLogin={auth.login}
                   onLogout={auth.logout}
+                  onOpenAccountSettings={auth.openAccountSettings}
                   onStartAgent={auth.start}
                   onSetTelemetryMode={auth.setTelemetryMode}
                   onCollectSample={auth.collectSample}

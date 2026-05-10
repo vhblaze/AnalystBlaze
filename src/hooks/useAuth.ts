@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  activateAgentGameMode,
   collectAgentTelemetrySample,
   completeAuthFromDeepLink,
   getAgentStatus,
   isTauriRuntime,
   logoutAgent,
+  openAgentAccountSettings,
   openAgentLogin,
   registerDeepLinkHandlers,
   setAgentTelemetryMode,
   startAgent,
+  listenToAgentSessionInvalidated,
   type AgentStatus,
   type AgentTelemetrySample,
 } from "@/services/tauri/agent";
@@ -64,8 +67,18 @@ export function useAuth() {
       disposeDeepLinks = dispose;
     });
 
+    let disposeInvalidated: (() => void) | undefined;
+    listenToAgentSessionInvalidated(() => {
+      setSample(null);
+      setMessage({ key: "agent.messages.deviceInvalidated" });
+      void refreshStatus().catch(() => undefined);
+    }).then((dispose) => {
+      disposeInvalidated = dispose;
+    });
+
     return () => {
       disposeDeepLinks?.();
+      disposeInvalidated?.();
     };
   }, [handleDeepLink, refreshStatus]);
 
@@ -111,12 +124,38 @@ export function useAuth() {
     });
   }, [runAction]);
 
+  const openAccountSettings = useCallback(async () => {
+    await runAction(async () => {
+      const url = await openAgentAccountSettings();
+      if (!isTauriRuntime()) {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+      setMessage({ key: "agent.messages.accountSettingsOpened", params: { url } });
+      captureTelemetry({ name: "agent_account_settings_opened", category: "agent" });
+    });
+  }, [runAction]);
+
   const start = useCallback(async () => {
     await runAction(async () => {
       const nextStatus = await startAgent();
       setStatus(nextStatus);
       setMessage({ key: "agent.messages.agentStarted" });
       captureTelemetry({ name: "agent_started", category: "agent" });
+    });
+  }, [runAction]);
+
+  const activateGameMode = useCallback(async () => {
+    await runAction(async () => {
+      const result = await activateAgentGameMode();
+      setStatus(result.status);
+      setMessage({
+        key: result.success ? "agent.messages.gameModeApplied" : "agent.messages.gameModeFailed",
+        params: { message: result.message },
+      });
+      captureTelemetry({
+        name: result.success ? "game_mode_applied" : "game_mode_failed",
+        category: "agent",
+      });
     });
   }, [runAction]);
 
@@ -170,8 +209,10 @@ export function useAuth() {
     busy,
     login,
     logout,
+    openAccountSettings,
     refreshStatus,
     start,
+    activateGameMode,
     setTelemetryMode,
     collectSample,
   };

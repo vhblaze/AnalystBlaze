@@ -6,7 +6,9 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::telemetry::collector::HardwareProfile;
-use crate::telemetry::engine::{RealtimeTelemetryPayload, TelemetryBatch};
+use crate::telemetry::engine::{
+    AgentOptimizationEventPayload, RealtimeTelemetryPayload, TelemetryBatch,
+};
 
 #[derive(Debug, Clone)]
 pub struct ApiClient {
@@ -38,9 +40,89 @@ pub struct CommandResponse {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPolicyEnvelope {
+    pub bundle: AgentPolicyBundle,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPolicyBundle {
+    pub user_id: Uuid,
+    pub hw_id: Uuid,
+    pub plan: String,
+    pub model_version: String,
+    pub policy_version: String,
+    pub issued_at: String,
+    pub expires_at: String,
+    pub permissions: AgentPolicyPermissions,
+    pub allowed_actions: Vec<String>,
+    pub thresholds: AgentPolicyThresholds,
+    pub cooldowns: AgentPolicyCooldowns,
+    pub user_weights: AgentPolicyWeights,
+    pub server_authority: bool,
+    pub notes: Option<Value>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPolicyPermissions {
+    pub manual_gamer_mode: bool,
+    pub automatic_agent_optimization: bool,
+    pub local_inference: bool,
+    pub energy_optimization: bool,
+    pub process_optimization: bool,
+    pub weekly_ai_telemetry_seconds: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPolicyThresholds {
+    pub high_cpu: f64,
+    pub high_gpu: f64,
+    pub high_ram_percent: f64,
+    pub high_cpu_temp: f64,
+    pub high_gpu_temp: f64,
+    pub idle_seconds: u64,
+    pub min_confidence: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPolicyCooldowns {
+    pub local_decision_seconds: u64,
+    pub game_mode_seconds: u64,
+    pub cleanup_seconds: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPolicyWeights {
+    pub gaming_priority: f64,
+    pub energy_saving_priority: f64,
+    pub silence_notifications_priority: f64,
+    pub thermal_protection_priority: f64,
+    pub background_cleanup_priority: f64,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct CommandListResponse {
     pending: Vec<CommandResponse>,
+    weekly_ai_usage: Option<WeeklyAiTelemetryUsage>,
+    automatic_agent_available: Option<bool>,
+    blocked_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WeeklyAiTelemetryUsage {
+    used_seconds: i64,
+    limit_seconds: Option<i64>,
+    remaining_seconds: Option<i64>,
+    is_currently_tracking: bool,
+    limit_reached: bool,
 }
 
 impl ApiClient {
@@ -131,6 +213,55 @@ impl ApiClient {
         .await
     }
 
+    pub async fn post_agent_event(
+        &self,
+        access_token: &str,
+        hw_secret: &str,
+        payload: &AgentOptimizationEventPayload,
+    ) -> Result<(), String> {
+        let payload = serde_json::to_value(payload).map_err(|error| error.to_string())?;
+        self.post_signed::<Value>(
+            access_token,
+            hw_secret,
+            "/api/v1/telemetry/agent-events",
+            &payload,
+        )
+        .await?;
+        Ok(())
+    }
+
+    pub async fn agent_policy(
+        &self,
+        access_token: &str,
+        hw_id: Uuid,
+        hw_secret: &str,
+    ) -> Result<AgentPolicyBundle, String> {
+        let response = self
+            .http
+            .get(self.url("/api/v1/telemetry/agent-policy"))
+            .bearer_auth(access_token)
+            .header("X-AnalystBlaze-Hardware-Id", hw_id.to_string())
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        let envelope = ok_json::<AgentPolicyEnvelope>(response).await?;
+        if envelope.bundle.hw_id != hw_id {
+            return Err("Policy bundle recebido para outro hardware.".to_string());
+        }
+
+        let bundle_payload =
+            serde_json::to_value(&envelope.bundle).map_err(|error| error.to_string())?;
+        let expected_signature = hmac::sign_json(&bundle_payload, hw_secret)?;
+        if !constant_time_eq(
+            expected_signature.as_bytes(),
+            envelope.signature.as_bytes(),
+        ) {
+            return Err("Assinatura do policy bundle invalida.".to_string());
+        }
+
+        Ok(envelope.bundle)
+    }
+
     pub async fn realtime_status(
         &self,
         access_token: &str,
@@ -162,6 +293,26 @@ impl ApiClient {
             .await
             .map_err(|error| error.to_string())?;
         let response = ok_json::<CommandListResponse>(response).await?;
+        if response.automatic_agent_available == Some(false) {
+            let reason = response
+                .blocked_reason
+                .as_deref()
+                .unwrap_or("AUTOMATIC_AGENT_UNAVAILABLE");
+            eprintln!("Agente automatico indisponivel pelo servidor: {reason}");
+        }
+        if let Some(usage) = response.weekly_ai_usage.as_ref() {
+            if usage.limit_reached {
+                eprintln!(
+                    "Limite semanal de IA do Starter atingido: {}/{}s usados",
+                    usage.used_seconds,
+                    usage.limit_seconds.unwrap_or_default()
+                );
+            } else if usage.is_currently_tracking {
+                if let Some(remaining) = usage.remaining_seconds {
+                    eprintln!("IA automatica Starter em uso: {remaining}s restantes nesta semana");
+                }
+            }
+        }
 
         Ok(response.pending)
     }
@@ -247,4 +398,15 @@ async fn error_body(status: StatusCode, response: reqwest::Response) -> String {
     } else {
         format!("API retornou status {status}: {text}")
     }
+}
+
+fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    left.iter()
+        .zip(right.iter())
+        .fold(0u8, |acc, (left, right)| acc | (left ^ right))
+        == 0
 }
