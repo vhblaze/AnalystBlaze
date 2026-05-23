@@ -3,6 +3,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sysinfo::{Components, Disks, ProcessesToUpdate, System};
 
+use super::advanced::{collect_advanced_telemetry, AdvancedTelemetry};
+use super::network::{best_latency_ms, collect_network_sample, NetworkDiagnostics};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuInfo {
     pub name: String,
@@ -30,6 +33,8 @@ pub struct TelemetrySample {
     pub cpu_usage: f64,
     pub cpu_temperature: f64,
     pub cpu_temperature_available: bool,
+    pub cpu_temperature_source: Option<String>,
+    pub cpu_temperature_methods: Vec<CpuTemperatureMethod>,
     pub gpu_usage: f64,
     pub gpu_usage_available: bool,
     pub gpu_name: String,
@@ -49,8 +54,25 @@ pub struct TelemetrySample {
     pub system_uptime_seconds: u64,
     pub active_window: Option<String>,
     pub idle_seconds: u64,
+    pub advanced: AdvancedTelemetry,
+    pub network: NetworkDiagnostics,
     pub context_state: Value,
     pub details: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CpuTemperatureMethod {
+    pub source: String,
+    pub label: Option<String>,
+    pub value_c: Option<f64>,
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct CpuTemperatureReading {
+    value_c: Option<f64>,
+    source: Option<String>,
+    methods: Vec<CpuTemperatureMethod>,
 }
 
 pub struct TelemetryCollector {
@@ -61,6 +83,12 @@ pub struct TelemetryCollector {
     gpu_usage_reader: Option<GpuUsageReader>,
     nvidia_sensor_reader: Option<NvidiaSensorReader>,
     collection_count: u64,
+    advanced_cache: AdvancedTelemetry,
+    advanced_refreshed_at: i64,
+    network_cache: NetworkDiagnostics,
+    network_refreshed_at: i64,
+    cpu_temperature_cache: CpuTemperatureReading,
+    cpu_temperature_refreshed_at: i64,
 }
 
 impl TelemetryCollector {
@@ -73,6 +101,12 @@ impl TelemetryCollector {
             gpu_usage_reader: GpuUsageReader::new(),
             nvidia_sensor_reader: NvidiaSensorReader::new(),
             collection_count: 0,
+            advanced_cache: AdvancedTelemetry::default(),
+            advanced_refreshed_at: 0,
+            network_cache: NetworkDiagnostics::default(),
+            network_refreshed_at: 0,
+            cpu_temperature_cache: CpuTemperatureReading::default(),
+            cpu_temperature_refreshed_at: 0,
         }
     }
 
@@ -94,9 +128,11 @@ impl TelemetryCollector {
         } else {
             0.0
         };
-        let cpu_temperature = self.detect_cpu_temperature();
-        let cpu_temperature_available = cpu_temperature.is_some();
-        let cpu_temperature = cpu_temperature.unwrap_or_default() as f64;
+        let cpu_temperature_reading = self.detect_cpu_temperature();
+        let cpu_temperature_available = cpu_temperature_reading.value_c.is_some();
+        let cpu_temperature = cpu_temperature_reading.value_c.unwrap_or_default();
+        let cpu_temperature_source = cpu_temperature_reading.source.clone();
+        let cpu_temperature_methods = cpu_temperature_reading.methods.clone();
         let nvidia_sensors = self
             .nvidia_sensor_reader
             .as_ref()
@@ -135,6 +171,9 @@ impl TelemetryCollector {
         let active_window = active_window_title();
         let idle_seconds = idle_seconds();
         let process_names = running_process_names(&self.system);
+        let advanced = self.advanced_telemetry();
+        let network = self.network_diagnostics();
+        let latency_ms = best_latency_ms(&network);
         let local_context = detect_local_context(
             active_window.as_deref(),
             &process_names,
@@ -152,6 +191,8 @@ impl TelemetryCollector {
             cpu_usage: clamp_percent(cpu_usage),
             cpu_temperature,
             cpu_temperature_available,
+            cpu_temperature_source: cpu_temperature_source.clone(),
+            cpu_temperature_methods: cpu_temperature_methods.clone(),
             gpu_usage: gpu_usage.unwrap_or_default(),
             gpu_usage_available: gpu_usage.is_some(),
             gpu_name: gpu_name.clone(),
@@ -163,7 +204,7 @@ impl TelemetryCollector {
             ram_usage_percent,
             gpu_temperature,
             gpu_temperature_available,
-            latency_ms: 0.0,
+            latency_ms,
             disk_used_gb,
             disk_total_gb,
             disk_usage_percent,
@@ -171,6 +212,8 @@ impl TelemetryCollector {
             system_uptime_seconds,
             active_window: active_window.clone(),
             idle_seconds,
+            advanced: advanced.clone(),
+            network: network.clone(),
             context_state: json!({
                 "mode": "observed",
                 "activity": detected_activity,
@@ -180,9 +223,21 @@ impl TelemetryCollector {
                 "vram_gb": vram_gb,
                 "cpu_temperature": cpu_temperature,
                 "cpu_temperature_available": cpu_temperature_available,
+                "cpu_temperature_source": cpu_temperature_source.clone(),
+                "cpu_temperature_methods": cpu_temperature_methods.clone(),
                 "gpu_temperature_available": gpu_temperature_available,
                 "ram_usage_percent": ram_usage_percent,
                 "disk_usage_percent": disk_usage_percent,
+                "advanced": advanced.clone(),
+                "network": {
+                    "connected": network.connected,
+                    "adapter_type": network.adapter_type.clone(),
+                    "wifi_signal_percent": network.wifi_signal_percent,
+                    "latency_ms": latency_ms,
+                    "jitter_ms": network.jitter_ms,
+                    "packet_loss_percent": network.packet_loss_percent,
+                    "recommendations": network.recommendations.clone(),
+                },
             }),
             details: json!({
                 "gpu_name": gpu_name,
@@ -191,6 +246,8 @@ impl TelemetryCollector {
                 "vram_usage_percent": vram_usage_percent,
                 "cpu_temperature": cpu_temperature,
                 "cpu_temperature_available": cpu_temperature_available,
+                "cpu_temperature_source": cpu_temperature_source,
+                "cpu_temperature_methods": cpu_temperature_methods,
                 "ram_total_mb": ram_total_mb,
                 "ram_usage_percent": ram_usage_percent,
                 "gpu_devices": self.gpu_devices,
@@ -205,7 +262,9 @@ impl TelemetryCollector {
                 "idle_seconds": idle_seconds,
                 "active_window": active_window,
                 "process_sample": process_names.into_iter().take(30).collect::<Vec<_>>(),
-                "latency_ms": 0.0,
+                "latency_ms": latency_ms,
+                "network": network,
+                "advanced": advanced,
                 "source": "sysinfo",
             }),
         }
@@ -277,7 +336,11 @@ impl TelemetryCollector {
     }
 
     fn disk_usage(&self) -> (f64, f64, f64) {
-        let total_bytes = self.disks.iter().map(|disk| disk.total_space()).sum::<u64>();
+        let total_bytes = self
+            .disks
+            .iter()
+            .map(|disk| disk.total_space())
+            .sum::<u64>();
         let available_bytes = self
             .disks
             .iter()
@@ -295,41 +358,154 @@ impl TelemetryCollector {
     }
 
     fn detect_gpu_temperature(&self) -> Option<f32> {
-        self.components
-            .iter()
-            .find_map(|component| {
-                let label = component.label().to_ascii_lowercase();
-                if is_gpu_sensor_label(&label) {
-                    component.temperature().filter(|value| value.is_finite())
-                } else {
-                    None
-                }
-            })
-    }
-
-    fn detect_cpu_temperature(&self) -> Option<f32> {
-        let labeled = self.components.iter().find_map(|component| {
+        self.components.iter().find_map(|component| {
             let label = component.label().to_ascii_lowercase();
-            if is_cpu_sensor_label(&label) || label == "computer" {
-                component.temperature().filter(|value| sane_temperature(*value))
+            if is_gpu_sensor_label(&label) {
+                component.temperature().filter(|value| value.is_finite())
             } else {
                 None
             }
-        });
-
-        labeled.or_else(|| {
-            self.components
-                .iter()
-                .filter_map(|component| component.temperature())
-                .filter(|value| sane_temperature(*value))
-                .max_by(|left, right| left.total_cmp(right))
         })
+    }
+
+    fn detect_cpu_temperature(&mut self) -> CpuTemperatureReading {
+        let mut methods = self.sysinfo_cpu_temperature_methods();
+        if let Some(method) = methods.iter().find(|method| method.available) {
+            return CpuTemperatureReading {
+                value_c: method.value_c,
+                source: Some(method.source.clone()),
+                methods,
+            };
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        if now.saturating_sub(self.cpu_temperature_refreshed_at) >= 30 {
+            let external_methods = external_cpu_temperature_methods();
+            self.cpu_temperature_cache = CpuTemperatureReading::from_methods(external_methods);
+            self.cpu_temperature_refreshed_at = now;
+        }
+
+        if self.cpu_temperature_cache.methods.is_empty() {
+            methods.push(CpuTemperatureMethod::unavailable(
+                "external_wmi",
+                "sensor WMI nao exposto",
+            ));
+        } else {
+            methods.extend(self.cpu_temperature_cache.methods.clone());
+        }
+
+        let best = CpuTemperatureReading::from_methods(methods);
+        if best.value_c.is_some() {
+            best
+        } else {
+            self.cpu_temperature_cache.clone()
+        }
+    }
+
+    fn sysinfo_cpu_temperature_methods(&self) -> Vec<CpuTemperatureMethod> {
+        let mut labeled = Vec::new();
+        let mut fallback = Vec::new();
+
+        for component in self.components.iter() {
+            let raw_label = component.label().trim().to_string();
+            let label = raw_label.to_ascii_lowercase();
+            let value = component
+                .temperature()
+                .filter(|value| sane_temperature(*value));
+            let method = CpuTemperatureMethod {
+                source: if is_cpu_sensor_label(&label) || label == "computer" {
+                    "sysinfo_cpu_sensor".to_string()
+                } else {
+                    "sysinfo_component_max".to_string()
+                },
+                label: Some(raw_label).filter(|value| !value.is_empty()),
+                value_c: value.map(|value| value as f64),
+                available: value.is_some(),
+            };
+
+            if method.source == "sysinfo_cpu_sensor" {
+                labeled.push(method);
+            } else if method.available {
+                fallback.push(method);
+            }
+        }
+
+        let mut methods = Vec::new();
+        if let Some(best) = labeled.into_iter().max_by(|left, right| {
+            left.value_c
+                .unwrap_or_default()
+                .total_cmp(&right.value_c.unwrap_or_default())
+        }) {
+            methods.push(best);
+        } else {
+            methods.push(CpuTemperatureMethod::unavailable(
+                "sysinfo_cpu_sensor",
+                "sensor CPU nao exposto pelo sistema",
+            ));
+        }
+
+        if let Some(best) = fallback.into_iter().max_by(|left, right| {
+            left.value_c
+                .unwrap_or_default()
+                .total_cmp(&right.value_c.unwrap_or_default())
+        }) {
+            methods.push(best);
+        }
+
+        methods
+    }
+
+    fn advanced_telemetry(&mut self) -> AdvancedTelemetry {
+        let now = chrono::Utc::now().timestamp();
+        if now.saturating_sub(self.advanced_refreshed_at) >= 300 {
+            self.advanced_cache = collect_advanced_telemetry();
+            self.advanced_refreshed_at = now;
+        }
+
+        self.advanced_cache.clone()
+    }
+
+    fn network_diagnostics(&mut self) -> NetworkDiagnostics {
+        let now = chrono::Utc::now().timestamp();
+        if now.saturating_sub(self.network_refreshed_at) >= 30 {
+            self.network_cache = collect_network_sample();
+            self.network_refreshed_at = now;
+        }
+
+        self.network_cache.clone()
     }
 }
 
 impl Default for TelemetryCollector {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl CpuTemperatureReading {
+    fn from_methods(methods: Vec<CpuTemperatureMethod>) -> Self {
+        let best = methods
+            .iter()
+            .filter(|method| method.available)
+            .filter_map(|method| method.value_c.map(|value| (value, method.source.clone())))
+            .max_by(|left, right| left.0.total_cmp(&right.0));
+
+        Self {
+            value_c: best.as_ref().map(|(value, _)| *value),
+            source: best.map(|(_, source)| source),
+            methods,
+        }
+    }
+}
+
+impl CpuTemperatureMethod {
+    fn unavailable(source: &str, label: &str) -> Self {
+        Self {
+            source: source.to_string(),
+            label: Some(label.to_string()),
+            value_c: None,
+            available: false,
+        }
     }
 }
 
@@ -396,6 +572,120 @@ fn clamp_percent(value: f64) -> f64 {
 
 fn sane_temperature(value: f32) -> bool {
     value.is_finite() && (1.0..=125.0).contains(&value)
+}
+
+fn sane_temperature_f64(value: f64) -> bool {
+    value.is_finite() && (1.0..=125.0).contains(&value)
+}
+
+#[cfg(windows)]
+fn external_cpu_temperature_methods() -> Vec<CpuTemperatureMethod> {
+    let script = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$lhm = Get-CimInstance -Namespace root/LibreHardwareMonitor -ClassName Sensor |
+  Where-Object { $_.SensorType -eq 'Temperature' -and ($_.Name -match 'CPU|Package|Core|Tctl|Tdie') } |
+  Select-Object @{Name='source';Expression={'libre_hardware_monitor'}}, @{Name='label';Expression={$_.Name}}, @{Name='value_c';Expression={[double]$_.Value}}
+$ohm = Get-CimInstance -Namespace root/OpenHardwareMonitor -ClassName Sensor |
+  Where-Object { $_.SensorType -eq 'Temperature' -and ($_.Name -match 'CPU|Package|Core|Tctl|Tdie') } |
+  Select-Object @{Name='source';Expression={'open_hardware_monitor'}}, @{Name='label';Expression={$_.Name}}, @{Name='value_c';Expression={[double]$_.Value}}
+$acpi = Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature |
+  Select-Object @{Name='source';Expression={'acpi_thermal_zone'}}, @{Name='label';Expression={$_.InstanceName}}, @{Name='value_c';Expression={([double]$_.CurrentTemperature / 10) - 273.15}}
+@($lhm + $ohm + $acpi) | Where-Object { $_.value_c -gt 0 -and $_.value_c -lt 126 } | ConvertTo-Json -Compress
+"#;
+
+    let output = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output();
+
+    let Ok(output) = output else {
+        return vec![CpuTemperatureMethod::unavailable(
+            "external_wmi",
+            "PowerShell/CIM indisponivel",
+        )];
+    };
+
+    if !output.status.success() {
+        return vec![CpuTemperatureMethod::unavailable(
+            "external_wmi",
+            "fontes WMI indisponiveis",
+        )];
+    }
+
+    parse_external_temperature_methods(&String::from_utf8_lossy(&output.stdout))
+}
+
+#[cfg(not(windows))]
+fn external_cpu_temperature_methods() -> Vec<CpuTemperatureMethod> {
+    vec![CpuTemperatureMethod::unavailable(
+        "external_wmi",
+        "fonte externa disponivel apenas no Windows",
+    )]
+}
+
+#[derive(Debug, Deserialize)]
+struct ExternalTemperatureMethod {
+    source: Option<String>,
+    label: Option<String>,
+    value_c: Option<f64>,
+}
+
+fn parse_external_temperature_methods(raw: &str) -> Vec<CpuTemperatureMethod> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return vec![CpuTemperatureMethod::unavailable(
+            "external_wmi",
+            "nenhum sensor externo encontrado",
+        )];
+    }
+
+    let value: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(value) => value,
+        Err(_) => {
+            return vec![CpuTemperatureMethod::unavailable(
+                "external_wmi",
+                "resposta WMI invalida",
+            )]
+        }
+    };
+
+    let entries: Vec<ExternalTemperatureMethod> = if value.is_array() {
+        serde_json::from_value(value).unwrap_or_default()
+    } else if value.is_object() {
+        serde_json::from_value(value)
+            .map(|entry| vec![entry])
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+
+    let mut methods = entries
+        .into_iter()
+        .filter_map(|entry| {
+            let value_c = entry.value_c.filter(|value| sane_temperature_f64(*value))?;
+            Some(CpuTemperatureMethod {
+                source: entry.source.unwrap_or_else(|| "external_wmi".to_string()),
+                label: entry.label.filter(|label| !label.trim().is_empty()),
+                value_c: Some(value_c),
+                available: true,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if methods.is_empty() {
+        methods.push(CpuTemperatureMethod::unavailable(
+            "external_wmi",
+            "nenhum sensor externo valido",
+        ));
+    }
+
+    methods
 }
 
 fn is_gpu_sensor_label(label: &str) -> bool {
@@ -465,8 +755,17 @@ fn detect_local_context(
     let music = has_process(&["spotify", "musicbee", "itunes", "foobar", "deezer", "tidal"])
         || active_has(&["spotify", "deezer", "music", "youtube music"]);
     let video = has_process(&["vlc", "mpv", "netflix", "primevideo", "disney", "obs64"])
-        || active_has(&["youtube", "netflix", "prime video", "disney+", "twitch", "vlc"]);
-    let gaming = gaming_process || gaming_window || (gpu_usage >= 65.0 && cpu_usage >= 25.0 && idle_seconds < 120);
+        || active_has(&[
+            "youtube",
+            "netflix",
+            "prime video",
+            "disney+",
+            "twitch",
+            "vlc",
+        ]);
+    let gaming = gaming_process
+        || gaming_window
+        || (gpu_usage >= 65.0 && cpu_usage >= 25.0 && idle_seconds < 120);
     let idle = idle_seconds >= 300;
     let activity = if idle {
         "idle"
@@ -585,14 +884,14 @@ impl NvidiaSensorReader {
             }
 
             let mut temperature = 0;
-            let temperature_c =
-                if unsafe { (self.device_get_temperature)(device, NVML_TEMPERATURE_GPU, &mut temperature) }
-                    == NVML_SUCCESS
-                {
-                    Some(temperature as f32).filter(|value| sane_temperature(*value))
-                } else {
-                    None
-                };
+            let temperature_c = if unsafe {
+                (self.device_get_temperature)(device, NVML_TEMPERATURE_GPU, &mut temperature)
+            } == NVML_SUCCESS
+            {
+                Some(temperature as f32).filter(|value| sane_temperature(*value))
+            } else {
+                None
+            };
 
             let mut utilization = NvmlUtilization::default();
             let utilization_percent =
@@ -675,8 +974,8 @@ impl GpuUsageReader {
     fn new() -> Option<Self> {
         use windows::core::PCWSTR;
         use windows::Win32::System::Performance::{
-            PdhAddEnglishCounterW, PdhCollectQueryData, PdhCloseQuery, PdhOpenQueryW,
-            PDH_HCOUNTER, PDH_HQUERY,
+            PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhOpenQueryW, PDH_HCOUNTER,
+            PDH_HQUERY,
         };
 
         let mut query = PDH_HQUERY::default();

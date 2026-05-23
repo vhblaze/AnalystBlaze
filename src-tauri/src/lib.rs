@@ -1,4 +1,5 @@
 mod api;
+mod audit;
 mod auth;
 mod config;
 mod optimizations;
@@ -21,8 +22,8 @@ use telemetry::state::{
 
 use crate::api::ApiClient;
 use crate::auth::{
-    profile_from_credentials, profile_from_token, profile_from_value, tokens_from_deep_link,
-    AuthProfile, AuthTokens, SecureStore, StoredCredentials,
+    auth_callback_from_deep_link, profile_from_credentials, profile_from_token, profile_from_value,
+    AuthCallback, AuthProfile, AuthTokens, SecureStore, StoredCredentials,
 };
 use crate::config::AgentConfig;
 
@@ -63,6 +64,224 @@ struct GameModeResult {
     status: AgentStatus,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct OptimizationPreview {
+    action_name: String,
+    risk: String,
+    requires_local_confirmation: bool,
+    requires_snapshot: bool,
+    requires_privileged_helper: bool,
+    allowed_without_helper: bool,
+    message: String,
+}
+
+#[tauri::command]
+async fn restore_pending_optimizations() -> Result<optimizations::snapshot::RestoreReport, String> {
+    tokio::task::spawn_blocking(optimizations::snapshot::restore_pending_snapshots)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn optimization_snapshots(
+    limit: Option<usize>,
+) -> Result<Vec<optimizations::snapshot::OptimizationSnapshot>, String> {
+    tokio::task::spawn_blocking(move || {
+        optimizations::snapshot::list_snapshots(limit.unwrap_or(80))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn audit_log(limit: Option<usize>) -> Result<Vec<audit::AuditEvent>, String> {
+    tokio::task::spawn_blocking(move || audit::recent_events(limit.unwrap_or(120)))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn optimization_preview(
+    action_name: String,
+    payload: Option<serde_json::Value>,
+) -> OptimizationPreview {
+    let Some(profile) = optimizations::safety::command_profile(&action_name) else {
+        return OptimizationPreview {
+            action_name,
+            risk: "unknown".to_string(),
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: false,
+            allowed_without_helper: false,
+            message: "Acao desconhecida pela allowlist local.".to_string(),
+        };
+    };
+
+    let context = optimizations::safety::SafetyContext {
+        source: optimizations::safety::CommandSource::ManualUser,
+        allowed_actions: None,
+        local_confirmation: true,
+        privileged_helper_available: false,
+    };
+    let allowed_without_helper =
+        optimizations::safety::validate_command(&action_name, payload.as_ref(), &context).is_ok();
+
+    OptimizationPreview {
+        action_name,
+        risk: format!("{:?}", profile.risk).to_ascii_lowercase(),
+        requires_local_confirmation: profile.requires_local_confirmation,
+        requires_snapshot: profile.requires_snapshot,
+        requires_privileged_helper: profile.requires_privileged_helper,
+        allowed_without_helper,
+        message: if profile.requires_privileged_helper {
+            "Esta acao exige helper privilegiado com UAC explicito.".to_string()
+        } else if profile.requires_snapshot {
+            "Esta acao altera o Windows e deve criar snapshot antes de executar.".to_string()
+        } else {
+            "Acao permitida pela camada local de seguranca.".to_string()
+        },
+    }
+}
+
+#[tauri::command]
+async fn windows_inventory() -> Result<optimizations::windows_inventory::WindowsInventory, String> {
+    tokio::task::spawn_blocking(optimizations::windows_inventory::collect_windows_inventory)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn network_diagnostics() -> Result<telemetry::network::NetworkDiagnostics, String> {
+    tokio::task::spawn_blocking(telemetry::network::collect_network_diagnostics)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn energy_diagnostics() -> Result<optimizations::energy::EnergyDiagnostics, String> {
+    tokio::task::spawn_blocking(optimizations::energy::collect_energy_diagnostics)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn protected_apps() -> Result<Vec<optimizations::protected_apps::ProtectedApp>, String> {
+    tokio::task::spawn_blocking(optimizations::protected_apps::list_protected_apps)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn add_protected_app(
+    name: String,
+    reason: Option<String>,
+) -> Result<Vec<optimizations::protected_apps::ProtectedApp>, String> {
+    tokio::task::spawn_blocking(move || {
+        optimizations::protected_apps::add_protected_app(name, reason)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn remove_protected_app(
+    name: String,
+) -> Result<Vec<optimizations::protected_apps::ProtectedApp>, String> {
+    tokio::task::spawn_blocking(move || optimizations::protected_apps::remove_protected_app(name))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+fn privileged_helper_status() -> optimizations::privileged_helper::PrivilegedHelperStatus {
+    optimizations::privileged_helper::status()
+}
+
+#[tauri::command]
+async fn local_ai_policy() -> Result<optimizations::local_ai_policy::LocalAiPolicy, String> {
+    tokio::task::spawn_blocking(optimizations::local_ai_policy::load_local_ai_policy)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn save_local_ai_policy(
+    policy: optimizations::local_ai_policy::LocalAiPolicy,
+) -> Result<optimizations::local_ai_policy::LocalAiPolicy, String> {
+    tokio::task::spawn_blocking(move || {
+        optimizations::local_ai_policy::save_local_ai_policy(policy)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn disable_startup_app(
+    name: String,
+    location: Option<String>,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "DISABLE_STARTUP_APP",
+        Some(serde_json::json!({
+            "name": name,
+            "location": location,
+        })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn restore_startup_app(
+    name: Option<String>,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "RESTORE_STARTUP_APP",
+        Some(serde_json::json!({
+            "name": name,
+        })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn stop_windows_service(name: String) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "STOP_SERVICE",
+        Some(serde_json::json!({
+            "service_name": name,
+        })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn restore_windows_service(
+    name: Option<String>,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "RESTORE_SERVICE",
+        Some(serde_json::json!({
+            "service_name": name,
+        })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn set_power_plan_high_performance() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("SET_POWER_PLAN_HIGH_PERFORMANCE", None).await)
+}
+
+#[tauri::command]
+async fn set_power_plan_balanced() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("SET_POWER_PLAN_BALANCED", None).await)
+}
+
+#[tauri::command]
+async fn set_power_plan_power_saver() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("SET_POWER_PLAN_POWER_SAVER", None).await)
+}
+
 #[tauri::command]
 async fn agent_status(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
     refresh_account_profile_if_needed(&state).await?;
@@ -89,7 +308,10 @@ async fn complete_auth_from_deep_link(
     state: State<'_, AgentState>,
     app: AppHandle,
 ) -> Result<AgentStatus, String> {
-    let tokens = tokens_from_deep_link(&raw_url)?;
+    let tokens = match auth_callback_from_deep_link(&raw_url)? {
+        AuthCallback::Tokens(tokens) => tokens,
+        AuthCallback::PairingCode(code) => state.api.exchange_desktop_pairing_code(&code).await?,
+    };
     complete_auth_tokens(tokens, state, app).await
 }
 
@@ -335,6 +557,26 @@ pub fn run() {
             complete_auth_from_deep_link,
             start_agent,
             activate_game_mode,
+            restore_pending_optimizations,
+            optimization_snapshots,
+            audit_log,
+            optimization_preview,
+            windows_inventory,
+            network_diagnostics,
+            energy_diagnostics,
+            protected_apps,
+            add_protected_app,
+            remove_protected_app,
+            privileged_helper_status,
+            local_ai_policy,
+            save_local_ai_policy,
+            disable_startup_app,
+            restore_startup_app,
+            stop_windows_service,
+            restore_windows_service,
+            set_power_plan_high_performance,
+            set_power_plan_balanced,
+            set_power_plan_power_saver,
             set_telemetry_mode,
             logout,
             collect_once,

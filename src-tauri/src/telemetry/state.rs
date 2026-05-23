@@ -23,6 +23,8 @@ pub struct TelemetryDashboardSnapshot {
     pub cpu_usage: f64,
     pub cpu_temperature: f64,
     pub cpu_temperature_available: bool,
+    pub cpu_temperature_source: Option<String>,
+    pub cpu_temperature_methods: serde_json::Value,
     pub gpu_usage: f64,
     pub gpu_usage_available: bool,
     pub gpu_name: String,
@@ -42,6 +44,8 @@ pub struct TelemetryDashboardSnapshot {
     pub system_uptime_seconds: u64,
     pub active_window: Option<String>,
     pub idle_seconds: u64,
+    pub advanced: serde_json::Value,
+    pub network: serde_json::Value,
     pub health_score: u8,
     pub health_level: String,
     pub health_reasons: Vec<String>,
@@ -56,7 +60,11 @@ pub fn new_shared_telemetry_state() -> SharedTelemetryState {
 }
 
 impl TelemetryDashboardSnapshot {
-    pub fn from_sample(sample: &TelemetrySample, telemetry_mode: &str, device_online: bool) -> Self {
+    pub fn from_sample(
+        sample: &TelemetrySample,
+        telemetry_mode: &str,
+        device_online: bool,
+    ) -> Self {
         let health = TelemetryHealth::from_sample(sample);
 
         Self {
@@ -64,6 +72,9 @@ impl TelemetryDashboardSnapshot {
             cpu_usage: sample.cpu_usage,
             cpu_temperature: sample.cpu_temperature,
             cpu_temperature_available: sample.cpu_temperature_available,
+            cpu_temperature_source: sample.cpu_temperature_source.clone(),
+            cpu_temperature_methods: serde_json::to_value(&sample.cpu_temperature_methods)
+                .unwrap_or_else(|_| serde_json::Value::Array(Vec::new())),
             gpu_usage: sample.gpu_usage,
             gpu_usage_available: sample.gpu_usage_available,
             gpu_name: sample.gpu_name.clone(),
@@ -83,6 +94,10 @@ impl TelemetryDashboardSnapshot {
             system_uptime_seconds: sample.system_uptime_seconds,
             active_window: sample.active_window.clone(),
             idle_seconds: sample.idle_seconds,
+            advanced: serde_json::to_value(&sample.advanced)
+                .unwrap_or_else(|_| serde_json::Value::Null),
+            network: serde_json::to_value(&sample.network)
+                .unwrap_or_else(|_| serde_json::Value::Null),
             health_score: health.score,
             health_level: health.level,
             health_reasons: health.reasons,
@@ -139,6 +154,29 @@ impl TelemetryHealth {
         if sample.active_processes >= 280 {
             score -= 6;
             reasons.push("background_process_load".to_string());
+        }
+
+        if sample.advanced.disk_predict_failure == Some(true) {
+            score -= 30;
+            reasons.push("disk_smart_predict_failure".to_string());
+        }
+
+        if sample.advanced.defender_status.as_deref() == Some("disabled_or_unavailable") {
+            score -= 8;
+            reasons.push("defender_attention".to_string());
+        }
+
+        if sample.advanced.event_log_critical_errors_24h.unwrap_or(0) >= 10 {
+            score -= 8;
+            reasons.push("system_event_errors".to_string());
+        }
+
+        if sample.network.packet_loss_percent.unwrap_or_default() >= 2.0 {
+            score -= 10;
+            reasons.push("network_packet_loss".to_string());
+        } else if sample.network.jitter_ms.unwrap_or_default() >= 20.0 {
+            score -= 6;
+            reasons.push("network_jitter".to_string());
         }
 
         if reasons.is_empty() {

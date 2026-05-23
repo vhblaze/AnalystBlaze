@@ -12,6 +12,7 @@ import {
   Sparkles,
   Thermometer,
   Timer,
+  Wifi,
 } from "lucide-react";
 import { TiltCard } from "../TiltCard";
 import type { User } from "@/hooks/useAuth";
@@ -166,6 +167,7 @@ export function Dashboard({
         <MetricCard icon={Thermometer} label={t("dashboard.cpuTemp")} value={formatTemp(telemetry?.cpu_temperature, telemetry?.cpu_temperature_available)} detail={t("dashboard.cpuTempDetail")} />
         <MetricCard icon={Thermometer} label={t("dashboard.gpuTemp")} value={formatTemp(telemetry?.gpu_temperature, telemetry?.gpu_temperature_available)} detail={telemetry ? `${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")}` : t("common.unavailable")} />
         <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)}` : t("common.unavailable")} />
+        <MetricCard icon={Wifi} label={t("dashboard.latency")} value={telemetry ? formatLatency(telemetry.latency_ms) : "--"} detail={telemetry ? networkDetail(telemetry.network) : t("common.unavailable")} />
         <MetricCard icon={Timer} label={t("dashboard.idleState")} value={telemetry ? formatDuration(telemetry.idle_seconds ?? 0) : "--"} detail={telemetry?.active_window || t("dashboard.noActiveWindow")} />
         <MetricCard icon={ShieldCheck} label={t("dashboard.optimizationStatus")} value={telemetry ? optimizationLabel(telemetry.optimization_status, t) : "--"} detail={telemetry ? profileLabel(telemetry.active_profile, t) : t("common.unavailable")} />
       </div>
@@ -258,6 +260,25 @@ function Sparkline({ data }: { data: number[] }) {
 
 function formatPercent(value: number) {
   return `${Math.round(Math.max(0, Math.min(100, value)))}%`;
+}
+
+function formatLatency(value?: number | null) {
+  if (value == null || !Number.isFinite(value) || value <= 0) return "--";
+  return `${Math.round(value)} ms`;
+}
+
+function networkDetail(network: unknown) {
+  if (!network || typeof network !== "object") return "rede em leitura";
+  const data = network as {
+    adapter_name?: string | null;
+    wifi_ssid?: string | null;
+    jitter_ms?: number | null;
+    packet_loss_percent?: number | null;
+  };
+  const name = data.wifi_ssid || data.adapter_name || "adaptador ativo";
+  const loss = data.packet_loss_percent != null ? `${Math.round(data.packet_loss_percent)}% perda` : null;
+  const jitter = data.jitter_ms != null ? `${Math.round(data.jitter_ms)} ms jitter` : null;
+  return [name, loss, jitter].filter(Boolean).join(" - ");
 }
 
 function formatGb(value: number) {

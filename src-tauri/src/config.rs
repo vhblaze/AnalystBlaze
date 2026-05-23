@@ -19,7 +19,7 @@ pub struct AgentConfig {
 impl AgentConfig {
     pub fn from_env() -> Self {
         let api_base_url = std::env::var("ANALYSTBLAZE_API_URL")
-            .unwrap_or_else(|_| "http://localhost:8000".to_string());
+            .unwrap_or_else(|_| "http://127.0.0.1:8000".to_string());
         let web_base_url = std::env::var("ANALYSTBLAZE_WEB_URL")
             .unwrap_or_else(|_| "http://localhost:3000".to_string());
         let web_login_url = build_web_login_url(&web_base_url);

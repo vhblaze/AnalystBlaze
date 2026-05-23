@@ -27,6 +27,12 @@ pub struct AuthTokens {
     pub profile: AuthProfile,
 }
 
+#[derive(Debug, Clone)]
+pub enum AuthCallback {
+    Tokens(AuthTokens),
+    PairingCode(String),
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AuthProfile {
     pub user_name: Option<String>,
@@ -84,7 +90,17 @@ impl SecureStore {
     }
 }
 
+#[cfg(test)]
 pub fn tokens_from_deep_link(raw_url: &str) -> Result<AuthTokens, String> {
+    match auth_callback_from_deep_link(raw_url)? {
+        AuthCallback::Tokens(tokens) => Ok(tokens),
+        AuthCallback::PairingCode(_) => {
+            Err("Deep link trouxe codigo de pareamento, nao um token JWT.".to_string())
+        }
+    }
+}
+
+pub fn auth_callback_from_deep_link(raw_url: &str) -> Result<AuthCallback, String> {
     let url = url::Url::parse(raw_url).map_err(|error| error.to_string())?;
     if !is_auth_deep_link(&url) {
         return Err("Deep link invalido para autenticacao do AnalystBlaze.".to_string());
@@ -94,17 +110,28 @@ pub fn tokens_from_deep_link(raw_url: &str) -> Result<AuthTokens, String> {
     let access_token = find_param(&params, "token")
         .or_else(|| find_param(&params, "access_token"))
         .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| "Deep link nao trouxe token JWT.".to_string())?;
+        .map(|token| {
+            let refresh_token =
+                find_param(&params, "refresh_token").filter(|token| !token.trim().is_empty());
+            let profile = auth_profile(&params, &token);
 
-    let refresh_token =
-        find_param(&params, "refresh_token").filter(|token| !token.trim().is_empty());
-    let profile = auth_profile(&params, &access_token);
+            AuthCallback::Tokens(AuthTokens {
+                access_token: token,
+                refresh_token,
+                profile,
+            })
+        });
 
-    Ok(AuthTokens {
-        access_token,
-        refresh_token,
-        profile,
-    })
+    if let Some(callback) = access_token {
+        return Ok(callback);
+    }
+
+    let pairing_code = find_param(&params, "code")
+        .or_else(|| find_param(&params, "pairing_code"))
+        .filter(|code| !code.trim().is_empty())
+        .ok_or_else(|| "Deep link nao trouxe token JWT nem codigo de pareamento.".to_string())?;
+
+    Ok(AuthCallback::PairingCode(pairing_code))
 }
 
 pub fn profile_from_token(access_token: &str) -> AuthProfile {
@@ -456,7 +483,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        profile_from_credentials, profile_from_value, tokens_from_deep_link, StoredCredentials,
+        auth_callback_from_deep_link, profile_from_credentials, profile_from_value,
+        tokens_from_deep_link, AuthCallback, StoredCredentials,
     };
 
     #[test]
@@ -489,6 +517,17 @@ mod tests {
             .expect("valid callback");
 
         assert_eq!(tokens.access_token, "access");
+    }
+
+    #[test]
+    fn parses_pairing_code_callback() {
+        let callback = auth_callback_from_deep_link("analystblaze://auth?code=pair_123")
+            .expect("valid callback");
+
+        match callback {
+            AuthCallback::PairingCode(code) => assert_eq!(code, "pair_123"),
+            AuthCallback::Tokens(_) => panic!("expected pairing code callback"),
+        }
     }
 
     #[test]

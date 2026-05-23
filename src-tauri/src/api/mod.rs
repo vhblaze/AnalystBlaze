@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::auth::{profile_from_value, AuthTokens};
 use crate::telemetry::collector::HardwareProfile;
 use crate::telemetry::engine::{
     AgentOptimizationEventPayload, RealtimeTelemetryPayload, TelemetryBatch,
@@ -185,6 +186,44 @@ impl ApiClient {
         Ok(None)
     }
 
+    pub async fn exchange_desktop_pairing_code(&self, code: &str) -> Result<AuthTokens, String> {
+        let code = code.trim();
+        if code.is_empty() {
+            return Err("Codigo de pareamento vazio.".to_string());
+        }
+
+        let response = self
+            .http
+            .post(self.url("/api/v1/auth/desktop-pairing/exchange"))
+            .json(&json!({ "code": code }))
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        let payload = ok_json::<Value>(response).await?;
+        let access_token = payload
+            .get("access_token")
+            .and_then(Value::as_str)
+            .filter(|token| !token.trim().is_empty())
+            .ok_or_else(|| "Pareamento nao retornou token de acesso.".to_string())?
+            .to_string();
+        let refresh_token = payload
+            .get("refresh_token")
+            .and_then(Value::as_str)
+            .filter(|token| !token.trim().is_empty())
+            .map(ToString::to_string);
+        let response_profile = profile_from_value(&payload);
+        let user_profile = payload
+            .get("user")
+            .map(profile_from_value)
+            .unwrap_or_default();
+
+        Ok(AuthTokens {
+            access_token,
+            refresh_token,
+            profile: user_profile.merge(response_profile),
+        })
+    }
+
     pub async fn post_batch(
         &self,
         access_token: &str,
@@ -252,10 +291,7 @@ impl ApiClient {
         let bundle_payload =
             serde_json::to_value(&envelope.bundle).map_err(|error| error.to_string())?;
         let expected_signature = hmac::sign_json(&bundle_payload, hw_secret)?;
-        if !constant_time_eq(
-            expected_signature.as_bytes(),
-            envelope.signature.as_bytes(),
-        ) {
+        if !constant_time_eq(expected_signature.as_bytes(), envelope.signature.as_bytes()) {
             return Err("Assinatura do policy bundle invalida.".to_string());
         }
 

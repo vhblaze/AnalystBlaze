@@ -3,14 +3,22 @@ import {
   activateAgentGameMode,
   collectAgentTelemetrySample,
   completeAuthFromDeepLink,
+  disableStartupApp,
   getAgentStatus,
   isTauriRuntime,
   logoutAgent,
   openAgentAccountSettings,
   openAgentLogin,
   registerDeepLinkHandlers,
+  restorePendingOptimizations,
+  restoreStartupApp,
+  restoreWindowsService,
   setAgentTelemetryMode,
+  setPowerPlanBalanced,
+  setPowerPlanHighPerformance,
+  setPowerPlanPowerSaver,
   startAgent,
+  stopWindowsService,
   listenToAgentSessionInvalidated,
   type AgentStatus,
   type AgentTelemetrySample,
@@ -82,12 +90,14 @@ export function useAuth() {
     };
   }, [handleDeepLink, refreshStatus]);
 
-  const runAction = useCallback(async (action: () => Promise<void>) => {
+  const runAction = useCallback(async <T,>(action: () => Promise<T>, options?: { rethrow?: boolean }): Promise<T | undefined> => {
     setBusy(true);
     try {
-      await action();
+      return await action();
     } catch (error) {
       setMessage({ key: "agent.messages.error", params: { message: String(error) } });
+      if (options?.rethrow) throw error;
+      return undefined;
     } finally {
       setBusy(false);
     }
@@ -159,6 +169,144 @@ export function useAuth() {
     });
   }, [runAction]);
 
+  const restoreOptimizations = useCallback(async () => {
+    const result = await runAction(async () => {
+      const result = await restorePendingOptimizations();
+      setMessage({
+        key: "agent.messages.restoreApplied",
+        params: {
+          restored: result.restored_snapshots,
+          failed: result.failed_snapshots,
+          entries: result.restored_entries,
+        },
+      });
+      captureTelemetry({
+        name: "optimization_restore_requested",
+        category: "agent",
+        properties: {
+          restored_snapshots: result.restored_snapshots,
+          failed_snapshots: result.failed_snapshots,
+          restored_entries: result.restored_entries,
+        },
+      });
+      return result;
+    }, { rethrow: true });
+    if (result && (result.failed_snapshots > 0 || result.failed_entries > 0)) {
+      throw new Error(result.messages.join(" ") || "Falha ao restaurar snapshots.");
+    }
+    return result;
+  }, [runAction]);
+
+  const disableStartup = useCallback(
+    async (name: string, location?: string | null) => {
+      const result = await runAction(async () => {
+        const result = await disableStartupApp(name, location);
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? "startup_app_disabled" : "startup_app_disable_failed",
+          category: "agent",
+          properties: { target: name },
+        });
+        return result;
+      }, { rethrow: true });
+      if (result && !result.success) throw new Error(result.message);
+      return result;
+    },
+    [runAction],
+  );
+
+  const restoreStartup = useCallback(
+    async (name?: string | null) => {
+      const result = await runAction(async () => {
+        const result = await restoreStartupApp(name);
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? "startup_app_restored" : "startup_app_restore_failed",
+          category: "agent",
+          properties: { target: name ?? "all" },
+        });
+        return result;
+      }, { rethrow: true });
+      if (result && !result.success) throw new Error(result.message);
+      return result;
+    },
+    [runAction],
+  );
+
+  const stopService = useCallback(
+    async (name: string) => {
+      const result = await runAction(async () => {
+        const result = await stopWindowsService(name);
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? "service_stopped" : "service_stop_failed",
+          category: "agent",
+          properties: { target: name },
+        });
+        return result;
+      }, { rethrow: true });
+      if (result && !result.success) throw new Error(result.message);
+      return result;
+    },
+    [runAction],
+  );
+
+  const restoreService = useCallback(
+    async (name?: string | null) => {
+      const result = await runAction(async () => {
+        const result = await restoreWindowsService(name);
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? "service_restored" : "service_restore_failed",
+          category: "agent",
+          properties: { target: name ?? "all" },
+        });
+        return result;
+      }, { rethrow: true });
+      if (result && !result.success) throw new Error(result.message);
+      return result;
+    },
+    [runAction],
+  );
+
+  const setPowerPlan = useCallback(
+    async (plan: "high_performance" | "balanced" | "power_saver") => {
+      const result = await runAction(async () => {
+        const result =
+          plan === "high_performance"
+            ? await setPowerPlanHighPerformance()
+            : plan === "power_saver"
+              ? await setPowerPlanPowerSaver()
+              : await setPowerPlanBalanced();
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? "power_plan_changed" : "power_plan_change_failed",
+          category: "agent",
+          properties: { plan },
+        });
+        return result;
+      }, { rethrow: true });
+      if (result && !result.success) throw new Error(result.message);
+      return result;
+    },
+    [runAction],
+  );
+
   const setTelemetryMode = useCallback(
     async (mode: "normal" | "realtime") => {
       await runAction(async () => {
@@ -213,6 +361,12 @@ export function useAuth() {
     refreshStatus,
     start,
     activateGameMode,
+    restoreOptimizations,
+    disableStartup,
+    restoreStartup,
+    stopService,
+    restoreService,
+    setPowerPlan,
     setTelemetryMode,
     collectSample,
   };
