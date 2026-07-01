@@ -9,18 +9,24 @@ use crate::audit;
 #[serde(default)]
 pub struct LocalAiPolicy {
     pub enabled: bool,
+    pub agent_mode: String,
     pub auto_game_mode: bool,
+    pub auto_pc_clean: bool,
     pub auto_restore_game_mode: bool,
     pub optimize_power_plan: bool,
     pub safe_temp_cleanup: bool,
+    pub energy_estimation_enabled: bool,
+    pub thermal_analysis_enabled: bool,
     pub manage_startup_apps: bool,
     pub manage_services: bool,
     pub reduce_background_processes: bool,
     pub allow_automatic_sensitive_actions: bool,
     pub require_confirmation_for_sensitive: bool,
     pub max_risk: String,
+    pub confirmed_game_apps: Vec<String>,
     pub game_min_confidence: f64,
     pub game_cooldown_seconds: u64,
+    pub pc_clean_cooldown_seconds: u64,
     pub cleanup_min_idle_seconds: u64,
     pub cleanup_disk_threshold_percent: f64,
     pub thermal_cpu_limit_c: f64,
@@ -33,18 +39,24 @@ impl Default for LocalAiPolicy {
     fn default() -> Self {
         Self {
             enabled: false,
+            agent_mode: "manual".to_string(),
             auto_game_mode: true,
+            auto_pc_clean: true,
             auto_restore_game_mode: true,
             optimize_power_plan: true,
             safe_temp_cleanup: true,
+            energy_estimation_enabled: true,
+            thermal_analysis_enabled: true,
             manage_startup_apps: false,
             manage_services: false,
             reduce_background_processes: false,
             allow_automatic_sensitive_actions: false,
             require_confirmation_for_sensitive: true,
             max_risk: "safe".to_string(),
+            confirmed_game_apps: Vec::new(),
             game_min_confidence: 0.74,
             game_cooldown_seconds: 15 * 60,
+            pc_clean_cooldown_seconds: 60 * 60,
             cleanup_min_idle_seconds: 15 * 60,
             cleanup_disk_threshold_percent: 90.0,
             thermal_cpu_limit_c: 88.0,
@@ -81,18 +93,24 @@ pub fn save_local_ai_policy(policy: LocalAiPolicy) -> Result<LocalAiPolicy, Stri
         "Preferencias locais do agente de IA atualizadas.",
         json!({
             "enabled": policy.enabled,
+            "agent_mode": policy.agent_mode,
             "auto_game_mode": policy.auto_game_mode,
+            "auto_pc_clean": policy.auto_pc_clean,
             "auto_restore_game_mode": policy.auto_restore_game_mode,
             "optimize_power_plan": policy.optimize_power_plan,
             "safe_temp_cleanup": policy.safe_temp_cleanup,
+            "energy_estimation_enabled": policy.energy_estimation_enabled,
+            "thermal_analysis_enabled": policy.thermal_analysis_enabled,
             "manage_startup_apps": policy.manage_startup_apps,
             "manage_services": policy.manage_services,
             "reduce_background_processes": policy.reduce_background_processes,
             "allow_automatic_sensitive_actions": policy.allow_automatic_sensitive_actions,
             "require_confirmation_for_sensitive": policy.require_confirmation_for_sensitive,
             "max_risk": policy.max_risk,
+            "confirmed_game_apps": policy.confirmed_game_apps,
             "game_min_confidence": policy.game_min_confidence,
             "game_cooldown_seconds": policy.game_cooldown_seconds,
+            "pc_clean_cooldown_seconds": policy.pc_clean_cooldown_seconds,
             "cleanup_min_idle_seconds": policy.cleanup_min_idle_seconds,
             "cleanup_disk_threshold_percent": policy.cleanup_disk_threshold_percent,
             "thermal_cpu_limit_c": policy.thermal_cpu_limit_c,
@@ -108,6 +126,14 @@ fn normalize_policy(mut policy: LocalAiPolicy) -> LocalAiPolicy {
     if !matches!(policy.max_risk.as_str(), "safe" | "sensitive") {
         policy.max_risk = "safe".to_string();
     }
+    if !matches!(policy.agent_mode.as_str(), "off" | "manual" | "automatic") {
+        policy.agent_mode = if policy.enabled {
+            "automatic".to_string()
+        } else {
+            "manual".to_string()
+        };
+    }
+    policy.enabled = policy.enabled && policy.agent_mode != "off";
 
     // Sem helper privilegiado e sem MFA local, servicos ficam apenas como recomendacao.
     if policy.max_risk == "safe" {
@@ -115,8 +141,18 @@ fn normalize_policy(mut policy: LocalAiPolicy) -> LocalAiPolicy {
     }
 
     policy.require_confirmation_for_sensitive = true;
+    policy.confirmed_game_apps = policy
+        .confirmed_game_apps
+        .into_iter()
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+        .take(64)
+        .collect();
     policy.game_min_confidence = policy.game_min_confidence.clamp(0.5, 0.98);
     policy.game_cooldown_seconds = policy.game_cooldown_seconds.clamp(60, 60 * 60 * 6);
+    policy.pc_clean_cooldown_seconds = policy
+        .pc_clean_cooldown_seconds
+        .clamp(10 * 60, 60 * 60 * 24);
     policy.cleanup_min_idle_seconds = policy.cleanup_min_idle_seconds.clamp(60, 60 * 60 * 12);
     policy.cleanup_disk_threshold_percent = policy.cleanup_disk_threshold_percent.clamp(70.0, 99.0);
     policy.thermal_cpu_limit_c = policy.thermal_cpu_limit_c.clamp(70.0, 105.0);

@@ -39,6 +39,29 @@ pub struct CommandResponse {
     pub action_payload: Option<Value>,
     pub status: String,
     pub created_at: String,
+    #[serde(default, rename = "requiresConfirmation")]
+    pub requires_confirmation: bool,
+    #[serde(default, rename = "authorizationMode")]
+    pub authorization_mode: Option<String>,
+    #[serde(default, rename = "authorizationId")]
+    pub authorization_id: Option<String>,
+    #[serde(default, rename = "contextKey")]
+    pub context_key: Option<String>,
+    #[serde(default, rename = "riskLevel")]
+    pub risk_level: Option<String>,
+    #[serde(default, rename = "confirmationPrompt")]
+    pub confirmation_prompt: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommandAcknowledgement {
+    pub command_id: Uuid,
+    pub success: bool,
+    pub details: Value,
+    pub confirmed_locally: bool,
+    pub authorization_id: Option<String>,
+    pub context_key: Option<String>,
+    pub execution_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -60,6 +83,10 @@ pub struct AgentPolicyBundle {
     pub expires_at: String,
     pub permissions: AgentPolicyPermissions,
     pub allowed_actions: Vec<String>,
+    #[serde(default)]
+    pub protected_process_names: Vec<String>,
+    #[serde(default)]
+    pub optimizer_capabilities: AgentOptimizerCapabilities,
     pub thresholds: AgentPolicyThresholds,
     pub cooldowns: AgentPolicyCooldowns,
     pub user_weights: AgentPolicyWeights,
@@ -75,6 +102,18 @@ pub struct AgentPolicyPermissions {
     pub local_inference: bool,
     pub energy_optimization: bool,
     pub process_optimization: bool,
+    #[serde(default)]
+    pub foreground_burst_mode: bool,
+    #[serde(default)]
+    pub background_quiet_mode: bool,
+    #[serde(default)]
+    pub uplink_pressure_relief: bool,
+    #[serde(default)]
+    pub adaptive_optimization: bool,
+    #[serde(default)]
+    pub wifi_latency_guard: bool,
+    #[serde(default)]
+    pub hybrid_cpu_isolation: bool,
     pub weekly_ai_telemetry_seconds: Option<i64>,
 }
 
@@ -106,6 +145,27 @@ pub struct AgentPolicyWeights {
     pub silence_notifications_priority: f64,
     pub thermal_protection_priority: f64,
     pub background_cleanup_priority: f64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentOptimizerCapabilities {
+    #[serde(default)]
+    pub foreground_burst_mode: bool,
+    #[serde(default)]
+    pub background_quiet_mode: bool,
+    #[serde(default)]
+    pub uplink_pressure_relief_stage1: bool,
+    #[serde(default)]
+    pub adaptive_optimization: bool,
+    #[serde(default)]
+    pub uplink_pressure_relief_stage2: bool,
+    #[serde(default)]
+    pub wifi_latency_guard: Option<String>,
+    #[serde(default)]
+    pub hybrid_cpu_isolation: Option<String>,
+    #[serde(default)]
+    pub admin_helper_required_for: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -315,6 +375,45 @@ impl ApiClient {
         ok_json::<RealtimeStatus>(response).await
     }
 
+    pub async fn insights(
+        &self,
+        access_token: &str,
+        hw_id: Uuid,
+        accept_language: Option<&str>,
+    ) -> Result<Value, String> {
+        let mut request = self
+            .http
+            .get(self.url(&format!("/api/v1/insights?device_id={hw_id}")))
+            .bearer_auth(access_token)
+            .header("X-AnalystBlaze-Hardware-Id", hw_id.to_string());
+        if let Some(language) = accept_language.filter(|value| !value.trim().is_empty()) {
+            request = request.header("Accept-Language", language);
+        }
+
+        let response = request.send().await.map_err(|error| error.to_string())?;
+
+        ok_json::<Value>(response).await
+    }
+
+    pub async fn post_performance_summary(
+        &self,
+        access_token: &str,
+        hw_id: Uuid,
+        summary: &Value,
+    ) -> Result<(), String> {
+        let response = self
+            .http
+            .post(self.url("/api/v1/performance/reports/summary"))
+            .bearer_auth(access_token)
+            .header("X-AnalystBlaze-Hardware-Id", hw_id.to_string())
+            .json(summary)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+
+        ok_empty(response).await
+    }
+
     pub async fn next_commands(
         &self,
         access_token: &str,
@@ -356,17 +455,22 @@ impl ApiClient {
     pub async fn acknowledge_command(
         &self,
         access_token: &str,
-        command_id: Uuid,
-        success: bool,
-        details: Value,
+        ack: CommandAcknowledgement,
     ) -> Result<(), String> {
         let response = self
             .http
-            .post(self.url(&format!("/api/v1/telemetry/commands/{command_id}/ack")))
+            .post(self.url(&format!(
+                "/api/v1/telemetry/commands/{}/ack",
+                ack.command_id
+            )))
             .bearer_auth(access_token)
             .json(&json!({
-                "success": success,
-                "details": details,
+                "success": ack.success,
+                "details": ack.details,
+                "confirmedLocally": ack.confirmed_locally,
+                "authorizationId": ack.authorization_id,
+                "contextKey": ack.context_key,
+                "executionMode": ack.execution_mode,
             }))
             .send()
             .await
@@ -429,7 +533,7 @@ async fn error_body(status: StatusCode, response: reqwest::Response) -> String {
             .get("detail")
             .and_then(Value::as_str)
             .or_else(|| value.get("message").and_then(Value::as_str))
-            .map(|message| message.to_string())
+            .map(|message| format!("API retornou status {status}: {message}"))
             .unwrap_or_else(|| format!("API retornou status {status}: {text}"))
     } else {
         format!("API retornou status {status}: {text}")

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 use sysinfo::{Components, Disks, ProcessesToUpdate, System};
 
 use super::advanced::{collect_advanced_telemetry, AdvancedTelemetry};
@@ -46,6 +47,21 @@ pub struct TelemetrySample {
     pub ram_usage_percent: f64,
     pub gpu_temperature: f64,
     pub gpu_temperature_available: bool,
+    pub gpu_temperature_source: Option<String>,
+    pub gpu_temperature_methods: Vec<CpuTemperatureMethod>,
+    pub thermal_sensors: Vec<HardwareSensorReading>,
+    pub power_sensors: Vec<HardwareSensorReading>,
+    pub fan_sensors: Vec<HardwareSensorReading>,
+    pub thermal_state: String,
+    pub thermal_trend: String,
+    pub throttling_suspected: bool,
+    pub watts: Option<f64>,
+    pub cpu_watts: Option<f64>,
+    pub gpu_watts: Option<f64>,
+    pub energy_confidence: f64,
+    pub energy_is_estimated: bool,
+    pub energy_source: String,
+    pub power_profile: String,
     pub latency_ms: f64,
     pub disk_used_gb: f64,
     pub disk_total_gb: f64,
@@ -68,11 +84,41 @@ pub struct CpuTemperatureMethod {
     pub available: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HardwareSensorReading {
+    pub source: String,
+    pub sensor_type: String,
+    pub hardware_type: Option<String>,
+    pub hardware_name: Option<String>,
+    pub identifier: Option<String>,
+    pub label: Option<String>,
+    pub value: f64,
+    pub unit: String,
+}
+
 #[derive(Debug, Clone, Default)]
 struct CpuTemperatureReading {
     value_c: Option<f64>,
     source: Option<String>,
     methods: Vec<CpuTemperatureMethod>,
+}
+
+#[derive(Debug, Clone)]
+struct EnergyEstimate {
+    watts: Option<f64>,
+    cpu_watts: Option<f64>,
+    gpu_watts: Option<f64>,
+    confidence: f64,
+    is_estimated: bool,
+    source: String,
+    profile: String,
+}
+
+#[derive(Debug, Clone)]
+struct ThermalAnalysis {
+    state: String,
+    trend: String,
+    throttling_suspected: bool,
 }
 
 pub struct TelemetryCollector {
@@ -87,8 +133,9 @@ pub struct TelemetryCollector {
     advanced_refreshed_at: i64,
     network_cache: NetworkDiagnostics,
     network_refreshed_at: i64,
-    cpu_temperature_cache: CpuTemperatureReading,
-    cpu_temperature_refreshed_at: i64,
+    hardware_sensor_cache: Vec<HardwareSensorReading>,
+    hardware_sensor_refreshed_at: i64,
+    thermal_history: VecDeque<(i64, Option<f64>, Option<f64>, f64)>,
 }
 
 impl TelemetryCollector {
@@ -105,8 +152,9 @@ impl TelemetryCollector {
             advanced_refreshed_at: 0,
             network_cache: NetworkDiagnostics::default(),
             network_refreshed_at: 0,
-            cpu_temperature_cache: CpuTemperatureReading::default(),
-            cpu_temperature_refreshed_at: 0,
+            hardware_sensor_cache: Vec::new(),
+            hardware_sensor_refreshed_at: 0,
+            thermal_history: VecDeque::with_capacity(36),
         }
     }
 
@@ -115,7 +163,7 @@ impl TelemetryCollector {
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
         self.components.refresh(false);
-        if self.collection_count == 1 || self.collection_count % 5 == 0 {
+        if self.collection_count == 1 || self.collection_count.is_multiple_of(5) {
             self.system.refresh_processes(ProcessesToUpdate::All, true);
             self.disks.refresh(false);
         }
@@ -128,7 +176,11 @@ impl TelemetryCollector {
         } else {
             0.0
         };
-        let cpu_temperature_reading = self.detect_cpu_temperature();
+        let hardware_sensors = self.hardware_sensors();
+        let thermal_sensors = limited_sensors_by_type(&hardware_sensors, "temperature", 32);
+        let power_sensors = limited_sensors_by_type(&hardware_sensors, "power", 24);
+        let fan_sensors = limited_sensors_by_type(&hardware_sensors, "fan", 16);
+        let cpu_temperature_reading = self.detect_cpu_temperature(&hardware_sensors);
         let cpu_temperature_available = cpu_temperature_reading.value_c.is_some();
         let cpu_temperature = cpu_temperature_reading.value_c.unwrap_or_default();
         let cpu_temperature_source = cpu_temperature_reading.source.clone();
@@ -137,12 +189,26 @@ impl TelemetryCollector {
             .nvidia_sensor_reader
             .as_ref()
             .and_then(NvidiaSensorReader::sample);
-        let gpu_temperature = nvidia_sensors
+        let mut gpu_temperature_methods = self.gpu_temperature_methods(&hardware_sensors);
+        if let Some(temperature) = nvidia_sensors
             .as_ref()
             .and_then(|sample| sample.temperature_c)
-            .or_else(|| self.detect_gpu_temperature());
-        let gpu_temperature_available = gpu_temperature.is_some();
-        let gpu_temperature = gpu_temperature.unwrap_or_default() as f64;
+        {
+            gpu_temperature_methods.insert(
+                0,
+                CpuTemperatureMethod {
+                    source: "nvml".to_string(),
+                    label: Some("GPU core".to_string()),
+                    value_c: Some(temperature as f64),
+                    available: true,
+                },
+            );
+        }
+        let gpu_temperature_reading = CpuTemperatureReading::from_methods(gpu_temperature_methods);
+        let gpu_temperature_available = gpu_temperature_reading.value_c.is_some();
+        let gpu_temperature = gpu_temperature_reading.value_c.unwrap_or_default();
+        let gpu_temperature_source = gpu_temperature_reading.source.clone();
+        let gpu_temperature_methods = gpu_temperature_reading.methods.clone();
         let gpu_usage = nvidia_sensors
             .as_ref()
             .and_then(|sample| sample.utilization_percent)
@@ -185,6 +251,24 @@ impl TelemetryCollector {
             .get("activity")
             .cloned()
             .unwrap_or_else(|| json!("unknown"));
+        let thermal_analysis = self.analyze_thermal(
+            cpu_temperature_available.then_some(cpu_temperature),
+            gpu_temperature_available.then_some(gpu_temperature),
+            cpu_usage,
+        );
+        let energy = estimate_energy(EnergyEstimateInput {
+            cpu_usage,
+            gpu_usage: gpu_usage.unwrap_or_default(),
+            gpu_usage_available: gpu_usage.is_some(),
+            ram_usage_percent,
+            disk_usage_percent,
+            active_processes,
+            cpu_temperature: cpu_temperature_available.then_some(cpu_temperature),
+            gpu_temperature: gpu_temperature_available.then_some(gpu_temperature),
+            advanced: &advanced,
+            local_context: &local_context,
+            hardware_sensors: &hardware_sensors,
+        });
 
         TelemetrySample {
             event_timestamp: chrono::Utc::now().timestamp(),
@@ -204,6 +288,21 @@ impl TelemetryCollector {
             ram_usage_percent,
             gpu_temperature,
             gpu_temperature_available,
+            gpu_temperature_source: gpu_temperature_source.clone(),
+            gpu_temperature_methods: gpu_temperature_methods.clone(),
+            thermal_sensors: thermal_sensors.clone(),
+            power_sensors: power_sensors.clone(),
+            fan_sensors: fan_sensors.clone(),
+            thermal_state: thermal_analysis.state.clone(),
+            thermal_trend: thermal_analysis.trend.clone(),
+            throttling_suspected: thermal_analysis.throttling_suspected,
+            watts: energy.watts,
+            cpu_watts: energy.cpu_watts,
+            gpu_watts: energy.gpu_watts,
+            energy_confidence: energy.confidence,
+            energy_is_estimated: energy.is_estimated,
+            energy_source: energy.source.clone(),
+            power_profile: energy.profile.clone(),
             latency_ms,
             disk_used_gb,
             disk_total_gb,
@@ -225,7 +324,23 @@ impl TelemetryCollector {
                 "cpu_temperature_available": cpu_temperature_available,
                 "cpu_temperature_source": cpu_temperature_source.clone(),
                 "cpu_temperature_methods": cpu_temperature_methods.clone(),
+                "gpu_temperature_source": gpu_temperature_source.clone(),
+                "gpu_temperature_methods": gpu_temperature_methods.clone(),
                 "gpu_temperature_available": gpu_temperature_available,
+                "thermal_sensors": thermal_sensors.clone(),
+                "power_sensors": power_sensors.clone(),
+                "fan_sensors": fan_sensors.clone(),
+                "thermal_state": thermal_analysis.state,
+                "thermal_trend": thermal_analysis.trend,
+                "throttling_suspected": thermal_analysis.throttling_suspected,
+                "watts": energy.watts,
+                "cpu_watts": energy.cpu_watts,
+                "gpu_watts": energy.gpu_watts,
+                "estimated_kwh": energy.watts.map(|watts| watts / 1000.0),
+                "energy_confidence": energy.confidence,
+                "is_estimated": energy.is_estimated,
+                "energy_source": energy.source.clone(),
+                "power_profile": energy.profile.clone(),
                 "ram_usage_percent": ram_usage_percent,
                 "disk_usage_percent": disk_usage_percent,
                 "advanced": advanced.clone(),
@@ -253,6 +368,36 @@ impl TelemetryCollector {
                 "gpu_devices": self.gpu_devices,
                 "gpu_temperature": gpu_temperature,
                 "gpu_temperature_available": gpu_temperature_available,
+                "gpu_temperature_source": gpu_temperature_source,
+                "gpu_temperature_methods": gpu_temperature_methods,
+                "thermal_sensors": thermal_sensors,
+                "power_sensors": power_sensors,
+                "fan_sensors": fan_sensors,
+                "thermal_state": self
+                    .thermal_history
+                    .back()
+                    .map(|_| self.last_thermal_state(cpu_temperature_available.then_some(cpu_temperature), gpu_temperature_available.then_some(gpu_temperature)))
+                    .unwrap_or_else(|| "unknown".to_string()),
+                "thermal_trend": self.thermal_trend(),
+                "throttling_suspected": self.throttling_suspected(cpu_temperature_available.then_some(cpu_temperature), gpu_temperature_available.then_some(gpu_temperature), cpu_usage),
+                "watts": energy.watts,
+                "cpu_watts": energy.cpu_watts,
+                "gpu_watts": energy.gpu_watts,
+                "estimated_kwh": energy.watts.map(|watts| watts / 1000.0),
+                "energy_confidence": energy.confidence,
+                "is_estimated": energy.is_estimated,
+                "energy_source": energy.source.clone(),
+                "power_profile": energy.profile.clone(),
+                "energy": {
+                    "watts": energy.watts,
+                    "cpuWatts": energy.cpu_watts,
+                    "gpuWatts": energy.gpu_watts,
+                    "estimatedKwh": energy.watts.map(|watts| watts / 1000.0),
+                    "confidence": energy.confidence,
+                    "isEstimated": energy.is_estimated,
+                    "source": energy.source,
+                    "profile": energy.profile,
+                },
                 "gpu_usage_available": gpu_usage.is_some(),
                 "disk_used_gb": disk_used_gb,
                 "disk_total_gb": disk_total_gb,
@@ -270,7 +415,104 @@ impl TelemetryCollector {
         }
     }
 
-    pub fn hardware_profile(&self) -> HardwareProfile {
+    fn analyze_thermal(
+        &mut self,
+        cpu_temperature: Option<f64>,
+        gpu_temperature: Option<f64>,
+        cpu_usage: f64,
+    ) -> ThermalAnalysis {
+        let now = chrono::Utc::now().timestamp();
+        self.thermal_history
+            .push_back((now, cpu_temperature, gpu_temperature, cpu_usage));
+        while self.thermal_history.len() > 36 {
+            let _ = self.thermal_history.pop_front();
+        }
+
+        ThermalAnalysis {
+            state: self.last_thermal_state(cpu_temperature, gpu_temperature),
+            trend: self.thermal_trend(),
+            throttling_suspected: self.throttling_suspected(
+                cpu_temperature,
+                gpu_temperature,
+                cpu_usage,
+            ),
+        }
+    }
+
+    fn last_thermal_state(
+        &self,
+        cpu_temperature: Option<f64>,
+        gpu_temperature: Option<f64>,
+    ) -> String {
+        let max_temp = [cpu_temperature, gpu_temperature]
+            .into_iter()
+            .flatten()
+            .fold(0.0_f64, f64::max);
+        if max_temp <= 0.0 {
+            "unknown".to_string()
+        } else if max_temp >= 92.0 || gpu_temperature.is_some_and(|value| value >= 87.0) {
+            "critical".to_string()
+        } else if max_temp >= 84.0 || gpu_temperature.is_some_and(|value| value >= 80.0) {
+            "hot".to_string()
+        } else if max_temp >= 74.0 {
+            "watch".to_string()
+        } else {
+            "normal".to_string()
+        }
+    }
+
+    fn thermal_trend(&self) -> String {
+        let Some(first) = self.thermal_history.front() else {
+            return "unknown".to_string();
+        };
+        let Some(last) = self.thermal_history.back() else {
+            return "unknown".to_string();
+        };
+        if last.0.saturating_sub(first.0) < 45 {
+            return "warming_up".to_string();
+        }
+        let first_max = [first.1, first.2]
+            .into_iter()
+            .flatten()
+            .fold(0.0_f64, f64::max);
+        let last_max = [last.1, last.2]
+            .into_iter()
+            .flatten()
+            .fold(0.0_f64, f64::max);
+        if first_max <= 0.0 || last_max <= 0.0 {
+            return "unknown".to_string();
+        }
+        let delta = last_max - first_max;
+        if delta >= 4.0 {
+            "rising".to_string()
+        } else if delta <= -4.0 {
+            "falling".to_string()
+        } else {
+            "stable".to_string()
+        }
+    }
+
+    fn throttling_suspected(
+        &self,
+        cpu_temperature: Option<f64>,
+        gpu_temperature: Option<f64>,
+        cpu_usage: f64,
+    ) -> bool {
+        let thermal_limit = cpu_temperature.is_some_and(|value| value >= 92.0)
+            || gpu_temperature.is_some_and(|value| value >= 87.0);
+        if !thermal_limit {
+            return false;
+        }
+        let recent_high_load = self
+            .thermal_history
+            .iter()
+            .rev()
+            .take(12)
+            .any(|(_, _, _, usage)| *usage >= 75.0);
+        recent_high_load && cpu_usage < 55.0
+    }
+
+    pub fn hardware_profile(&self, include_hostname: bool) -> HardwareProfile {
         let processor = self
             .system
             .cpus()
@@ -312,7 +554,8 @@ impl TelemetryCollector {
             ram_gb,
             os_version,
             system_info: Some(json!({
-                "host_name": host_name,
+                "host_name": if include_hostname { json!(host_name) } else { Value::Null },
+                "host_name_policy": if include_hostname { "included_by_local_opt_in" } else { "local_only" },
                 "collector": "sysinfo",
                 "fingerprint_version": 2,
                 "fingerprint_source": fingerprint_source,
@@ -357,49 +600,73 @@ impl TelemetryCollector {
         (used_gb, total_gb, usage_percent)
     }
 
-    fn detect_gpu_temperature(&self) -> Option<f32> {
-        self.components.iter().find_map(|component| {
-            let label = component.label().to_ascii_lowercase();
-            if is_gpu_sensor_label(&label) {
-                component.temperature().filter(|value| value.is_finite())
-            } else {
-                None
+    fn gpu_temperature_methods(
+        &self,
+        hardware_sensors: &[HardwareSensorReading],
+    ) -> Vec<CpuTemperatureMethod> {
+        let mut methods = Vec::new();
+
+        for component in self.components.iter() {
+            let raw_label = component.label().trim().to_string();
+            let label = raw_label.to_ascii_lowercase();
+            if !is_gpu_sensor_label(&label) {
+                continue;
             }
-        })
+            let value = component
+                .temperature()
+                .filter(|value| sane_temperature(*value));
+            methods.push(CpuTemperatureMethod {
+                source: "sysinfo_gpu_sensor".to_string(),
+                label: Some(raw_label).filter(|value| !value.is_empty()),
+                value_c: value.map(|value| value as f64),
+                available: value.is_some(),
+            });
+        }
+
+        methods.extend(
+            hardware_sensors
+                .iter()
+                .filter(|sensor| sensor.sensor_type == "temperature")
+                .filter(|sensor| is_gpu_sensor_text(&sensor_search_text(sensor)))
+                .map(sensor_temperature_method),
+        );
+
+        if methods.is_empty() {
+            methods.push(CpuTemperatureMethod::unavailable(
+                "gpu_temperature_sensor",
+                "sensor GPU nao exposto",
+            ));
+        }
+
+        methods
     }
 
-    fn detect_cpu_temperature(&mut self) -> CpuTemperatureReading {
+    fn detect_cpu_temperature(
+        &self,
+        hardware_sensors: &[HardwareSensorReading],
+    ) -> CpuTemperatureReading {
         let mut methods = self.sysinfo_cpu_temperature_methods();
-        if let Some(method) = methods.iter().find(|method| method.available) {
-            return CpuTemperatureReading {
-                value_c: method.value_c,
-                source: Some(method.source.clone()),
-                methods,
-            };
-        }
 
-        let now = chrono::Utc::now().timestamp();
-        if now.saturating_sub(self.cpu_temperature_refreshed_at) >= 30 {
-            let external_methods = external_cpu_temperature_methods();
-            self.cpu_temperature_cache = CpuTemperatureReading::from_methods(external_methods);
-            self.cpu_temperature_refreshed_at = now;
-        }
+        let mut external_methods = hardware_sensors
+            .iter()
+            .filter(|sensor| sensor.sensor_type == "temperature")
+            .filter(|sensor| {
+                let text = sensor_search_text(sensor);
+                is_cpu_sensor_text(&text) || sensor.source == "acpi_thermal_zone"
+            })
+            .map(sensor_temperature_method)
+            .collect::<Vec<_>>();
 
-        if self.cpu_temperature_cache.methods.is_empty() {
+        if external_methods.is_empty() {
             methods.push(CpuTemperatureMethod::unavailable(
-                "external_wmi",
-                "sensor WMI nao exposto",
+                "hardware_monitor",
+                "sensor CPU externo nao exposto",
             ));
         } else {
-            methods.extend(self.cpu_temperature_cache.methods.clone());
+            methods.append(&mut external_methods);
         }
 
-        let best = CpuTemperatureReading::from_methods(methods);
-        if best.value_c.is_some() {
-            best
-        } else {
-            self.cpu_temperature_cache.clone()
-        }
+        CpuTemperatureReading::from_methods(methods)
     }
 
     fn sysinfo_cpu_temperature_methods(&self) -> Vec<CpuTemperatureMethod> {
@@ -474,6 +741,16 @@ impl TelemetryCollector {
 
         self.network_cache.clone()
     }
+
+    fn hardware_sensors(&mut self) -> Vec<HardwareSensorReading> {
+        let now = chrono::Utc::now().timestamp();
+        if now.saturating_sub(self.hardware_sensor_refreshed_at) >= 30 {
+            self.hardware_sensor_cache = external_hardware_sensors();
+            self.hardware_sensor_refreshed_at = now;
+        }
+
+        self.hardware_sensor_cache.clone()
+    }
 }
 
 impl Default for TelemetryCollector {
@@ -507,6 +784,178 @@ impl CpuTemperatureMethod {
             available: false,
         }
     }
+}
+
+struct EnergyEstimateInput<'a> {
+    cpu_usage: f64,
+    gpu_usage: f64,
+    gpu_usage_available: bool,
+    ram_usage_percent: f64,
+    disk_usage_percent: f64,
+    active_processes: usize,
+    cpu_temperature: Option<f64>,
+    gpu_temperature: Option<f64>,
+    advanced: &'a AdvancedTelemetry,
+    local_context: &'a Value,
+    hardware_sensors: &'a [HardwareSensorReading],
+}
+
+fn estimate_energy(input: EnergyEstimateInput<'_>) -> EnergyEstimate {
+    let activity = input
+        .local_context
+        .get("activity")
+        .and_then(Value::as_str)
+        .unwrap_or("general");
+    let on_battery = input
+        .advanced
+        .battery_status
+        .as_deref()
+        .is_some_and(|status| {
+            let normalized = status.to_ascii_lowercase();
+            normalized.contains("discharging") || normalized.contains("descarregando")
+        });
+    let has_battery = input.advanced.battery_percent.is_some();
+    let profile = if activity == "gaming" {
+        "gaming"
+    } else if on_battery {
+        "battery"
+    } else if input.cpu_usage < 12.0 && input.gpu_usage < 8.0 {
+        "idle"
+    } else if input.cpu_usage >= 55.0 || input.gpu_usage >= 45.0 {
+        "performance"
+    } else {
+        "balanced"
+    };
+
+    let base_watts = if on_battery {
+        14.0
+    } else if has_battery {
+        22.0
+    } else {
+        42.0
+    };
+    let estimated_cpu_watts =
+        (8.0 + input.cpu_usage * if on_battery { 0.42 } else { 0.70 }).clamp(6.0, 105.0);
+    let estimated_gpu_watts = if input.gpu_usage_available {
+        Some(
+            (if activity == "gaming" { 18.0 } else { 5.0 } + input.gpu_usage * 1.45)
+                .clamp(0.0, 240.0),
+        )
+    } else {
+        None
+    };
+    let sensor_cpu_watts = best_power_sensor(input.hardware_sensors, PowerSensorTarget::Cpu);
+    let sensor_gpu_watts = best_power_sensor(input.hardware_sensors, PowerSensorTarget::Gpu);
+    let sensor_system_watts = best_power_sensor(input.hardware_sensors, PowerSensorTarget::System);
+    let cpu_watts = sensor_cpu_watts.unwrap_or(estimated_cpu_watts);
+    let gpu_watts = sensor_gpu_watts.or(estimated_gpu_watts);
+    let memory_watts = (input.ram_usage_percent * 0.12).clamp(0.0, 14.0);
+    let disk_watts = (input.disk_usage_percent * 0.04).clamp(1.0, 8.0);
+    let process_watts = ((input.active_processes as f64 / 80.0).clamp(0.0, 6.0)).round();
+    let thermal_penalty = input
+        .cpu_temperature
+        .map(|value| ((value - 82.0).max(0.0) * 0.5).clamp(0.0, 12.0))
+        .unwrap_or_default()
+        + input
+            .gpu_temperature
+            .map(|value| ((value - 78.0).max(0.0) * 0.45).clamp(0.0, 12.0))
+            .unwrap_or_default();
+    let activity_extra = match profile {
+        "gaming" => 22.0,
+        "performance" => 10.0,
+        "battery" => -4.0,
+        "idle" => -6.0,
+        _ => 0.0,
+    };
+    let mut watts = sensor_system_watts.unwrap_or_else(|| {
+        base_watts
+            + cpu_watts
+            + gpu_watts.unwrap_or_default()
+            + memory_watts
+            + disk_watts
+            + process_watts
+            + thermal_penalty
+            + activity_extra
+    });
+    watts = if on_battery {
+        watts.clamp(12.0, 180.0)
+    } else {
+        watts.clamp(28.0, 520.0)
+    };
+
+    let sensor_component_count =
+        sensor_cpu_watts.is_some() as u8 + sensor_gpu_watts.is_some() as u8;
+    let confidence = if sensor_system_watts.is_some() {
+        0.90
+    } else if sensor_component_count == 2 {
+        0.84
+    } else if sensor_component_count == 1 {
+        0.76
+    } else if input.gpu_usage_available
+        && (input.cpu_temperature.is_some() || input.gpu_temperature.is_some())
+    {
+        0.68
+    } else if input.gpu_usage_available {
+        0.58
+    } else {
+        0.46
+    };
+    let source = if sensor_system_watts.is_some() {
+        "system_power_sensor"
+    } else if sensor_component_count > 0 {
+        "component_power_sensors"
+    } else {
+        "hybrid_estimate"
+    };
+
+    EnergyEstimate {
+        watts: Some(round1(watts)),
+        cpu_watts: Some(round1(cpu_watts)),
+        gpu_watts: gpu_watts.map(round1),
+        confidence,
+        is_estimated: sensor_system_watts.is_none(),
+        source: source.to_string(),
+        profile: profile.to_string(),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PowerSensorTarget {
+    Cpu,
+    Gpu,
+    System,
+}
+
+fn best_power_sensor(sensors: &[HardwareSensorReading], target: PowerSensorTarget) -> Option<f64> {
+    sensors
+        .iter()
+        .filter(|sensor| sensor.sensor_type == "power")
+        .filter(|sensor| {
+            let text = sensor_search_text(sensor);
+            match target {
+                PowerSensorTarget::Cpu => {
+                    is_cpu_sensor_text(&text)
+                        || text.contains("package power")
+                        || text.contains("ppt")
+                }
+                PowerSensorTarget::Gpu => {
+                    is_gpu_sensor_text(&text)
+                        || text.contains("total board power")
+                        || text.contains("graphics power")
+                }
+                PowerSensorTarget::System => {
+                    !is_cpu_sensor_text(&text)
+                        && !is_gpu_sensor_text(&text)
+                        && (text.contains("system power")
+                            || text.contains("total system")
+                            || text.contains("wall power")
+                            || text.contains("battery discharge"))
+                }
+            }
+        })
+        .map(|sensor| sensor.value)
+        .filter(|value| sane_sensor_value("power", *value) && *value > 0.1)
+        .max_by(f64::total_cmp)
 }
 
 fn stable_hw_hash(
@@ -570,6 +1019,10 @@ fn clamp_percent(value: f64) -> f64 {
     value.clamp(0.0, 100.0)
 }
 
+fn round1(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
+}
+
 fn sane_temperature(value: f32) -> bool {
     value.is_finite() && (1.0..=125.0).contains(&value)
 }
@@ -579,18 +1032,51 @@ fn sane_temperature_f64(value: f64) -> bool {
 }
 
 #[cfg(windows)]
-fn external_cpu_temperature_methods() -> Vec<CpuTemperatureMethod> {
+fn external_hardware_sensors() -> Vec<HardwareSensorReading> {
     let script = r#"
 $ErrorActionPreference = 'SilentlyContinue'
-$lhm = Get-CimInstance -Namespace root/LibreHardwareMonitor -ClassName Sensor |
-  Where-Object { $_.SensorType -eq 'Temperature' -and ($_.Name -match 'CPU|Package|Core|Tctl|Tdie') } |
-  Select-Object @{Name='source';Expression={'libre_hardware_monitor'}}, @{Name='label';Expression={$_.Name}}, @{Name='value_c';Expression={[double]$_.Value}}
-$ohm = Get-CimInstance -Namespace root/OpenHardwareMonitor -ClassName Sensor |
-  Where-Object { $_.SensorType -eq 'Temperature' -and ($_.Name -match 'CPU|Package|Core|Tctl|Tdie') } |
-  Select-Object @{Name='source';Expression={'open_hardware_monitor'}}, @{Name='label';Expression={$_.Name}}, @{Name='value_c';Expression={[double]$_.Value}}
+function Unit-ForSensorType([string]$type) {
+  switch -Regex ($type) {
+    'Temperature' { 'C'; break }
+    'Power' { 'W'; break }
+    'Fan' { 'RPM'; break }
+    'Voltage' { 'V'; break }
+    'Load' { '%'; break }
+    default { '' }
+  }
+}
+function Read-MonitorSensors([string]$namespace, [string]$source) {
+  Get-CimInstance -Namespace $namespace -ClassName Sensor -ErrorAction SilentlyContinue |
+    Where-Object { $_.Value -ne $null -and $_.SensorType -in @('Temperature','Power','Fan','Voltage','Load') } |
+    ForEach-Object {
+      [pscustomobject]@{
+        source = $source
+        sensor_type = [string]$_.SensorType
+        hardware_type = [string]$_.HardwareType
+        hardware_name = [string]$_.HardwareName
+        identifier = [string]$_.Identifier
+        label = [string]$_.Name
+        value = [double]$_.Value
+        unit = Unit-ForSensorType ([string]$_.SensorType)
+      }
+    }
+}
+$lhm = Read-MonitorSensors 'root/LibreHardwareMonitor' 'libre_hardware_monitor'
+$ohm = Read-MonitorSensors 'root/OpenHardwareMonitor' 'open_hardware_monitor'
 $acpi = Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature |
-  Select-Object @{Name='source';Expression={'acpi_thermal_zone'}}, @{Name='label';Expression={$_.InstanceName}}, @{Name='value_c';Expression={([double]$_.CurrentTemperature / 10) - 273.15}}
-@($lhm + $ohm + $acpi) | Where-Object { $_.value_c -gt 0 -and $_.value_c -lt 126 } | ConvertTo-Json -Compress
+  ForEach-Object {
+    [pscustomobject]@{
+      source = 'acpi_thermal_zone'
+      sensor_type = 'Temperature'
+      hardware_type = 'ACPI'
+      hardware_name = [string]$_.InstanceName
+      identifier = [string]$_.InstanceName
+      label = [string]$_.InstanceName
+      value = ([double]$_.CurrentTemperature / 10) - 273.15
+      unit = 'C'
+    }
+  }
+@($lhm + $ohm + $acpi) | ConvertTo-Json -Compress
 "#;
 
     let output = std::process::Command::new("powershell")
@@ -605,57 +1091,45 @@ $acpi = Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTempera
         .output();
 
     let Ok(output) = output else {
-        return vec![CpuTemperatureMethod::unavailable(
-            "external_wmi",
-            "PowerShell/CIM indisponivel",
-        )];
+        return Vec::new();
     };
 
     if !output.status.success() {
-        return vec![CpuTemperatureMethod::unavailable(
-            "external_wmi",
-            "fontes WMI indisponiveis",
-        )];
+        return Vec::new();
     }
 
-    parse_external_temperature_methods(&String::from_utf8_lossy(&output.stdout))
+    parse_external_hardware_sensors(&String::from_utf8_lossy(&output.stdout))
 }
 
 #[cfg(not(windows))]
-fn external_cpu_temperature_methods() -> Vec<CpuTemperatureMethod> {
-    vec![CpuTemperatureMethod::unavailable(
-        "external_wmi",
-        "fonte externa disponivel apenas no Windows",
-    )]
+fn external_hardware_sensors() -> Vec<HardwareSensorReading> {
+    Vec::new()
 }
 
 #[derive(Debug, Deserialize)]
-struct ExternalTemperatureMethod {
+struct ExternalHardwareSensor {
     source: Option<String>,
+    sensor_type: Option<String>,
+    hardware_type: Option<String>,
+    hardware_name: Option<String>,
+    identifier: Option<String>,
     label: Option<String>,
-    value_c: Option<f64>,
+    value: Option<f64>,
+    unit: Option<String>,
 }
 
-fn parse_external_temperature_methods(raw: &str) -> Vec<CpuTemperatureMethod> {
+fn parse_external_hardware_sensors(raw: &str) -> Vec<HardwareSensorReading> {
     let raw = raw.trim();
     if raw.is_empty() {
-        return vec![CpuTemperatureMethod::unavailable(
-            "external_wmi",
-            "nenhum sensor externo encontrado",
-        )];
+        return Vec::new();
     }
 
     let value: serde_json::Value = match serde_json::from_str(raw) {
         Ok(value) => value,
-        Err(_) => {
-            return vec![CpuTemperatureMethod::unavailable(
-                "external_wmi",
-                "resposta WMI invalida",
-            )]
-        }
+        Err(_) => return Vec::new(),
     };
 
-    let entries: Vec<ExternalTemperatureMethod> = if value.is_array() {
+    let entries: Vec<ExternalHardwareSensor> = if value.is_array() {
         serde_json::from_value(value).unwrap_or_default()
     } else if value.is_object() {
         serde_json::from_value(value)
@@ -665,27 +1139,125 @@ fn parse_external_temperature_methods(raw: &str) -> Vec<CpuTemperatureMethod> {
         Vec::new()
     };
 
-    let mut methods = entries
+    entries
         .into_iter()
         .filter_map(|entry| {
-            let value_c = entry.value_c.filter(|value| sane_temperature_f64(*value))?;
-            Some(CpuTemperatureMethod {
-                source: entry.source.unwrap_or_else(|| "external_wmi".to_string()),
-                label: entry.label.filter(|label| !label.trim().is_empty()),
-                value_c: Some(value_c),
-                available: true,
+            let sensor_type = normalize_sensor_type(entry.sensor_type.as_deref()?);
+            let value = entry
+                .value
+                .filter(|value| sane_sensor_value(&sensor_type, *value))?;
+            Some(HardwareSensorReading {
+                source: clean_sensor_string(entry.source.as_deref())
+                    .unwrap_or_else(|| "external_hardware_monitor".to_string()),
+                sensor_type: sensor_type.clone(),
+                hardware_type: clean_sensor_string(entry.hardware_type.as_deref()),
+                hardware_name: clean_sensor_string(entry.hardware_name.as_deref()),
+                identifier: clean_sensor_string(entry.identifier.as_deref()),
+                label: clean_sensor_string(entry.label.as_deref()),
+                value: round_sensor_value(value),
+                unit: clean_sensor_string(entry.unit.as_deref())
+                    .unwrap_or_else(|| default_sensor_unit(&sensor_type).to_string()),
             })
         })
-        .collect::<Vec<_>>();
+        .take(96)
+        .collect()
+}
 
-    if methods.is_empty() {
-        methods.push(CpuTemperatureMethod::unavailable(
-            "external_wmi",
-            "nenhum sensor externo valido",
-        ));
+fn limited_sensors_by_type(
+    sensors: &[HardwareSensorReading],
+    sensor_type: &str,
+    limit: usize,
+) -> Vec<HardwareSensorReading> {
+    sensors
+        .iter()
+        .filter(|sensor| sensor.sensor_type == sensor_type)
+        .take(limit)
+        .cloned()
+        .collect()
+}
+
+fn sensor_temperature_method(sensor: &HardwareSensorReading) -> CpuTemperatureMethod {
+    CpuTemperatureMethod {
+        source: sensor.source.clone(),
+        label: sensor
+            .label
+            .clone()
+            .or_else(|| sensor.hardware_name.clone())
+            .or_else(|| sensor.identifier.clone()),
+        value_c: Some(sensor.value).filter(|value| sane_temperature_f64(*value)),
+        available: sane_temperature_f64(sensor.value),
+    }
+}
+
+fn normalize_sensor_type(value: &str) -> String {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "temperature" | "temperatura" => "temperature",
+        "power" | "potencia" | "watt" | "watts" => "power",
+        "fan" | "fans" | "rpm" => "fan",
+        "voltage" | "volt" | "volts" => "voltage",
+        "load" | "usage" | "utilization" => "load",
+        _ => "unknown",
+    }
+    .to_string()
+}
+
+fn default_sensor_unit(sensor_type: &str) -> &'static str {
+    match sensor_type {
+        "temperature" => "C",
+        "power" => "W",
+        "fan" => "RPM",
+        "voltage" => "V",
+        "load" => "%",
+        _ => "",
+    }
+}
+
+fn sane_sensor_value(sensor_type: &str, value: f64) -> bool {
+    if !value.is_finite() {
+        return false;
     }
 
-    methods
+    match sensor_type {
+        "temperature" => sane_temperature_f64(value),
+        "power" => (0.0..=1500.0).contains(&value),
+        "fan" => (0.0..=20_000.0).contains(&value),
+        "voltage" => (0.0..=64.0).contains(&value),
+        "load" => (0.0..=100.0).contains(&value),
+        _ => false,
+    }
+}
+
+fn round_sensor_value(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
+fn clean_sensor_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.chars().take(160).collect::<String>())
+}
+
+fn sensor_search_text(sensor: &HardwareSensorReading) -> String {
+    [
+        sensor.hardware_type.as_deref(),
+        sensor.hardware_name.as_deref(),
+        sensor.identifier.as_deref(),
+        sensor.label.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_ascii_lowercase()
+}
+
+fn is_cpu_sensor_text(text: &str) -> bool {
+    is_cpu_sensor_label(text) && !is_gpu_sensor_label(text)
+}
+
+fn is_gpu_sensor_text(text: &str) -> bool {
+    is_gpu_sensor_label(text)
 }
 
 fn is_gpu_sensor_label(label: &str) -> bool {
@@ -1345,4 +1917,78 @@ fn idle_seconds() -> u64 {
 #[cfg(not(windows))]
 fn idle_seconds() -> u64 {
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_external_hardware_monitor_sensors() {
+        let raw = r#"[
+            {
+                "source":"libre_hardware_monitor",
+                "sensor_type":"Temperature",
+                "hardware_type":"Cpu",
+                "hardware_name":"AMD Ryzen",
+                "identifier":"/amdcpu/0/temperature/2",
+                "label":"CPU Package",
+                "value":64.25,
+                "unit":"C"
+            },
+            {
+                "source":"libre_hardware_monitor",
+                "sensor_type":"Power",
+                "hardware_type":"GpuNvidia",
+                "hardware_name":"NVIDIA GeForce",
+                "identifier":"/gpu-nvidia/0/power/0",
+                "label":"GPU Package",
+                "value":142.8,
+                "unit":"W"
+            }
+        ]"#;
+
+        let sensors = parse_external_hardware_sensors(raw);
+
+        assert_eq!(sensors.len(), 2);
+        assert_eq!(sensors[0].sensor_type, "temperature");
+        assert_eq!(sensors[0].unit, "C");
+        assert_eq!(sensors[1].sensor_type, "power");
+        assert_eq!(sensors[1].unit, "W");
+    }
+
+    #[test]
+    fn selects_component_power_sensors() {
+        let sensors = vec![
+            HardwareSensorReading {
+                source: "libre_hardware_monitor".to_string(),
+                sensor_type: "power".to_string(),
+                hardware_type: Some("Cpu".to_string()),
+                hardware_name: Some("AMD Ryzen".to_string()),
+                identifier: None,
+                label: Some("CPU Package".to_string()),
+                value: 72.0,
+                unit: "W".to_string(),
+            },
+            HardwareSensorReading {
+                source: "libre_hardware_monitor".to_string(),
+                sensor_type: "power".to_string(),
+                hardware_type: Some("GpuNvidia".to_string()),
+                hardware_name: Some("NVIDIA GeForce".to_string()),
+                identifier: None,
+                label: Some("GPU Total Board Power".to_string()),
+                value: 156.0,
+                unit: "W".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            best_power_sensor(&sensors, PowerSensorTarget::Cpu),
+            Some(72.0)
+        );
+        assert_eq!(
+            best_power_sensor(&sensors, PowerSensorTarget::Gpu),
+            Some(156.0)
+        );
+    }
 }

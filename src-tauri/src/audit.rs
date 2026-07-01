@@ -56,7 +56,7 @@ pub fn recent_events(limit: usize) -> Result<Vec<AuditEvent>, String> {
         .filter_map(|line| serde_json::from_str::<AuditEvent>(&line).ok())
         .collect::<Vec<_>>();
 
-    events.sort_by(|left, right| right.timestamp.cmp(&left.timestamp));
+    events.sort_by_key(|event| std::cmp::Reverse(event.timestamp));
     events.truncate(limit.clamp(1, 250));
     Ok(events)
 }

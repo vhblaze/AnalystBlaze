@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -8,6 +8,7 @@ import {
   HardDrive,
   MemoryStick,
   MonitorPlay,
+  PlugZap,
   ShieldCheck,
   Sparkles,
   Thermometer,
@@ -16,7 +17,13 @@ import {
 } from "lucide-react";
 import { TiltCard } from "../TiltCard";
 import type { User } from "@/hooks/useAuth";
-import type { AgentStatus, AgentTelemetrySnapshot } from "@/services/tauri/agent";
+import {
+  getActiveGameModeSession,
+  isTauriRuntime,
+  type AgentStatus,
+  type AgentTelemetrySnapshot,
+  type GameModeSession,
+} from "@/services/tauri/agent";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useI18n } from "@/i18n";
 
@@ -28,6 +35,7 @@ export function Dashboard({
   telemetry,
   onStartAgent,
   onActivateGameMode,
+  onRestoreGameMode,
   busy,
 }: {
   user: User | null;
@@ -35,13 +43,17 @@ export function Dashboard({
   telemetry: AgentTelemetrySnapshot | null;
   onStartAgent: () => Promise<void>;
   onActivateGameMode: () => Promise<void>;
+  onRestoreGameMode: () => Promise<void>;
   busy: boolean;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("dashboard");
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
+  const [activeGameModeSession, setActiveGameModeSession] = useState<GameModeSession | null>(null);
   const isAuthenticated = Boolean(status?.authenticated);
   const isReady = Boolean(status?.authenticated && status.registered);
+  const paidGameModeAllowed = Boolean(status?.authenticated && status.registered && status.has_paid_plan);
+  const gameModeActive = paidGameModeAllowed && Boolean(activeGameModeSession);
   const isLive = Boolean(isReady && telemetry);
   const lastCheckSeconds = telemetry
     ? Math.max(0, Math.round(Date.now() / 1000 - telemetry.event_timestamp))
@@ -58,6 +70,36 @@ export function Dashboard({
     if (!telemetry) return;
     setCpuHistory((current) => [...current.slice(-(HISTORY_LEN - 1)), telemetry.cpu_usage]);
   }, [telemetry]);
+
+  const refreshGameModeSession = useCallback(async () => {
+    if (!paidGameModeAllowed || !isTauriRuntime()) {
+      setActiveGameModeSession(null);
+      return;
+    }
+    try {
+      setActiveGameModeSession(await getActiveGameModeSession());
+    } catch {
+      setActiveGameModeSession(null);
+    }
+  }, [paidGameModeAllowed]);
+
+  useEffect(() => {
+    void refreshGameModeSession();
+  }, [refreshGameModeSession]);
+
+  const handleGameModeClick = async () => {
+    track("game_mode_clicked");
+    if (!isReady || !paidGameModeAllowed || gameModeActive) return;
+    await onActivateGameMode();
+    await refreshGameModeSession();
+  };
+
+  const handleGameModeDeactivate = async () => {
+    track("game_mode_deactivate_clicked");
+    await onRestoreGameMode();
+    setActiveGameModeSession(null);
+    await refreshGameModeSession();
+  };
 
   const healthLabel = useMemo(() => healthLevelLabel(telemetry?.health_level, t), [telemetry?.health_level, t]);
 
@@ -140,22 +182,43 @@ export function Dashboard({
           </div>
 
           <div className="relative flex items-center justify-between gap-4">
-            <button
-              disabled={busy || !isReady}
-              onClick={() => {
-                track("game_mode_clicked");
-                if (isReady) {
-                  void onActivateGameMode();
-                } else {
-                  void onStartAgent();
-                }
-              }}
-              className="group inline-flex items-center gap-2.5 rounded-xl border border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 px-6 py-3 text-sm font-semibold text-cyan-100 transition-all duration-300 hover:border-cyan-300/60 hover:from-cyan-500/30 hover:shadow-[0_0_30px_-5px_hsl(187_100%_55%/0.7)] disabled:opacity-50"
-            >
-              <Gamepad2 className="h-4 w-4 transition-transform group-hover:-rotate-12" />
-              {isReady ? t("dashboard.gameMode") : t("dashboard.startAgent")}
-              <ArrowUpRight className="h-4 w-4 opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
-            </button>
+            <div className="flex flex-col items-start gap-1">
+              <button
+                disabled={busy || !isReady || !paidGameModeAllowed || gameModeActive}
+                onClick={() => {
+                  if (!isReady) {
+                    void onStartAgent();
+                    return;
+                  }
+                  void handleGameModeClick();
+                }}
+                className={`group inline-flex items-center gap-2.5 rounded-xl border px-6 py-3 text-sm font-semibold transition-all duration-300 disabled:opacity-70 ${
+                  gameModeActive
+                    ? "border-emerald-300/50 bg-emerald-400/15 text-emerald-50"
+                    : "border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 text-cyan-100 hover:border-cyan-300/60 hover:from-cyan-500/30 hover:shadow-[0_0_30px_-5px_hsl(187_100%_55%/0.7)]"
+                }`}
+              >
+                {gameModeActive ? (
+                  <ShieldCheck className="h-4 w-4" />
+                ) : (
+                  <Gamepad2 className="h-4 w-4 transition-transform group-hover:-rotate-12" />
+                )}
+                {isReady ? (gameModeActive ? "Modo Gamer Ativado" : paidGameModeAllowed ? t("dashboard.gameMode") : "Modo Gamer pago") : t("dashboard.startAgent")}
+                {!gameModeActive && <ArrowUpRight className="h-4 w-4 opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />}
+              </button>
+              {gameModeActive && (
+                <button
+                  disabled={busy}
+                  onClick={() => void handleGameModeDeactivate()}
+                  className="text-xs font-medium text-amber-200 transition hover:text-amber-100 disabled:opacity-50"
+                >
+                  Desativar
+                </button>
+              )}
+              {isReady && !paidGameModeAllowed && (
+                <span className="text-xs text-slate-500">Disponivel nos planos pagos</span>
+              )}
+            </div>
             <Sparkline data={cpuHistory} />
           </div>
         </div>
@@ -164,8 +227,9 @@ export function Dashboard({
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
         <MetricCard icon={MemoryStick} label={t("dashboard.ramLoad")} value={telemetry ? formatPercent(telemetry.ram_usage_percent) : "--"} detail={telemetry ? `${formatMb(telemetry.ram_usage_mb)} / ${formatMb(telemetry.ram_total_mb ?? 0)}` : t("common.unavailable")} />
         <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={telemetry?.gpu_name || "--"} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} ${t("dashboard.gpuLoad")}` : t("dashboard.gpuLoadUnavailable")} />
-        <MetricCard icon={Thermometer} label={t("dashboard.cpuTemp")} value={formatTemp(telemetry?.cpu_temperature, telemetry?.cpu_temperature_available)} detail={t("dashboard.cpuTempDetail")} />
-        <MetricCard icon={Thermometer} label={t("dashboard.gpuTemp")} value={formatTemp(telemetry?.gpu_temperature, telemetry?.gpu_temperature_available)} detail={telemetry ? `${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")}` : t("common.unavailable")} />
+        <MetricCard icon={Thermometer} label={t("dashboard.cpuTemp")} value={formatTemp(telemetry?.cpu_temperature, telemetry?.cpu_temperature_available)} detail={telemetry ? thermalDetail(telemetry) : t("common.unavailable")} />
+        <MetricCard icon={Thermometer} label={t("dashboard.gpuTemp")} value={formatTemp(telemetry?.gpu_temperature, telemetry?.gpu_temperature_available)} detail={telemetry ? `${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")} / ${thermalStateLabel(telemetry.thermal_state)}` : t("common.unavailable")} />
+        <MetricCard icon={PlugZap} label="Energia" value={formatWatts(telemetry?.watts)} detail={telemetry ? energyDetail(telemetry) : t("common.unavailable")} />
         <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)}` : t("common.unavailable")} />
         <MetricCard icon={Wifi} label={t("dashboard.latency")} value={telemetry ? formatLatency(telemetry.latency_ms) : "--"} detail={telemetry ? networkDetail(telemetry.network) : t("common.unavailable")} />
         <MetricCard icon={Timer} label={t("dashboard.idleState")} value={telemetry ? formatDuration(telemetry.idle_seconds ?? 0) : "--"} detail={telemetry?.active_window || t("dashboard.noActiveWindow")} />
@@ -295,6 +359,54 @@ function formatMb(value: number) {
 function formatTemp(value: number | undefined, available: boolean | undefined) {
   if (!available || typeof value !== "number" || !Number.isFinite(value)) return "--";
   return `${Math.round(value)} C`;
+}
+
+function formatWatts(value?: number | null) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "--";
+  return `${Math.round(value)} W`;
+}
+
+function thermalDetail(telemetry: AgentTelemetrySnapshot) {
+  const source = telemetry.cpu_temperature_source ? temperatureSourceLabel(telemetry.cpu_temperature_source) : "sensor indisponivel";
+  const sensors = telemetry.thermal_sensors?.length ? `${telemetry.thermal_sensors.length} sensores` : source;
+  return `${thermalStateLabel(telemetry.thermal_state)} / ${trendLabel(telemetry.thermal_trend)} / ${sensors}`;
+}
+
+function energyDetail(telemetry: AgentTelemetrySnapshot) {
+  const confidence = typeof telemetry.energy_confidence === "number"
+    ? `${Math.round(telemetry.energy_confidence * 100)}%`
+    : "--";
+  const source = telemetry.is_estimated ? "estimado" : "sensor";
+  const power = telemetry.power_sensors?.length ? ` / ${telemetry.power_sensors.length} sensores W` : "";
+  return `${source}${power} / ${confidence} confianca / ${telemetry.power_profile ?? "perfil atual"}`;
+}
+
+function thermalStateLabel(value?: string) {
+  if (value === "critical") return "critico";
+  if (value === "hot") return "quente";
+  if (value === "watch") return "atencao";
+  if (value === "normal") return "normal";
+  return "sem leitura";
+}
+
+function trendLabel(value?: string) {
+  if (value === "rising") return "subindo";
+  if (value === "falling") return "caindo";
+  if (value === "stable") return "estavel";
+  if (value === "warming_up") return "aquecendo";
+  return "tendencia indisponivel";
+}
+
+function temperatureSourceLabel(source: string) {
+  if (source === "nvml") return "NVML";
+  if (source === "libre_hardware_monitor") return "LibreHardwareMonitor";
+  if (source === "open_hardware_monitor") return "OpenHardwareMonitor";
+  if (source === "acpi_thermal_zone") return "ACPI";
+  if (source === "sysinfo_cpu_sensor") return "sysinfo";
+  if (source === "sysinfo_gpu_sensor") return "sysinfo GPU";
+  if (source === "sysinfo_component_max") return "sysinfo max";
+  if (source === "hardware_monitor") return "monitor";
+  return source;
 }
 
 function formatDuration(seconds: number) {

@@ -34,7 +34,7 @@ struct PowerPlanTarget {
 
 const HIGH_PERFORMANCE: PowerPlanTarget = PowerPlanTarget {
     action_name: "SET_POWER_PLAN_HIGH_PERFORMANCE",
-    alias: "SCHEME_MAX",
+    alias: "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
     label: "high_performance",
     success_message: "Plano de energia de alto desempenho ativado.",
     failure_message: "Nao foi possivel ativar o plano de alto desempenho.",
@@ -42,7 +42,7 @@ const HIGH_PERFORMANCE: PowerPlanTarget = PowerPlanTarget {
 
 const BALANCED: PowerPlanTarget = PowerPlanTarget {
     action_name: "SET_POWER_PLAN_BALANCED",
-    alias: "SCHEME_BALANCED",
+    alias: "381b4222-f694-41f0-9685-ff5bb260df2e",
     label: "balanced",
     success_message: "Plano de energia equilibrado ativado.",
     failure_message: "Nao foi possivel ativar o plano equilibrado.",
@@ -50,7 +50,7 @@ const BALANCED: PowerPlanTarget = PowerPlanTarget {
 
 const POWER_SAVER: PowerPlanTarget = PowerPlanTarget {
     action_name: "SET_POWER_PLAN_POWER_SAVER",
-    alias: "SCHEME_MIN",
+    alias: "a1841308-3541-4fab-bc81-f71556f20b4a",
     label: "power_saver",
     success_message: "Plano de economia de energia ativado.",
     failure_message: "Nao foi possivel ativar o plano de economia de energia.",
@@ -141,12 +141,38 @@ fn set_power_plan_with_snapshot(
             }),
         };
     }
+    let active_after = snapshot::active_power_plan();
+    let verified = active_after
+        .as_ref()
+        .ok()
+        .and_then(|plan| scheme_alias(&plan.scheme_guid, plan.scheme_name.as_deref()))
+        .as_deref()
+        == Some(target.label);
+    if !verified {
+        return ExecutionResult {
+            success: false,
+            message: target.failure_message.to_string(),
+            details: json!({
+                "payload": payload,
+                "implemented": true,
+                "target_plan": target.alias,
+                "target_label": target.label,
+                "snapshot_available": previous_plan.is_ok(),
+                "active_after": active_after.ok().map(|plan| json!({
+                    "scheme_guid": plan.scheme_guid,
+                    "scheme_name": plan.scheme_name,
+                })),
+                "error": "power_plan_verification_failed",
+            }),
+        };
+    }
 
     let mut details = json!({
         "payload": payload,
         "implemented": true,
         "target_plan": target.alias,
         "target_label": target.label,
+        "verified": true,
         "requires_admin": false,
         "snapshot": null,
     });

@@ -1,11 +1,11 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use super::protected_apps;
 
 const MAX_TARGET_LEN: usize = 260;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandSource {
     ManualUser,
@@ -122,11 +122,26 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_privileged_helper: false,
         }),
         "APPLY_GAME_MODE"
+        | "APPLY_ADAPTIVE_OPTIMIZATION"
+        | "APPLY_BACKGROUND_QUIET_MODE"
+        | "APPLY_PC_CLEAN_FAST_BACKGROUND_PRIORITIES"
+        | "APPLY_PC_CLEAN_FAST_PROFILE"
+        | "APPLY_FOREGROUND_BURST_MODE"
+        | "APPLY_CLEANUP_CATEGORY"
+        | "APPLY_VISUAL_PERFORMANCE_MODE"
+        | "APPLY_UPLINK_PRESSURE_RELIEF_STAGE1"
+        | "DELAY_STARTUP_APP"
         | "DISABLE_STARTUP_APP"
         | "EMPTY_TEMP"
         | "ENTER_FOCUS_MODE"
+        | "PURGE_CLEANUP_QUARANTINE"
+        | "RESTORE_DELAYED_STARTUP_APP"
+        | "RESTORE_FOCUS_SESSION"
+        | "RESTORE_LATENCY_SESSION"
+        | "RESTORE_PERFORMANCE_SESSION"
         | "RESTORE_SERVICE"
         | "RESTORE_STARTUP_APP"
+        | "RESTORE_VISUAL_EFFECTS"
         | "SET_PROCESS_PRIORITY"
         | "SET_POWER_PLAN_BALANCED"
         | "SET_POWER_PLAN_HIGH_PERFORMANCE"
@@ -137,8 +152,20 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: matches!(
                 action_name,
                 "APPLY_GAME_MODE"
+                    | "APPLY_ADAPTIVE_OPTIMIZATION"
+                    | "APPLY_BACKGROUND_QUIET_MODE"
+                    | "APPLY_PC_CLEAN_FAST_BACKGROUND_PRIORITIES"
+                    | "APPLY_PC_CLEAN_FAST_PROFILE"
+                    | "APPLY_CLEANUP_CATEGORY"
+                    | "APPLY_FOREGROUND_BURST_MODE"
+                    | "APPLY_UPLINK_PRESSURE_RELIEF_STAGE1"
+                    | "DELAY_STARTUP_APP"
                     | "DISABLE_STARTUP_APP"
+                    | "APPLY_VISUAL_PERFORMANCE_MODE"
                     | "ENTER_FOCUS_MODE"
+                    | "RESTORE_FOCUS_SESSION"
+                    | "RESTORE_PERFORMANCE_SESSION"
+                    | "RESTORE_LATENCY_SESSION"
                     | "SET_POWER_PLAN_BALANCED"
                     | "SET_POWER_PLAN_HIGH_PERFORMANCE"
                     | "SET_POWER_PLAN_POWER_SAVER"
@@ -165,15 +192,30 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
 pub fn supported_actions() -> &'static [&'static str] {
     &[
         "APPLY_GAME_MODE",
+        "APPLY_ADAPTIVE_OPTIMIZATION",
+        "APPLY_BACKGROUND_QUIET_MODE",
+        "APPLY_PC_CLEAN_FAST_BACKGROUND_PRIORITIES",
+        "APPLY_PC_CLEAN_FAST_PROFILE",
+        "APPLY_FOREGROUND_BURST_MODE",
+        "APPLY_UPLINK_PRESSURE_RELIEF_STAGE1",
+        "APPLY_CLEANUP_CATEGORY",
+        "APPLY_VISUAL_PERFORMANCE_MODE",
+        "RESTORE_VISUAL_EFFECTS",
+        "RESTORE_PERFORMANCE_SESSION",
+        "RESTORE_LATENCY_SESSION",
         "SET_PROCESS_PRIORITY",
         "EMPTY_TEMP",
+        "PURGE_CLEANUP_QUARANTINE",
         "CLEAR_STANDBY_LIST",
         "SET_POWER_PLAN_HIGH_PERFORMANCE",
         "SET_POWER_PLAN_BALANCED",
         "SET_POWER_PLAN_POWER_SAVER",
         "APPLY_LATENCY_TWEAKS",
         "ENTER_FOCUS_MODE",
+        "RESTORE_FOCUS_SESSION",
         "DETECT_FOREGROUND_GAME",
+        "DELAY_STARTUP_APP",
+        "RESTORE_DELAYED_STARTUP_APP",
         "DISABLE_STARTUP_APP",
         "RESTORE_STARTUP_APP",
         "STOP_SERVICE",
@@ -290,23 +332,67 @@ fn validate_action_payload(
             }
         }
         "EMPTY_TEMP" => {
-            let min_age_hours = payload
-                .and_then(|value| value.get("min_age_hours"))
+            let mode = payload
+                .and_then(|value| value.get("mode"))
+                .and_then(Value::as_str)
+                .unwrap_or("safe");
+            let min_age_minutes = payload
+                .and_then(|value| value.get("min_age_minutes"))
                 .and_then(Value::as_u64)
-                .unwrap_or(24);
+                .or_else(|| {
+                    payload
+                        .and_then(|value| value.get("min_age_hours"))
+                        .and_then(Value::as_u64)
+                        .map(|hours| hours.saturating_mul(60))
+                })
+                .unwrap_or(60);
+            let minimum_allowed = if mode == "deep_confirmed" { 5 } else { 60 };
 
-            if min_age_hours < 1 {
+            if min_age_minutes < minimum_allowed {
                 return Err(safety_error(
                     "cleanup_min_age_too_low",
                     action_name,
                     payload,
                     context,
                     Some(profile),
-                    json!({ "min_age_hours": min_age_hours, "minimum_allowed": 1 }),
+                    json!({ "min_age_minutes": min_age_minutes, "minimum_allowed": minimum_allowed, "mode": mode }),
                 ));
             }
         }
+        "PURGE_CLEANUP_QUARANTINE" if !purge_confirmed(payload) => {
+            return Err(safety_error(
+                "purge_confirmation_required",
+                action_name,
+                payload,
+                context,
+                Some(profile),
+                json!({ "confirmation": "purge_cleanup_quarantine" }),
+            ));
+        }
         "DISABLE_STARTUP_APP" => {
+            let target = extract_target(payload).ok_or_else(|| {
+                safety_error(
+                    "startup_app_target_required",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "required_fields": ["target", "name"] }),
+                )
+            })?;
+
+            if looks_like_security_component(&target) {
+                return Err(safety_error(
+                    "startup_app_protected",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "target": target }),
+                ));
+            }
+        }
+        "DELAY_STARTUP_APP" => {
             let target = extract_target(payload).ok_or_else(|| {
                 safety_error(
                     "startup_app_target_required",
@@ -403,6 +489,24 @@ fn requested_realtime_priority(payload: Option<&Value>) -> bool {
             let normalized = value.trim().to_ascii_lowercase();
             normalized == "realtime" || normalized == "real_time" || normalized == "tempo_real"
         })
+}
+
+fn purge_confirmed(payload: Option<&Value>) -> bool {
+    let Some(payload) = payload else {
+        return false;
+    };
+    let confirmed = payload
+        .get("user_confirmed_purge")
+        .or_else(|| payload.get("userConfirmedPurge"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let confirmation_matches = payload
+        .get("confirmation")
+        .or_else(|| payload.get("confirm"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "purge_cleanup_quarantine");
+
+    confirmed && confirmation_matches
 }
 
 fn extract_target(payload: Option<&Value>) -> Option<String> {
@@ -645,5 +749,98 @@ mod tests {
         );
 
         assert_eq!(result.unwrap_err().reason, "critical_command_blocked");
+    }
+
+    #[test]
+    fn purge_quarantine_requires_explicit_confirmation_payload() {
+        let missing_confirmation = validate_command(
+            "PURGE_CLEANUP_QUARANTINE",
+            None,
+            &context(CommandSource::ManualUser, None, true),
+        );
+        assert_eq!(
+            missing_confirmation.unwrap_err().reason,
+            "purge_confirmation_required"
+        );
+
+        let profile = validate_command(
+            "PURGE_CLEANUP_QUARANTINE",
+            Some(&json!({
+                "user_confirmed_purge": true,
+                "confirmation": "purge_cleanup_quarantine",
+                "quarantine_root": "C:\\Windows",
+            })),
+            &context(CommandSource::ManualUser, None, true),
+        )
+        .expect("purge should ignore caller-provided paths after explicit local confirmation");
+
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+    }
+
+    #[test]
+    fn foreground_burst_requires_policy_and_local_confirmation() {
+        let allowed = vec!["APPLY_FOREGROUND_BURST_MODE".to_string()];
+
+        let missing_confirmation = validate_command(
+            "APPLY_FOREGROUND_BURST_MODE",
+            Some(&json!({ "quiet_background": true })),
+            &context(CommandSource::RemoteCommand, Some(&allowed), false),
+        );
+        assert_eq!(
+            missing_confirmation.unwrap_err().reason,
+            "local_confirmation_required"
+        );
+
+        let profile = validate_command(
+            "APPLY_FOREGROUND_BURST_MODE",
+            Some(&json!({ "quiet_background": true })),
+            &context(CommandSource::RemoteCommand, Some(&allowed), true),
+        )
+        .expect("foreground burst should be allowed after signed policy and local confirmation");
+
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(profile.requires_snapshot);
+        assert!(!profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn adaptive_optimization_requires_policy_confirmation_and_snapshot() {
+        let allowed = vec!["APPLY_ADAPTIVE_OPTIMIZATION".to_string()];
+
+        let missing_confirmation = validate_command(
+            "APPLY_ADAPTIVE_OPTIMIZATION",
+            Some(&json!({ "includeNetworkAdminTweaks": false })),
+            &context(CommandSource::RemoteCommand, Some(&allowed), false),
+        );
+        assert_eq!(
+            missing_confirmation.unwrap_err().reason,
+            "local_confirmation_required"
+        );
+
+        let profile = validate_command(
+            "APPLY_ADAPTIVE_OPTIMIZATION",
+            Some(&json!({ "includeNetworkAdminTweaks": false })),
+            &context(CommandSource::RemoteCommand, Some(&allowed), true),
+        )
+        .expect("adaptive optimization should be allowed only after policy and local confirmation");
+
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(profile.requires_snapshot);
+        assert!(!profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn uplink_pressure_relief_stage1_remains_user_mode_and_reversible() {
+        let allowed = vec!["APPLY_UPLINK_PRESSURE_RELIEF_STAGE1".to_string()];
+        let profile = validate_command(
+            "APPLY_UPLINK_PRESSURE_RELIEF_STAGE1",
+            Some(&json!({ "stage": 1 })),
+            &context(CommandSource::RemoteCommand, Some(&allowed), true),
+        )
+        .expect("stage 1 should remain a user-mode reversible optimization");
+
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(profile.requires_snapshot);
+        assert!(!profile.requires_privileged_helper);
     }
 }

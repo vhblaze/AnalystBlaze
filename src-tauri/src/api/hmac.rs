@@ -40,7 +40,7 @@ fn write_value(value: &Value, out: &mut String) -> Result<(), String> {
         Value::Object(map) => {
             out.push('{');
             let mut entries: Vec<_> = map.iter().collect();
-            entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+            entries.sort_by_key(|(left, _)| *left);
             for (index, (key, item)) in entries.into_iter().enumerate() {
                 if index > 0 {
                     out.push(',');

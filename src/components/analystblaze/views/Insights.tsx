@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Brain, Cpu, Droplets, RefreshCw, Sparkles, Wind, Zap } from "lucide-react";
+import { Brain, Cpu, Droplets, ExternalLink, RefreshCw, Sparkles, Wind, Zap } from "lucide-react";
 import { fetchInsights, type Insight } from "@/services/insights";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
+import { isTauriRuntime, openAgentInsights } from "@/services/tauri/agent";
 
 type Category = "performance" | "energia" | "rede" | "limpeza";
 
@@ -34,20 +35,18 @@ const meta: Record<Category, { icon: React.ComponentType<{ className?: string }>
 };
 
 export function Insights() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const track = useTelemetry("insights");
   const [insights, setInsights] = useState<Insight[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [source, setSource] = useState<"remote" | "local">("remote");
 
   const generate = async () => {
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchInsights(t);
+      const result = await fetchInsights(t, locale);
       setInsights(result.insights);
-      setSource(result.source);
       track("insights_refreshed", { source: result.source });
     } catch (e: any) {
       setError(e?.message ?? t("insights.errorFallback"));
@@ -60,7 +59,19 @@ export function Insights() {
   useEffect(() => {
     generate();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [locale]);
+
+  const openOnWeb = async () => {
+    try {
+      const url = await openAgentInsights();
+      if (!isTauriRuntime()) {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+      track("insights_opened_on_web");
+    } catch (e: any) {
+      setError(e?.message ?? t("insights.errorFallback"));
+    }
+  };
 
   return (
     <div className="flex flex-col gap-8">
@@ -77,21 +88,24 @@ export function Insights() {
             {t("insights.description")}
           </p>
         </div>
-        <button
-          onClick={generate}
-          disabled={loading}
-          className="group inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:border-cyan-300/60 hover:shadow-[0_0_25px_-5px_hsl(187_100%_55%/0.7)] disabled:opacity-50"
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : "transition-transform group-hover:rotate-180"}`} />
-          {loading ? t("common.refreshing") : t("common.refresh")}
-        </button>
-      </header>
-
-      {source === "local" && !loading && (
-        <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-4 text-sm text-cyan-100">
-          {t("insights.localMode")}
+        <div className="flex flex-wrap justify-end gap-2">
+          <button
+            onClick={openOnWeb}
+            className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/30 bg-slate-950/50 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:border-cyan-300/60 hover:bg-cyan-400/10"
+          >
+            <ExternalLink className="h-4 w-4" />
+            {t("insights.openInWeb")}
+          </button>
+          <button
+            onClick={generate}
+            disabled={loading}
+            className="group inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:border-cyan-300/60 hover:shadow-[0_0_25px_-5px_hsl(187_100%_55%/0.7)] disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : "transition-transform group-hover:rotate-180"}`} />
+            {loading ? t("common.refreshing") : t("common.refresh")}
+          </button>
         </div>
-      )}
+      </header>
 
       {error && (
         <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">

@@ -115,6 +115,7 @@ const metrics: Metric[] = [
     hue: 350,
     read: (s) => s.gpu_temperature ?? 0,
     available: (s) => Boolean(s.gpu_temperature_available),
+    detail: gpuTemperatureDetail,
     status: tempStatus,
   },
   {
@@ -631,6 +632,12 @@ function cpuTemperatureDetail(sample: AgentTelemetrySample) {
   return `${temp} - ${temperatureSourceLabel(sample.cpu_temperature_source)}`;
 }
 
+function gpuTemperatureDetail(sample: AgentTelemetrySample) {
+  const temp = formatTemp(sample.gpu_temperature, sample.gpu_temperature_available);
+  if (temp === "--") return "sensor GPU indisponivel";
+  return `${temp} - ${temperatureSourceLabel(sample.gpu_temperature_source)}`;
+}
+
 function cpuTemperatureMethodSummary(sample: AgentTelemetrySample | null) {
   if (!sample?.cpu_temperature_methods?.length) {
     return sample?.cpu_temperature_available
@@ -652,11 +659,14 @@ function cpuTemperatureMethodSummary(sample: AgentTelemetrySample | null) {
 }
 
 function temperatureSourceLabel(source?: string | null) {
+  if (source === "nvml") return "NVML";
   if (source === "sysinfo_cpu_sensor") return "sensor do sistema";
+  if (source === "sysinfo_gpu_sensor") return "sensor GPU do sistema";
   if (source === "sysinfo_component_max") return "componente mais quente";
   if (source === "libre_hardware_monitor") return "LibreHardwareMonitor";
   if (source === "open_hardware_monitor") return "OpenHardwareMonitor";
   if (source === "acpi_thermal_zone") return "ACPI thermal zone";
+  if (source === "hardware_monitor") return "monitor de hardware";
   if (source === "external_wmi") return "WMI";
   return "fonte local";
 }

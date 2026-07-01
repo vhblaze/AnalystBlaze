@@ -10,7 +10,7 @@ import {
 } from "@/components/ui/select";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useTheme } from "@/hooks/useTheme";
-import type { AgentMessage, User } from "@/hooks/useAuth";
+import { canUseAutomaticGameMode, type AgentMessage, type User } from "@/hooks/useAuth";
 import { localeLabels, type Locale, useI18n } from "@/i18n";
 import {
   getLocalAiPolicy,
@@ -29,6 +29,7 @@ export function Settings({
   onLogin,
   onLogout,
   onOpenAccountSettings,
+  onOpenBilling,
   onStartAgent,
   onCollectSample,
 }: {
@@ -39,6 +40,7 @@ export function Settings({
   onLogin: () => Promise<void>;
   onLogout: () => Promise<void>;
   onOpenAccountSettings: () => Promise<void>;
+  onOpenBilling: () => Promise<void>;
   onStartAgent: () => Promise<void>;
   onCollectSample: () => Promise<AgentTelemetrySample>;
 }) {
@@ -125,6 +127,7 @@ export function Settings({
 
   const dark = theme === "dark";
   const isReady = Boolean(status?.authenticated && status.registered);
+  const automaticGameModeAllowed = canUseAutomaticGameMode(status);
 
   return (
     <div className="flex flex-col gap-8">
@@ -237,7 +240,7 @@ export function Settings({
               </div>
             </div>
           </div>
-          <Switch checked={aiPolicy.enabled} onCheckedChange={(enabled) => updateAiPolicy({ enabled })} />
+          <Switch checked={aiPolicy.enabled} onCheckedChange={(enabled) => updateAiPolicy({ enabled, agent_mode: enabled ? "automatic" : "manual" })} />
         </div>
 
         {adaptive && (
@@ -246,12 +249,23 @@ export function Settings({
             {t("settings.adaptiveWarning")}
           </div>
         )}
+        {!automaticGameModeAllowed && (
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-3 py-2 text-[11px] text-cyan-100/80">
+            <Shield className="h-3 w-3" />
+            Automacoes do Agente Local ficam disponiveis nos planos Pro e Family. No Starter, o PC Limpo continua manual.
+          </div>
+        )}
 
         <div className="mt-4 grid gap-3 md:grid-cols-2">
           <Row
             label={t("settings.aiAutoGame")}
             description={t("settings.aiAutoGameDesc")}
-            control={<Switch checked={aiPolicy.auto_game_mode} onCheckedChange={(auto_game_mode) => updateAiPolicy({ auto_game_mode })} />}
+            control={<Switch disabled={!automaticGameModeAllowed} checked={automaticGameModeAllowed && aiPolicy.auto_game_mode} onCheckedChange={(auto_game_mode) => updateAiPolicy({ auto_game_mode })} />}
+          />
+          <Row
+            label={t("settings.aiAutoPcClean")}
+            description={t("settings.aiAutoPcCleanDesc")}
+            control={<Switch disabled={!automaticGameModeAllowed} checked={automaticGameModeAllowed && aiPolicy.auto_pc_clean} onCheckedChange={(auto_pc_clean) => updateAiPolicy({ auto_pc_clean })} />}
           />
           <Row
             label={t("settings.aiAutoRestore")}
@@ -272,6 +286,16 @@ export function Settings({
             label={t("settings.aiCleanup")}
             description={t("settings.aiCleanupDesc")}
             control={<Switch checked={aiPolicy.safe_temp_cleanup} onCheckedChange={(safe_temp_cleanup) => updateAiPolicy({ safe_temp_cleanup })} />}
+          />
+          <Row
+            label={t("settings.aiEnergyEstimation")}
+            description={t("settings.aiEnergyEstimationDesc")}
+            control={<Switch checked={aiPolicy.energy_estimation_enabled} onCheckedChange={(energy_estimation_enabled) => updateAiPolicy({ energy_estimation_enabled })} />}
+          />
+          <Row
+            label={t("settings.aiThermalAnalysis")}
+            description={t("settings.aiThermalAnalysisDesc")}
+            control={<Switch checked={aiPolicy.thermal_analysis_enabled} onCheckedChange={(thermal_analysis_enabled) => updateAiPolicy({ thermal_analysis_enabled })} />}
           />
           <Row
             label={t("settings.aiStartup")}
@@ -313,6 +337,7 @@ export function Settings({
           <div className="grid gap-3 md:grid-cols-2">
             <NumberRule label={t("settings.aiGameConfidence")} value={aiPolicy.game_min_confidence} min={0.5} max={0.98} step={0.01} onChange={(game_min_confidence) => updateAiPolicy({ game_min_confidence })} />
             <NumberRule label={t("settings.aiGameCooldown")} value={aiPolicy.game_cooldown_seconds} min={60} max={21600} step={60} onChange={(game_cooldown_seconds) => updateAiPolicy({ game_cooldown_seconds })} />
+            <NumberRule label={t("settings.aiPcCleanCooldown")} value={aiPolicy.pc_clean_cooldown_seconds} min={600} max={86400} step={300} onChange={(pc_clean_cooldown_seconds) => updateAiPolicy({ pc_clean_cooldown_seconds })} />
             <NumberRule label={t("settings.aiCleanupIdle")} value={aiPolicy.cleanup_min_idle_seconds} min={60} max={43200} step={60} onChange={(cleanup_min_idle_seconds) => updateAiPolicy({ cleanup_min_idle_seconds })} />
             <NumberRule label={t("settings.aiCleanupDisk")} value={aiPolicy.cleanup_disk_threshold_percent} min={70} max={99} step={1} suffix="%" onChange={(cleanup_disk_threshold_percent) => updateAiPolicy({ cleanup_disk_threshold_percent })} />
             <NumberRule label={t("settings.aiCpuThermal")} value={aiPolicy.thermal_cpu_limit_c} min={70} max={105} step={1} suffix="C" onChange={(thermal_cpu_limit_c) => updateAiPolicy({ thermal_cpu_limit_c })} />
@@ -390,7 +415,7 @@ export function Settings({
             </button>
             {!user.hasPaidPlan && (
               <button
-                onClick={() => window.open(import.meta.env.VITE_ANALYSTBLAZE_BILLING_URL ?? "https://analystblaze.app/billing", "_blank", "noopener,noreferrer")}
+                onClick={() => void onOpenBilling()}
                 className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-medium text-cyan-100 transition-all hover:border-cyan-300/60 hover:bg-cyan-400/15"
               >
                 <ExternalLink className="h-4 w-4" />
@@ -479,18 +504,24 @@ function Row({
 
 const DEFAULT_LOCAL_AI_POLICY: LocalAiPolicy = {
   enabled: false,
+  agent_mode: "manual",
   auto_game_mode: true,
+  auto_pc_clean: true,
   auto_restore_game_mode: true,
   optimize_power_plan: true,
   safe_temp_cleanup: true,
+  energy_estimation_enabled: true,
+  thermal_analysis_enabled: true,
   manage_startup_apps: false,
   manage_services: false,
   reduce_background_processes: false,
   allow_automatic_sensitive_actions: false,
   require_confirmation_for_sensitive: true,
   max_risk: "safe",
+  confirmed_game_apps: [],
   game_min_confidence: 0.74,
   game_cooldown_seconds: 900,
+  pc_clean_cooldown_seconds: 3600,
   cleanup_min_idle_seconds: 900,
   cleanup_disk_threshold_percent: 90,
   thermal_cpu_limit_c: 88,

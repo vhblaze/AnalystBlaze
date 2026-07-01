@@ -2,7 +2,12 @@ import { Activity, ChevronRight, CreditCard, ExternalLink, LayoutDashboard, LogI
 import { cn } from "@/lib/utils";
 import type { ViewKey } from "./AppShell";
 import type { User } from "@/hooks/useAuth";
-import type { AgentStatus } from "@/services/tauri/agent";
+import {
+  isTauriRuntime,
+  openAgentAccountSettings,
+  openAgentBilling,
+  type AgentStatus,
+} from "@/services/tauri/agent";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
@@ -13,9 +18,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-
-const BILLING_URL = import.meta.env.VITE_ANALYSTBLAZE_BILLING_URL ?? "https://analystblaze.app/billing";
-const ACCOUNT_URL = import.meta.env.VITE_ANALYSTBLAZE_ACCOUNT_URL ?? "https://analystblaze.app/account";
 
 const items: { key: ViewKey; labelKey: string; icon: typeof Activity; hint: string }[] = [
   { key: "dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard, hint: "01" },
@@ -33,6 +35,11 @@ const planStyles: Record<string, string> = {
 };
 
 const openExternal = (url: string) => window.open(url, "_blank", "noopener,noreferrer");
+
+async function openConfiguredExternal(action: "account" | "billing") {
+  const url = action === "account" ? await openAgentAccountSettings() : await openAgentBilling();
+  if (!isTauriRuntime()) openExternal(url);
+}
 
 export function Sidebar({
   view,
@@ -120,7 +127,7 @@ export function Sidebar({
                 onClick={(event) => {
                   event.stopPropagation();
                   track("upgrade_to_pro_sidebar_badge_clicked");
-                  openExternal(BILLING_URL);
+                  void openConfiguredExternal("billing");
                 }}
                 className="absolute -top-0.5 right-1.5 z-30 rotate-6 rounded-full border border-cyan-200/50 bg-gradient-to-r from-cyan-300 to-violet-300 px-2.5 py-1 font-mono text-[9px] font-black uppercase tracking-widest text-slate-950 shadow-[0_0_18px_hsl(187_100%_60%/0.85)] transition-transform hover:rotate-3 hover:scale-105"
               >
@@ -161,7 +168,7 @@ export function Sidebar({
                 <DropdownMenuItem
                   onClick={() => {
                     track("external_account_clicked");
-                    openExternal(ACCOUNT_URL);
+                    void openConfiguredExternal("account");
                   }}
                   className="gap-2 focus:bg-cyan-500/10 focus:text-cyan-100"
                 >
@@ -172,7 +179,7 @@ export function Sidebar({
                 <DropdownMenuItem
                   onClick={() => {
                     track(user.hasPaidPlan ? "external_billing_clicked" : "upgrade_to_pro_clicked");
-                    openExternal(BILLING_URL);
+                    void openConfiguredExternal("billing");
                   }}
                   className="gap-2 focus:bg-cyan-500/10 focus:text-cyan-100"
                 >

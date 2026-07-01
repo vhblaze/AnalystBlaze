@@ -8,7 +8,9 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "powershell -ExecutionPolicy Bypass -File scripts/tauri-sac-router.ps1",
-    "cargo:check": "powershell -ExecutionPolicy Bypass -File scripts/cargo-check-sac.ps1",
+    "cargo:check": "powershell -ExecutionPolicy Bypass -File scripts/cargo-sac.ps1 check",
+    "cargo:test": "powershell -ExecutionPolicy Bypass -File scripts/cargo-sac.ps1 test",
+    "cargo:clippy": "powershell -ExecutionPolicy Bypass -File scripts/cargo-sac.ps1 clippy --all-targets -- -D warnings",
     "desktop:dev": "powershell -ExecutionPolicy Bypass -File scripts/tauri-dev-sac.ps1",
     "desktop:build": "powershell -ExecutionPolicy Bypass -File scripts/tauri-build-sac.ps1"
   },
@@ -18,7 +20,7 @@
     "@radix-ui/react-switch": "^1.2.5",
     "@radix-ui/react-toast": "^1.2.14",
     "@radix-ui/react-tooltip": "^1.2.7",
-    "@tauri-apps/api": "2.10.1",
+    "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-deep-link": "^2.4.9",
     "@tauri-apps/plugin-opener": "^2",
     "class-variance-authority": "^0.7.1",
@@ -31,7 +33,7 @@
     "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2",
+    "@tauri-apps/cli": "^2.11.2",
     "@types/node": "^22.16.5",
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",

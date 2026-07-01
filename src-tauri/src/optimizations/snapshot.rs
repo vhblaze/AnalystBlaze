@@ -46,6 +46,40 @@ pub enum SnapshotEntry {
         was_running: bool,
         start_type: Option<u32>,
     },
+    ProcessPriority {
+        pid: u32,
+        process_name: String,
+        previous_priority_class: u32,
+        previous_priority_label: String,
+        target_priority_class: u32,
+        target_priority_label: String,
+    },
+    ProcessEfficiency {
+        pid: u32,
+        process_name: String,
+        previous_memory_priority: Option<u32>,
+        previous_power_control_mask: Option<u32>,
+        previous_power_state_mask: Option<u32>,
+        target_memory_priority: Option<u32>,
+        target_power_state_mask: Option<u32>,
+    },
+    ProcessAffinity {
+        pid: u32,
+        process_name: String,
+        previous_process_mask: usize,
+        previous_system_mask: usize,
+        target_process_mask: usize,
+        strategy: String,
+    },
+    RegistryValue {
+        hive: String,
+        subkey: String,
+        value_name: String,
+        previous_value_type: Option<String>,
+        previous_value_bytes: Option<Vec<u8>>,
+        target_value_type: String,
+        target_value_bytes: Vec<u8>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -112,7 +146,7 @@ pub fn save_snapshot(snapshot: &OptimizationSnapshot) -> Result<(), String> {
 
 pub fn list_snapshots(limit: usize) -> Result<Vec<OptimizationSnapshot>, String> {
     let mut snapshots = read_snapshots()?;
-    snapshots.sort_by(|left, right| right.created_at.cmp(&left.created_at));
+    snapshots.sort_by_key(|snapshot| std::cmp::Reverse(snapshot.created_at));
     snapshots.truncate(limit.clamp(1, 250));
     Ok(snapshots)
 }
@@ -126,7 +160,7 @@ pub fn restore_pending_snapshots() -> Result<RestoreReport, String> {
         .map(|(index, snapshot)| (index, snapshot.created_at))
         .collect();
 
-    pending.sort_by(|left, right| right.1.cmp(&left.1));
+    pending.sort_by_key(|pending| std::cmp::Reverse(pending.1));
 
     let mut report = RestoreReport {
         restored_snapshots: 0,
@@ -157,7 +191,7 @@ pub fn restore_pending_snapshots() -> Result<RestoreReport, String> {
         "info",
         "optimization.snapshots_restored",
         "Snapshots pendentes restaurados pelo agente local.",
-        serde_json::to_value(&report).unwrap_or_else(|_| Value::Null),
+        serde_json::to_value(&report).unwrap_or(Value::Null),
     );
     Ok(report)
 }
@@ -183,6 +217,17 @@ pub fn restore_service_snapshots(target: Option<&str>) -> Result<RestoreReport, 
                     .unwrap_or(true),
                 _ => false,
             })
+    })
+}
+
+pub fn restore_visual_effect_snapshots() -> Result<RestoreReport, String> {
+    restore_snapshots_matching(|snapshot| {
+        snapshot.restored_at.is_none()
+            && snapshot.action_name == "APPLY_VISUAL_PERFORMANCE_MODE"
+            && snapshot
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, SnapshotEntry::RegistryValue { .. }))
     })
 }
 
@@ -249,6 +294,46 @@ pub fn discard_snapshot(snapshot_id: &str) -> Result<(), String> {
         write_snapshots(&snapshots)?;
     }
     Ok(())
+}
+
+pub fn mark_cleanup_snapshots_purged() -> Result<usize, String> {
+    let mut snapshots = read_snapshots()?;
+    let now = chrono::Utc::now().timestamp();
+    let mut changed = 0;
+
+    for snapshot in &mut snapshots {
+        if snapshot.restored_at.is_some() || snapshot.action_name != "EMPTY_TEMP" {
+            continue;
+        }
+
+        let has_quarantined_entries = snapshot
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, SnapshotEntry::QuarantinedPath { .. }));
+        if !has_quarantined_entries {
+            continue;
+        }
+
+        snapshot.restored_at = Some(now);
+        if let Some(details) = snapshot.details.as_object_mut() {
+            details.insert("purged".to_string(), Value::Bool(true));
+            details.insert("purged_at".to_string(), Value::Number(now.into()));
+            details.insert("reversible".to_string(), Value::Bool(false));
+        }
+        changed += 1;
+    }
+
+    if changed > 0 {
+        write_snapshots(&snapshots)?;
+        let _ = audit::record_event(
+            "info",
+            "optimization.cleanup_quarantine_purged",
+            "Snapshots de limpeza TEMP marcados como purgados apos exclusao permanente da quarentena.",
+            serde_json::json!({ "snapshots": changed }),
+        );
+    }
+
+    Ok(changed)
 }
 
 pub fn restore_snapshot_entries(snapshot: &OptimizationSnapshot) -> SnapshotRestoreSummary {
@@ -382,6 +467,149 @@ pub fn restore_snapshot_entries(snapshot: &OptimizationSnapshot) -> SnapshotRest
                     }
                 }
             }
+            SnapshotEntry::ProcessPriority {
+                pid,
+                process_name,
+                previous_priority_class,
+                previous_priority_label,
+                ..
+            } => {
+                if !super::processes::process_exists_by_pid(*pid) {
+                    summary.restored_entries += 1;
+                    summary.messages.push(format!(
+                        "Processo {process_name} ({pid}) ja saiu; prioridade nao precisa ser restaurada."
+                    ));
+                    continue;
+                }
+
+                match super::processes::set_process_priority_class_by_pid(
+                    *pid,
+                    *previous_priority_class,
+                ) {
+                    Ok(()) => {
+                        summary.restored_entries += 1;
+                        summary.messages.push(format!(
+                            "Prioridade de {process_name} restaurada para {previous_priority_label}."
+                        ));
+                    }
+                    Err(error) => {
+                        summary.failed_entries += 1;
+                        summary.messages.push(format!(
+                            "Falha ao restaurar prioridade de {process_name}: {error}"
+                        ));
+                    }
+                }
+            }
+            SnapshotEntry::ProcessEfficiency {
+                pid,
+                process_name,
+                previous_memory_priority,
+                previous_power_control_mask,
+                previous_power_state_mask,
+                ..
+            } => {
+                if !super::processes::process_exists_by_pid(*pid) {
+                    summary.restored_entries += 1;
+                    summary.messages.push(format!(
+                        "Processo {process_name} ({pid}) ja saiu; eficiencia nao precisa ser restaurada."
+                    ));
+                    continue;
+                }
+
+                match super::processes::restore_process_efficiency_by_pid(
+                    *pid,
+                    *previous_memory_priority,
+                    *previous_power_control_mask,
+                    *previous_power_state_mask,
+                ) {
+                    Ok(()) => {
+                        summary.restored_entries += 1;
+                        summary
+                            .messages
+                            .push(format!("Eficiencia de {process_name} restaurada."));
+                    }
+                    Err(error) => {
+                        summary.failed_entries += 1;
+                        summary.messages.push(format!(
+                            "Falha ao restaurar eficiencia de {process_name}: {error}"
+                        ));
+                    }
+                }
+            }
+            SnapshotEntry::ProcessAffinity {
+                pid,
+                process_name,
+                previous_process_mask,
+                ..
+            } => {
+                if !super::processes::process_exists_by_pid(*pid) {
+                    summary.restored_entries += 1;
+                    summary.messages.push(format!(
+                        "Processo {process_name} ({pid}) ja saiu; afinidade nao precisa ser restaurada."
+                    ));
+                    continue;
+                }
+
+                match super::processes::restore_process_affinity_by_pid(
+                    *pid,
+                    *previous_process_mask,
+                ) {
+                    Ok(()) => {
+                        summary.restored_entries += 1;
+                        summary
+                            .messages
+                            .push(format!("Afinidade de {process_name} restaurada."));
+                    }
+                    Err(error) => {
+                        summary.failed_entries += 1;
+                        summary.messages.push(format!(
+                            "Falha ao restaurar afinidade de {process_name}: {error}"
+                        ));
+                    }
+                }
+            }
+            SnapshotEntry::RegistryValue {
+                hive,
+                subkey,
+                value_name,
+                previous_value_type,
+                previous_value_bytes,
+                ..
+            } => match (previous_value_type, previous_value_bytes) {
+                (Some(value_type), Some(value_bytes)) => {
+                    match restore_registry_value(hive, subkey, value_name, value_type, value_bytes)
+                    {
+                        Ok(()) => {
+                            summary.restored_entries += 1;
+                            notify_user_settings_changed();
+                            summary
+                                .messages
+                                .push(format!("Valor visual do Windows restaurado: {value_name}."));
+                        }
+                        Err(error) => {
+                            summary.failed_entries += 1;
+                            summary.messages.push(format!(
+                                "Falha ao restaurar valor visual {value_name}: {error}"
+                            ));
+                        }
+                    }
+                }
+                _ => match delete_registry_value(hive, subkey, value_name) {
+                    Ok(()) => {
+                        summary.restored_entries += 1;
+                        notify_user_settings_changed();
+                        summary.messages.push(format!(
+                            "Valor visual criado pela otimizacao removido: {value_name}."
+                        ));
+                    }
+                    Err(error) => {
+                        summary.failed_entries += 1;
+                        summary.messages.push(format!(
+                            "Falha ao remover valor visual {value_name}: {error}"
+                        ));
+                    }
+                },
+            },
         }
     }
 
@@ -415,8 +643,12 @@ pub fn set_active_power_plan(scheme_guid_or_alias: &str) -> Result<(), String> {
     }
 }
 
+pub fn cleanup_quarantine_root() -> PathBuf {
+    app_data_dir().join("quarantine")
+}
+
 pub fn cleanup_quarantine_dir(snapshot_id: &str) -> PathBuf {
-    app_data_dir().join("cleanup-quarantine").join(snapshot_id)
+    cleanup_quarantine_root().join(snapshot_id)
 }
 
 pub fn move_file_across_volumes(source: &PathBuf, target: &PathBuf) -> Result<(), String> {
@@ -438,7 +670,7 @@ pub fn app_data_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("APPDATA").map(PathBuf::from))
-        .unwrap_or_else(|| std::env::temp_dir())
+        .unwrap_or_else(std::env::temp_dir)
         .join("AnalystBlaze")
         .join("agent")
 }
@@ -474,7 +706,7 @@ fn restore_snapshots_matching(
         .map(|(index, snapshot)| (index, snapshot.created_at))
         .collect();
 
-    pending.sort_by(|left, right| right.1.cmp(&left.1));
+    pending.sort_by_key(|pending| std::cmp::Reverse(pending.1));
 
     let mut report = RestoreReport {
         restored_snapshots: 0,
@@ -516,7 +748,7 @@ fn restore_registry_value(
     value_type: &str,
     value_bytes: &[u8],
 ) -> Result<(), String> {
-    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_WRITE};
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
     use winreg::{RegKey, RegValue};
 
     let root = match hive.to_ascii_uppercase().as_str() {
@@ -525,8 +757,8 @@ fn restore_registry_value(
         _ => return Err("Hive de registro nao suportada para restauracao.".to_string()),
     };
 
-    let key = root
-        .open_subkey_with_flags(subkey, KEY_WRITE)
+    let (key, _) = root
+        .create_subkey(subkey)
         .map_err(|error| error.to_string())?;
     let reg_value = RegValue {
         vtype: registry_type_from_name(value_type)?,
@@ -534,6 +766,30 @@ fn restore_registry_value(
     };
     key.set_raw_value(value_name, &reg_value)
         .map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+fn delete_registry_value(hive: &str, subkey: &str, value_name: &str) -> Result<(), String> {
+    use std::io;
+    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_WRITE};
+    use winreg::RegKey;
+
+    let root = match hive.to_ascii_uppercase().as_str() {
+        "HKCU" | "HKEY_CURRENT_USER" => RegKey::predef(HKEY_CURRENT_USER),
+        "HKLM" | "HKEY_LOCAL_MACHINE" => RegKey::predef(HKEY_LOCAL_MACHINE),
+        _ => return Err("Hive de registro nao suportada para restauracao.".to_string()),
+    };
+
+    let key = match root.open_subkey_with_flags(subkey, KEY_WRITE) {
+        Ok(key) => key,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.to_string()),
+    };
+    match key.delete_value(value_name) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 #[cfg(not(windows))]
@@ -544,6 +800,11 @@ fn restore_registry_value(
     _value_type: &str,
     _value_bytes: &[u8],
 ) -> Result<(), String> {
+    Err("Registro do Windows indisponivel nesta plataforma.".to_string())
+}
+
+#[cfg(not(windows))]
+fn delete_registry_value(_hive: &str, _subkey: &str, _value_name: &str) -> Result<(), String> {
     Err("Registro do Windows indisponivel nesta plataforma.".to_string())
 }
 
@@ -589,6 +850,16 @@ fn start_service(service_name: &str) -> Result<(), String> {
     {
         let _ = service_name;
         Err("Servicos do Windows indisponiveis nesta plataforma.".to_string())
+    }
+}
+
+fn notify_user_settings_changed() {
+    #[cfg(windows)]
+    {
+        let _ = Command::new("rundll32.exe")
+            .args(["user32.dll,UpdatePerUserSystemParameters"])
+            .status();
+        let _ = Command::new("ie4uinit.exe").arg("-show").status();
     }
 }
 
