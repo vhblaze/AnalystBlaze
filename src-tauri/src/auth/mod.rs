@@ -6,6 +6,17 @@ use uuid::Uuid;
 
 const SERVICE: &str = "AnalystBlaze Agent";
 const SESSION_USER: &str = "session";
+const MAX_DEEP_LINK_BYTES: usize = 2048;
+const SINGLE_VALUE_AUTH_PARAMS: &[&str] = &[
+    "token",
+    "access_token",
+    "refresh_token",
+    "code",
+    "pairing_code",
+];
+const FORBIDDEN_AUTH_PARAMS: &[&str] = &[
+    "cmd", "command", "exec", "shell", "program", "path", "file", "url", "open",
+];
 type JsonObject = serde_json::Map<String, Value>;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -25,6 +36,12 @@ pub struct AuthTokens {
     pub access_token: String,
     pub refresh_token: Option<String>,
     pub profile: AuthProfile,
+}
+
+#[derive(Debug, Clone)]
+pub enum AuthCallback {
+    Tokens(AuthTokens),
+    PairingCode(String),
 }
 
 #[derive(Debug, Clone, Default)]
@@ -84,27 +101,53 @@ impl SecureStore {
     }
 }
 
+#[cfg(test)]
 pub fn tokens_from_deep_link(raw_url: &str) -> Result<AuthTokens, String> {
+    match auth_callback_from_deep_link(raw_url)? {
+        AuthCallback::Tokens(tokens) => Ok(tokens),
+        AuthCallback::PairingCode(_) => {
+            Err("Deep link trouxe codigo de pareamento, nao um token JWT.".to_string())
+        }
+    }
+}
+
+pub fn auth_callback_from_deep_link(raw_url: &str) -> Result<AuthCallback, String> {
+    if raw_url.len() > MAX_DEEP_LINK_BYTES {
+        return Err("Deep link de autenticacao excede o tamanho permitido.".to_string());
+    }
+
     let url = url::Url::parse(raw_url).map_err(|error| error.to_string())?;
     if !is_auth_deep_link(&url) {
         return Err("Deep link invalido para autenticacao do AnalystBlaze.".to_string());
     }
 
     let params = auth_params(&url);
+    validate_auth_params(&params)?;
     let access_token = find_param(&params, "token")
         .or_else(|| find_param(&params, "access_token"))
         .filter(|token| !token.trim().is_empty())
-        .ok_or_else(|| "Deep link nao trouxe token JWT.".to_string())?;
+        .map(|token| {
+            let refresh_token =
+                find_param(&params, "refresh_token").filter(|token| !token.trim().is_empty());
+            let profile = auth_profile(&params, &token);
 
-    let refresh_token =
-        find_param(&params, "refresh_token").filter(|token| !token.trim().is_empty());
-    let profile = auth_profile(&params, &access_token);
+            AuthCallback::Tokens(AuthTokens {
+                access_token: token,
+                refresh_token,
+                profile,
+            })
+        });
 
-    Ok(AuthTokens {
-        access_token,
-        refresh_token,
-        profile,
-    })
+    if let Some(callback) = access_token {
+        return Ok(callback);
+    }
+
+    let pairing_code = find_param(&params, "code")
+        .or_else(|| find_param(&params, "pairing_code"))
+        .filter(|code| !code.trim().is_empty())
+        .ok_or_else(|| "Deep link nao trouxe token JWT nem codigo de pareamento.".to_string())?;
+
+    Ok(AuthCallback::PairingCode(pairing_code))
 }
 
 pub fn profile_from_token(access_token: &str) -> AuthProfile {
@@ -148,6 +191,29 @@ fn auth_params(url: &url::Url) -> Vec<(String, String)> {
     }
 
     params
+}
+
+fn validate_auth_params(params: &[(String, String)]) -> Result<(), String> {
+    for forbidden in FORBIDDEN_AUTH_PARAMS {
+        if params
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case(forbidden))
+        {
+            return Err("Deep link contem parametro nao permitido para autenticacao.".to_string());
+        }
+    }
+
+    for single in SINGLE_VALUE_AUTH_PARAMS {
+        let count = params
+            .iter()
+            .filter(|(key, _)| key.eq_ignore_ascii_case(single))
+            .count();
+        if count > 1 {
+            return Err("Deep link contem parametros de autenticacao duplicados.".to_string());
+        }
+    }
+
+    Ok(())
 }
 
 fn find_param(params: &[(String, String)], name: &str) -> Option<String> {
@@ -456,7 +522,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        profile_from_credentials, profile_from_value, tokens_from_deep_link, StoredCredentials,
+        auth_callback_from_deep_link, profile_from_credentials, profile_from_value,
+        tokens_from_deep_link, AuthCallback, StoredCredentials,
     };
 
     #[test]
@@ -492,8 +559,45 @@ mod tests {
     }
 
     #[test]
+    fn parses_pairing_code_callback() {
+        let callback = auth_callback_from_deep_link("analystblaze://auth?code=pair_123")
+            .expect("valid callback");
+
+        match callback {
+            AuthCallback::PairingCode(code) => assert_eq!(code, "pair_123"),
+            AuthCallback::Tokens(_) => panic!("expected pairing code callback"),
+        }
+    }
+
+    #[test]
     fn rejects_non_auth_callback() {
         assert!(tokens_from_deep_link("analystblaze://billing?token=access").is_err());
+    }
+
+    #[test]
+    fn rejects_oversized_deep_link() {
+        let long_code = "a".repeat(2100);
+        assert!(
+            auth_callback_from_deep_link(&format!("analystblaze://auth?code={long_code}")).is_err()
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_auth_params() {
+        assert!(auth_callback_from_deep_link("analystblaze://auth?code=one&code=two").is_err());
+        assert!(auth_callback_from_deep_link(
+            "analystblaze://auth?access_token=one&access_token=two"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rejects_command_like_deep_link_params() {
+        assert!(auth_callback_from_deep_link("analystblaze://auth?code=pair&cmd=calc").is_err());
+        assert!(auth_callback_from_deep_link(
+            "analystblaze://auth?code=pair&path=C:/Windows/System32"
+        )
+        .is_err());
     }
 
     #[test]

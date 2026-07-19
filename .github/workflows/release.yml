@@ -1,0 +1,144 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Resolve tag and version
+        id: version
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      # Catches the single most common release mistake: tagging before bumping
+      # src-tauri/tauri.conf.json's `version` (see RELEASING.md step 1). A
+      # mismatch here means the built installer's own version metadata would
+      # not match the tag/manifest we're about to publish.
+      - name: Verify tag matches tauri.conf.json version
+        shell: bash
+        run: |
+          CONF_VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "$CONF_VERSION" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::Tag ${{ steps.version.outputs.tag }} does not match tauri.conf.json version $CONF_VERSION. Bump the version and re-tag."
+            exit 1
+          fi
+
+      - name: Build app (NSIS, per-machine) and sign updater artifacts
+        env:
+          # Required so `tauri build` produces a `.sig` alongside the NSIS
+          # installer for every updatable bundle. Generated once with
+          # `tauri signer generate` and stored ONLY as CI secrets - see
+          # RELEASING.md "Gestao da chave do updater". Losing this key means
+          # every already-installed client becomes permanently un-updatable
+          # (they'd need a fresh manual download instead), so back it up in
+          # two places before relying on it here.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # --- Authenticode hook (not enabled yet - beta ships unsigned by a
+          # deliberate cost decision, see RELEASING.md) ---
+          # Once a code-signing certificate is purchased, this becomes
+          # plug-and-play: add `bundle.windows.signCommand` to
+          # src-tauri/tauri.conf.json (see the tauri.conf.json schema at
+          # https://schema.tauri.app/config/2 for the exact shape) and
+          # uncomment secrets below - no other change to this workflow or to
+          # RELEASING.md's steps is required.
+          # WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          # WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: npx tauri build
+
+      - name: Collect artifacts and compute checksums
+        id: artifacts
+        shell: pwsh
+        run: |
+          $bundleDir = "src-tauri/target/release/bundle/nsis"
+          $installer = Get-ChildItem -Path $bundleDir -Filter "*-setup.exe" | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "No NSIS installer found in $bundleDir"
+            exit 1
+          }
+          $sigFile = "$($installer.FullName).sig"
+          if (-not (Test-Path $sigFile)) {
+            Write-Error "No updater signature found at $sigFile - check TAURI_SIGNING_PRIVATE_KEY / pubkey configuration."
+            exit 1
+          }
+
+          $sha256 = (Get-FileHash -Path $installer.FullName -Algorithm SHA256).Hash.ToLower()
+          $signature = Get-Content -Path $sigFile -Raw
+
+          Set-Content -Path "$($installer.FullName).sha256" -Value $sha256 -NoNewline
+
+          "installer_path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+          "installer_name=$($installer.Name)" >> $env:GITHUB_OUTPUT
+          "sha256=$sha256" >> $env:GITHUB_OUTPUT
+
+          $signatureEscaped = $signature -replace '"', '\"'
+          "signature<<EOF" >> $env:GITHUB_OUTPUT
+          $signature >> $env:GITHUB_OUTPUT
+          "EOF" >> $env:GITHUB_OUTPUT
+
+      - name: Generate admin release-registration payload
+        shell: pwsh
+        run: |
+          $releaseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.artifacts.outputs.installer_name }}"
+          $payload = [ordered]@{
+            platform        = "windows-x86_64"
+            version         = "${{ steps.version.outputs.version }}"
+            notes           = "TODO: cole aqui o changelog em linguagem simples antes de registrar (ver RELEASING.md)."
+            url             = $releaseUrl
+            signature       = "${{ steps.artifacts.outputs.signature }}"
+            sha256          = "${{ steps.artifacts.outputs.sha256 }}"
+            minimumVersion  = $null
+            channel         = "stable"
+            rolloutPercent  = 100
+          }
+          $payload | ConvertTo-Json | Set-Content -Path "release-manifest.json"
+          Get-Content release-manifest.json
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: analystblaze-desktop-${{ steps.version.outputs.tag }}
+          path: |
+            ${{ steps.artifacts.outputs.installer_path }}
+            ${{ steps.artifacts.outputs.installer_path }}.sig
+            ${{ steps.artifacts.outputs.installer_path }}.sha256
+            release-manifest.json
+
+      - name: Publish draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: AnalystBlaze Desktop ${{ steps.version.outputs.tag }}
+          draft: true
+          files: |
+            ${{ steps.artifacts.outputs.installer_path }}
+            ${{ steps.artifacts.outputs.installer_path }}.sig
+            ${{ steps.artifacts.outputs.installer_path }}.sha256
+            release-manifest.json

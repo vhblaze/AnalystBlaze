@@ -53,18 +53,33 @@ function Sign-CargoOutputs {
   $signed = 0
   $files = Get-ChildItem -Path $Path -Recurse -Include *.dll,*.exe -File -ErrorAction SilentlyContinue
   foreach ($file in $files) {
-    $signature = Get-AuthenticodeSignature -FilePath $file.FullName
-    if ($signature.Status -eq "Valid") {
-      continue
-    }
+    try {
+      $signature = Get-AuthenticodeSignature -FilePath $file.FullName
+      if ($signature.Status -eq "Valid") {
+        continue
+      }
 
-    $result = Set-AuthenticodeSignature -FilePath $file.FullName -Certificate $Certificate -HashAlgorithm SHA256
-    if ($result.Status -eq "Valid") {
-      $signed++
+      $result = Set-AuthenticodeSignature -FilePath $file.FullName -Certificate $Certificate -HashAlgorithm SHA256
+      if ($result.Status -eq "Valid") {
+        $signed++
+      }
+    } catch {
+      Write-Warning "Skipping locked binary while signing: $($file.FullName) ($($_.Exception.Message))"
     }
   }
 
   return $signed
+}
+
+function Show-DevServiceWarning {
+  param([string]$Path)
+
+  $resolvedTarget = (Resolve-Path -LiteralPath $Path -ErrorAction SilentlyContinue)
+  $targetPrefix = if ($resolvedTarget) { $resolvedTarget.Path.TrimEnd('\') + '\' } else { $Path.TrimEnd('\') + '\' }
+  $service = Get-CimInstance Win32_Service -Filter "Name='AnalystBlazeHelper'" -ErrorAction SilentlyContinue
+  if ($service -and $service.PathName -and $service.PathName.IndexOf($targetPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+    Write-Warning "AnalystBlazeHelper is installed from the dev target and can lock builds. Remove it from an elevated PowerShell: sc.exe stop AnalystBlazeHelper; sc.exe delete AnalystBlazeHelper"
+  }
 }
 
 New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null
@@ -75,6 +90,7 @@ Push-Location $root
 try {
   for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
     Write-Host "tauri build attempt $attempt/$MaxAttempts using target $TargetDir"
+    Show-DevServiceWarning -Path $TargetDir
     npx tauri build
     if ($LASTEXITCODE -eq 0) {
       exit 0

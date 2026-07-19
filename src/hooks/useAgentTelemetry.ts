@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type MutableRefObject } from "react";
 import {
   getAgentTelemetrySnapshot,
   listenToAgentSessionInvalidated,
@@ -8,6 +8,7 @@ import {
 
 export function useAgentTelemetry() {
   const [snapshot, setSnapshot] = useState<AgentTelemetrySnapshot | null>(null);
+  const lastCriticalNotificationAt = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -21,7 +22,10 @@ export function useAgentTelemetry() {
       .catch(() => undefined);
 
     listenToAgentTelemetry((nextSnapshot) => {
-      if (active) setSnapshot(nextSnapshot);
+      if (active) {
+        setSnapshot(nextSnapshot);
+        maybeNotifyCriticalState(nextSnapshot, lastCriticalNotificationAt);
+      }
     }).then((dispose) => {
       disposeTelemetry = dispose;
     });
@@ -40,4 +44,29 @@ export function useAgentTelemetry() {
   }, []);
 
   return snapshot;
+}
+
+function maybeNotifyCriticalState(
+  snapshot: AgentTelemetrySnapshot,
+  lastCriticalNotificationAt: MutableRefObject<number>,
+) {
+  if (snapshot.health_level !== "critical") return;
+  if (typeof Notification === "undefined") return;
+  if (Date.now() - lastCriticalNotificationAt.current < 10 * 60 * 1000) return;
+
+  const notify = () => {
+    lastCriticalNotificationAt.current = Date.now();
+    new Notification("AnalystBlaze", {
+      body: "Estado critico detectado no PC. Abra o dashboard para revisar.",
+      silent: false,
+    });
+  };
+
+  if (Notification.permission === "granted") {
+    notify();
+  } else if (Notification.permission === "default") {
+    void Notification.requestPermission().then((permission) => {
+      if (permission === "granted") notify();
+    });
+  }
 }
