@@ -52,7 +52,7 @@
       }
     },
     "updater": {
-      "pubkey": "TAURI_UPDATER_PUBKEY_AQUI",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDREM0Q3OTIwNzczNjNFMTgKUldRWVBqWjNJSGs5VFc0UEVicC81cXpxUzF5MFNTQ01EMHM5QW5wUlg2Rmk0cGluREdXajJwQ0sK",
       "endpoints": [
         "https://api.analystblaze.com/api/v1/updates/manifest?target={{target}}&arch={{arch}}&current_version={{current_version}}"
       ],
