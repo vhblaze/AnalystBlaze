@@ -6,6 +6,7 @@ use std::process::Command;
 use uuid::Uuid;
 
 use crate::audit;
+use crate::process_ext::CommandExt;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationSnapshot {
@@ -642,6 +643,7 @@ pub fn restore_snapshot_entries(snapshot: &OptimizationSnapshot) -> SnapshotRest
 pub fn active_power_plan() -> Result<PowerPlanState, String> {
     let output = Command::new("powercfg")
         .arg("/getactivescheme")
+        .no_window()
         .output()
         .map_err(|error| error.to_string())?;
 
@@ -656,6 +658,7 @@ pub fn active_power_plan() -> Result<PowerPlanState, String> {
 pub fn set_active_power_plan(scheme_guid_or_alias: &str) -> Result<(), String> {
     let output = Command::new("powercfg")
         .args(["/setactive", scheme_guid_or_alias])
+        .no_window()
         .output()
         .map_err(|error| error.to_string())?;
 
@@ -857,6 +860,7 @@ fn start_service(service_name: &str) -> Result<(), String> {
     {
         let output = Command::new("sc.exe")
             .args(["start", service_name])
+            .no_window()
             .output()
             .map_err(|error| error.to_string())?;
 
@@ -908,6 +912,7 @@ fn restore_dns_configuration(
             "-Command",
             &script,
         ])
+        .no_window()
         .output()
         .map_err(|error| error.to_string())?;
 
@@ -937,8 +942,9 @@ fn notify_user_settings_changed() {
     {
         let _ = Command::new("rundll32.exe")
             .args(["user32.dll,UpdatePerUserSystemParameters"])
+            .no_window()
             .status();
-        let _ = Command::new("ie4uinit.exe").arg("-show").status();
+        let _ = Command::new("ie4uinit.exe").arg("-show").no_window().status();
     }
 }
 

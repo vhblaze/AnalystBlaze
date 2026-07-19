@@ -6,6 +6,7 @@ use super::{
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
     windows_inventory, ExecutionResult,
 };
+use crate::process_ext::CommandExt;
 
 pub async fn disable_startup_app(payload: Option<Value>) -> ExecutionResult {
     let target = extract_payload_string(payload.as_ref(), &["target", "name", "app", "value_name"]);
@@ -362,7 +363,7 @@ fn stop_service_sync(service_name: &str) -> ExecutionResult {
         };
     }
 
-    let output = match Command::new("sc.exe").args(["stop", service_name]).output() {
+    let output = match Command::new("sc.exe").args(["stop", service_name]).no_window().output() {
         Ok(output) => output,
         Err(error) => {
             let _ = snapshot::discard_snapshot(&snapshot.id);
@@ -440,6 +441,7 @@ struct ServiceState {
 fn query_service_state(service_name: &str) -> Result<ServiceState, String> {
     let output = Command::new("sc.exe")
         .args(["query", service_name])
+        .no_window()
         .output()
         .map_err(|error| error.to_string())?;
 

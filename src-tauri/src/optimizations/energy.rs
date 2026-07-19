@@ -6,6 +6,7 @@ use super::{
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
     ExecutionResult,
 };
+use crate::process_ext::CommandExt;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EnergyDiagnostics {
@@ -363,6 +364,7 @@ fn powershell_json(script: &str) -> Option<Value> {
             "-Command",
             script,
         ])
+        .no_window()
         .output()
         .ok()?;
     if !output.status.success() {

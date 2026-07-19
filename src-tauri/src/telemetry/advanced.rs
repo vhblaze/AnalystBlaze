@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Command;
 
+use crate::process_ext::CommandExt;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AdvancedTelemetry {
     pub battery_percent: Option<f64>,
@@ -262,6 +264,7 @@ fn powershell_text(script: &str) -> Option<String> {
             "-Command",
             script,
         ])
+        .no_window()
         .output()
         .ok()?;
     if !output.status.success() {

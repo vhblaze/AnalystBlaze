@@ -8,6 +8,7 @@ use super::{
     ExecutionResult,
 };
 use crate::audit;
+use crate::process_ext::CommandExt;
 
 pub async fn flush_dns_cache(_payload: Option<Value>) -> ExecutionResult {
     match tokio::task::spawn_blocking(flush_dns_cache_sync).await {
@@ -74,7 +75,7 @@ pub async fn reset_winsock_catalog(_payload: Option<Value>) -> ExecutionResult {
 
 #[cfg(windows)]
 fn flush_dns_cache_sync() -> ExecutionResult {
-    let output = match Command::new("ipconfig").args(["/flushdns"]).output() {
+    let output = match Command::new("ipconfig").args(["/flushdns"]).no_window().output() {
         Ok(output) => output,
         Err(error) => {
             return ExecutionResult {
@@ -220,7 +221,7 @@ fn set_dns_servers_sync(adapter_name: &str, _dns_servers: &[String]) -> Executio
 
 #[cfg(windows)]
 fn reset_winsock_catalog_sync() -> ExecutionResult {
-    let output = match Command::new("netsh").args(["winsock", "reset"]).output() {
+    let output = match Command::new("netsh").args(["winsock", "reset"]).no_window().output() {
         Ok(output) => output,
         Err(error) => {
             return ExecutionResult {
@@ -294,6 +295,7 @@ fn run_powershell(script: &str) -> Result<String, String> {
             "-Command",
             script,
         ])
+        .no_window()
         .output()
         .map_err(|error| error.to_string())?;
 

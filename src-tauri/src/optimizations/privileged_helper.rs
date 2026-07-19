@@ -11,6 +11,8 @@ use std::io::{Read, Write};
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use crate::process_ext::CommandExt;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc, Mutex, OnceLock,
@@ -1139,6 +1141,7 @@ fn process_path_by_pid(pid: u32) -> Option<PathBuf> {
     let command = format!("$process = Get-Process -Id {pid} -ErrorAction Stop; $process.Path");
     let output = Command::new("powershell")
         .args(["-NoProfile", "-Command", &command])
+        .no_window()
         .output()
         .ok()?;
     if !output.status.success() {
@@ -1399,6 +1402,7 @@ fn exe_signature_is_trusted(path: &Path) -> bool {
                 "-Command",
                 &command,
             ])
+            .no_window()
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
@@ -1427,6 +1431,7 @@ fn current_user_sid() -> Result<String, String> {
             "-Command",
             "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
         ])
+        .no_window()
         .output()
         .map_err(|error| error.to_string())?;
     if !output.status.success() {
@@ -1469,6 +1474,7 @@ fn exe_path_is_trusted_service_source_with_roots(path: &Path, roots: &[PathBuf])
 fn service_binary_path() -> Option<PathBuf> {
     let output = Command::new("sc.exe")
         .args(["qc", SERVICE_NAME])
+        .no_window()
         .output()
         .ok()?;
     if !output.status.success() {
@@ -1548,6 +1554,7 @@ fn service_installed() -> bool {
     {
         Command::new("sc.exe")
             .args(["query", SERVICE_NAME])
+            .no_window()
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
@@ -1564,6 +1571,7 @@ fn service_running() -> bool {
     {
         Command::new("sc.exe")
             .args(["query", SERVICE_NAME])
+            .no_window()
             .output()
             .ok()
             .filter(|output| output.status.success())
@@ -1590,6 +1598,7 @@ fn run_elevated_script(script: &Path) -> Result<(), String> {
                 script.display()
             ),
         ])
+        .no_window()
         .status()
         .map_err(|error| error.to_string())?;
     if status.success() {

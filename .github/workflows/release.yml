@@ -106,7 +106,11 @@ jobs:
       - name: Generate admin release-registration payload
         shell: pwsh
         run: |
-          $releaseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.artifacts.outputs.installer_name }}"
+          # GitHub replaces spaces with dots in uploaded release asset filenames.
+          # productName has no space today, but keep this in case it ever does -
+          # otherwise the registered manifest URL 404s even though the asset is fine.
+          $assetName = "${{ steps.artifacts.outputs.installer_name }}" -replace ' ', '.'
+          $releaseUrl = "https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/$assetName"
           $payload = [ordered]@{
             platform        = "windows-x86_64"
             version         = "${{ steps.version.outputs.version }}"

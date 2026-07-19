@@ -4,6 +4,7 @@ use super::{
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
     ExecutionResult,
 };
+use crate::process_ext::CommandExt;
 
 #[derive(Clone)]
 struct VisualEffectSetting {
@@ -432,11 +433,13 @@ fn registry_value_json(value: &winreg::RegValue) -> Value {
 fn notify_windows_settings_changed() -> Value {
     let update_per_user = std::process::Command::new("rundll32.exe")
         .args(["user32.dll,UpdatePerUserSystemParameters"])
+        .no_window()
         .status()
         .map(|status| status.success())
         .unwrap_or(false);
     let explorer_refresh = std::process::Command::new("ie4uinit.exe")
         .arg("-show")
+        .no_window()
         .status()
         .map(|status| status.success())
         .unwrap_or(false);

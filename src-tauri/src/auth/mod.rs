@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-const SERVICE: &str = "AnalystBlaze Agent";
+const SERVICE: &str = "AnalystBlaze";
 const SESSION_USER: &str = "session";
 const MAX_DEEP_LINK_BYTES: usize = 2048;
 const SINGLE_VALUE_AUTH_PARAMS: &[&str] = &[

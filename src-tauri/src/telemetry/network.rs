@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::process::Command;
 
+use crate::process_ext::CommandExt;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkDiagnostics {
     pub connected: bool,
@@ -216,6 +218,7 @@ pub fn list_network_adapters() -> Vec<NetworkAdapterSummary> {
 fn collect_wifi_info() -> WifiInfo {
     let output = Command::new("netsh")
         .args(["wlan", "show", "interfaces"])
+        .no_window()
         .output()
         .ok();
     let Some(output) = output.filter(|output| output.status.success()) else {
@@ -266,6 +269,7 @@ fn probe_latency(label: &str, target: &str, count: u32) -> NetworkProbe {
 
     let output = Command::new("ping")
         .args(["-n", &count.to_string(), &target])
+        .no_window()
         .output()
         .ok();
     let Some(output) = output else {
@@ -358,6 +362,7 @@ fn powershell_json(script: &str) -> Option<Value> {
             "-Command",
             script,
         ])
+        .no_window()
         .output()
         .ok()?;
     if !output.status.success() {

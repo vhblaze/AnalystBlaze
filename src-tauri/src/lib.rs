@@ -5,6 +5,7 @@ mod audit;
 mod auth;
 mod config;
 mod optimizations;
+mod process_ext;
 mod telemetry;
 mod updater;
 
@@ -962,7 +963,7 @@ fn configure_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .build()?;
 
     let mut tray = TrayIconBuilder::with_id("main")
-        .tooltip("AnalystBlaze Agent")
+        .tooltip("AnalystBlaze")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {

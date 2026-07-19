@@ -442,13 +442,13 @@ type SingleInstancePayload = {
 const DEV_API_BASE_URL = "http://127.0.0.1:8000";
 const PROD_API_BASE_URL = "https://api.analystblaze.com";
 const DEV_WEB_LOGIN_URL = "http://localhost:3000/login";
-const PROD_WEB_LOGIN_URL = "https://analystblaze.app/login";
+const PROD_WEB_LOGIN_URL = "https://analystblaze.com/login";
 const DEV_ACCOUNT_SETTINGS_URL = "http://localhost:3000/configuration";
-const PROD_ACCOUNT_SETTINGS_URL = "https://analystblaze.app/configuration";
+const PROD_ACCOUNT_SETTINGS_URL = "https://analystblaze.com/configuration";
 const DEV_BILLING_URL = "http://localhost:3000/billing";
-const PROD_BILLING_URL = "https://analystblaze.app/billing";
+const PROD_BILLING_URL = "https://analystblaze.com/billing";
 const DEV_INSIGHTS_URL = "http://localhost:3000/insights";
-const PROD_INSIGHTS_URL = "https://analystblaze.app/insights";
+const PROD_INSIGHTS_URL = "https://analystblaze.com/insights";
 
 function resolvePublicEndpoint(
   name: string,

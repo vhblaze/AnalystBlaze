@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use sysinfo::{Components, Disks, ProcessesToUpdate, System};
 
 use crate::optimizations::detection;
+use crate::process_ext::CommandExt;
 
 use super::advanced::{collect_advanced_telemetry, AdvancedTelemetry};
 use super::network::{best_latency_ms, collect_network_sample, NetworkDiagnostics};
@@ -1090,6 +1091,7 @@ $acpi = Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTempera
             "-Command",
             script,
         ])
+        .no_window()
         .output();
 
     let Ok(output) = output else {

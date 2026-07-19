@@ -4,7 +4,7 @@ use url::Url;
 const DEV_API_BASE_URL: &str = "http://127.0.0.1:8000";
 const PROD_API_BASE_URL: &str = "https://api.analystblaze.com";
 const DEV_WEB_BASE_URL: &str = "http://localhost:3000";
-const PROD_WEB_BASE_URL: &str = "https://analystblaze.app";
+const PROD_WEB_BASE_URL: &str = "https://analystblaze.com";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeEnvironment {
