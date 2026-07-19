@@ -28,8 +28,13 @@
     "active": true,
     "targets": "all",
     "windows": {
+      "webviewInstallMode": {
+        "type": "embedBootstrapper",
+        "silent": true
+      },
       "nsis": {
-        "installMode": "perMachine"
+        "installMode": "perMachine",
+        "installerHooks": "installer/hooks.nsh"
       }
     },
     "icon": [
@@ -44,6 +49,15 @@
     "deep-link": {
       "desktop": {
         "schemes": ["analystblaze"]
+      }
+    },
+    "updater": {
+      "pubkey": "TAURI_UPDATER_PUBKEY_AQUI",
+      "endpoints": [
+        "https://api.analystblaze.com/api/v1/updates/manifest?target={{target}}&arch={{arch}}&current_version={{current_version}}"
+      ],
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

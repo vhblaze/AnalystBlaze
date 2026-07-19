@@ -1,10 +1,12 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar, type TopBarNotification, type TopBarSearchItem } from "./TopBar";
+import { UpdateNotice } from "./UpdateNotice";
 import { useAgentTelemetry } from "@/hooks/useAgentTelemetry";
 import { canUseAutomaticGameMode, useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { useTelemetry } from "@/hooks/useTelemetry";
+import { useUpdater } from "@/hooks/useUpdater";
 import { useI18n } from "@/i18n";
 import {
   getPrivilegedHelperStatus,
@@ -30,8 +32,25 @@ export function AppShell() {
   const helperBootstrapStartedRef = useRef(false);
   const auth = useAuth();
   const telemetry = useAgentTelemetry();
+  const updater = useUpdater();
   const { t } = useI18n();
   const track = useTelemetry("navigation");
+
+  const handleUpdateNow = useCallback(() => {
+    updater
+      .apply()
+      .catch((error) => {
+        toast({
+          title: "Atualizacao nao foi instalada",
+          description: String(error),
+          variant: "destructive",
+        });
+      });
+  }, [updater]);
+
+  const handleUpdateLater = useCallback(() => {
+    void updater.dismiss();
+  }, [updater]);
 
   const titles = useMemo<Record<ViewKey, string>>(
     () => ({
@@ -426,6 +445,12 @@ export function AppShell() {
                 count={remoteConfirmationQueue.length}
               />
             )}
+            <UpdateNotice
+              status={updater.status}
+              busy={auth.busy}
+              onUpdateNow={handleUpdateNow}
+              onLater={handleUpdateLater}
+            />
             {!auth.ready ? (
               <div className="text-sm text-slate-500">{t("app.loading")}</div>
             ) : view === "dashboard" ? (
@@ -690,6 +715,39 @@ export function AppShell() {
                         snapshot: false,
                       },
                       () => auth.restoreDelayedStartup(name),
+                    )
+                  }
+                  onFlushDnsCache={() =>
+                    runConfirmed(
+                      {
+                        title: "Limpar cache de DNS",
+                        description: "Executa ipconfig /flushdns. Nao exige admin e nao altera nenhum estado que precise de restauracao.",
+                        risk: "seguro",
+                        snapshot: false,
+                      },
+                      auth.flushDns,
+                    )
+                  }
+                  onSetDnsServers={(adapterName, dnsServers) =>
+                    runConfirmed(
+                      {
+                        title: "Alterar DNS do adaptador",
+                        description: "Troca os servidores DNS do adaptador selecionado. O agente salva a configuracao atual em snapshot local para restaurar depois.",
+                        risk: "sensivel",
+                        snapshot: true,
+                      },
+                      () => auth.setDnsServers(adapterName, dnsServers),
+                    )
+                  }
+                  onResetWinsockCatalog={() =>
+                    runConfirmed(
+                      {
+                        title: "Resetar catalogo Winsock",
+                        description: "Executa netsh winsock reset. E disruptivo, exige reinicializacao do computador e nao pode ser desfeito automaticamente pelo agente.",
+                        risk: "sensivel",
+                        snapshot: false,
+                      },
+                      auth.resetWinsock,
                     )
                   }
                 />

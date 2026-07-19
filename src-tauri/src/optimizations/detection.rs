@@ -98,7 +98,7 @@ pub fn process_still_running(pid: Option<&str>, process_name: Option<&str>) -> b
     })
 }
 
-fn looks_like_game_process(name: &str) -> bool {
+pub(crate) fn looks_like_game_process(name: &str) -> bool {
     let normalized = normalize_process_name(name);
     if is_launcher_process(&normalized) || is_never_game_process(&normalized) {
         return false;

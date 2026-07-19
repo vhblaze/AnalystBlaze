@@ -98,6 +98,10 @@ pub fn status() -> PrivilegedHelperStatus {
     let service_source_trusted = !installed || installed_service_source_is_trusted();
     let request_signing_ready = !installed || helper_signing_key_is_readable();
     let available = installed && running && service_source_trusted && request_signing_ready;
+    let requires_update = installed
+        && helper_version_file()
+            .as_deref()
+            .is_some_and(|version| version != HELPER_VERSION);
     let install_source_trusted =
         current_exe_is_trusted_service_source() && current_exe_has_trusted_signature();
     PrivilegedHelperStatus {
@@ -105,16 +109,19 @@ pub fn status() -> PrivilegedHelperStatus {
         installed,
         running,
         version: helper_version_file(),
-        requires_update: installed
-            && helper_version_file()
-                .as_deref()
-                .is_some_and(|version| version != HELPER_VERSION),
+        requires_update,
         can_request_uac: cfg!(windows) && install_source_trusted,
         supported_actions: supported_actions()
             .iter()
             .map(|action| (*action).to_string())
             .collect(),
-        message: if available {
+        message: if available && requires_update {
+            format!(
+                "Helper privilegiado desatualizado (versao {} instalada, app na versao {}). Reinicie o helper para sincronizar as versoes antes de acoes admin.",
+                helper_version_file().unwrap_or_else(|| "desconhecida".to_string()),
+                HELPER_VERSION,
+            )
+        } else if available {
             "Helper privilegiado instalado e rodando. Acoes admin exigem named pipe local autenticado, request assinado, nonce, expiracao curta, confirmacao local e allowlist.".to_string()
         } else if installed && !service_source_trusted {
             "Helper admin instalado de caminho inseguro. Remova o servico como Administrador e reinstale pelo instalador per-machine/Program Files.".to_string()
@@ -346,12 +353,31 @@ pub fn execute(
         }
         verify_response_signature(&response, &signing_key)?;
 
+        let mut message = response.message;
+        if !response.success && is_protocol_mismatch_message(&message) {
+            audit_helper_event(
+                "warn",
+                "optimization.helper.protocol_mismatch",
+                "Helper privilegiado recusou request por incompatibilidade de versao de protocolo.",
+                json!({ "action_name": action_name, "helper_message": message.clone() }),
+            );
+            message = degraded_helper_message();
+        }
+
         Ok(ExecutionResult {
             success: response.success,
-            message: response.message,
+            message,
             details: response.details,
         })
     }
+}
+
+fn is_protocol_mismatch_message(message: &str) -> bool {
+    message.contains("versao de protocolo")
+}
+
+fn degraded_helper_message() -> String {
+    "Helper privilegiado desatualizado ou incompativel com esta versao do app. Reinicie o helper para sincronizar as versoes antes de tentar novamente.".to_string()
 }
 
 pub fn run_service() {
@@ -1333,6 +1359,8 @@ fn supported_actions() -> &'static [&'static str] {
         "CLEAR_STANDBY_LIST",
         "STOP_SERVICE",
         "RESTORE_SERVICE",
+        "SET_DNS_SERVERS",
+        "RESET_WINSOCK_CATALOG",
     ]
 }
 
@@ -1721,6 +1749,22 @@ mod protocol_tests {
     }
 
     #[test]
+    fn protocol_version_mismatch_is_detected_from_helper_rejection_message() {
+        assert!(is_protocol_mismatch_message(
+            "Request recusado: versao de protocolo inesperada."
+        ));
+        assert!(!is_protocol_mismatch_message(
+            "Request recusado: nonce/action_id reutilizado."
+        ));
+    }
+
+    #[test]
+    fn degraded_helper_message_points_to_restart() {
+        let message = degraded_helper_message();
+        assert!(message.contains("Reinicie o helper"));
+    }
+
+    #[test]
     fn helper_policy_rejects_action_outside_allowlist() {
         let request = signed_request("APPLY_LATENCY_TWEAKS", None);
 
@@ -1728,6 +1772,28 @@ mod protocol_tests {
             .expect_err("critical command is not helper-allowlisted");
 
         assert!(error.contains("allowlist"));
+    }
+
+    #[test]
+    fn helper_policy_allows_set_dns_servers_with_valid_payload() {
+        let request = signed_request(
+            "SET_DNS_SERVERS",
+            Some(json!({ "adapterName": "Ethernet", "dnsServers": ["1.1.1.1", "8.8.8.8"] })),
+        );
+
+        validate_request_execution_policy(&request)
+            .expect("set dns servers should now be helper-allowlisted");
+    }
+
+    #[test]
+    fn helper_policy_allows_winsock_reset_with_explicit_confirmation() {
+        let request = signed_request(
+            "RESET_WINSOCK_CATALOG",
+            Some(json!({ "confirm": "RESET_WINSOCK" })),
+        );
+
+        validate_request_execution_policy(&request)
+            .expect("winsock reset should now be helper-allowlisted");
     }
 }
 

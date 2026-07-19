@@ -142,8 +142,6 @@ pub async fn apply_adaptive_optimization(payload: Option<Value>) -> ExecutionRes
         },
         "hmacCoverage": "new ping/jitter/appImpact fields live inside existing telemetry details/history payloads and are covered by the existing canonical HMAC signer when transmitted",
         "notAutomated": [
-            "winsock_reset_requires_reboot",
-            "dns_server_change_requires_admin_helper_and_dns_snapshot",
             "nic_advanced_properties_are_vendor_specific_and_require_admin_helper",
             "screen_brightness_requires_device_specific_api_validation"
         ],
@@ -272,7 +270,7 @@ fn network_admin_plan(payload: &Value, is_admin: bool) -> Value {
                 "requiresAdmin": false,
                 "requiresReboot": false,
                 "reversible": false,
-                "executionStatus": status,
+                "executionStatus": "automated_via_flush_dns_cache_action",
             },
             {
                 "id": "winsock_reset",
@@ -281,7 +279,7 @@ fn network_admin_plan(payload: &Value, is_admin: bool) -> Value {
                 "requiresAdmin": true,
                 "requiresReboot": true,
                 "reversible": false,
-                "executionStatus": "manual_admin_only",
+                "executionStatus": "automated_via_reset_winsock_catalog_action",
             },
             {
                 "id": "set_dns_servers",
@@ -296,7 +294,11 @@ fn network_admin_plan(payload: &Value, is_admin: bool) -> Value {
                 "requiresAdmin": true,
                 "requiresReboot": false,
                 "reversible": true,
-                "executionStatus": "requires_dns_snapshot_and_helper",
+                "executionStatus": if dns_servers.is_empty() {
+                    "requires_dns_servers_input"
+                } else {
+                    "automated_via_set_dns_servers_action"
+                },
             },
             {
                 "id": "nic_advanced_properties",
@@ -364,7 +366,7 @@ fn payload_bool(payload: &Value, key: &str, default: bool) -> bool {
         .unwrap_or(default)
 }
 
-fn is_safe_dns_literal(value: &str) -> bool {
+pub(crate) fn is_safe_dns_literal(value: &str) -> bool {
     let value = value.trim();
     !value.is_empty()
         && value.len() <= 45

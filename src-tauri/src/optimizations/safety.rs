@@ -179,6 +179,24 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: false,
             requires_privileged_helper: true,
         }),
+        "FLUSH_DNS_CACHE" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Safe,
+            requires_local_confirmation: false,
+            requires_snapshot: false,
+            requires_privileged_helper: false,
+        }),
+        "SET_DNS_SERVERS" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: true,
+            requires_privileged_helper: true,
+        }),
+        "RESET_WINSOCK_CATALOG" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
         "APPLY_LATENCY_TWEAKS" => Some(CommandSafetyProfile {
             risk: RiskLevel::Critical,
             requires_local_confirmation: true,
@@ -207,6 +225,9 @@ pub fn supported_actions() -> &'static [&'static str] {
         "EMPTY_TEMP",
         "PURGE_CLEANUP_QUARANTINE",
         "CLEAR_STANDBY_LIST",
+        "FLUSH_DNS_CACHE",
+        "SET_DNS_SERVERS",
+        "RESET_WINSOCK_CATALOG",
         "SET_POWER_PLAN_HIGH_PERFORMANCE",
         "SET_POWER_PLAN_BALANCED",
         "SET_POWER_PLAN_POWER_SAVER",
@@ -247,6 +268,17 @@ pub fn is_critical_process(name: &str) -> bool {
     ) || normalized.contains("antivirus")
         || normalized.contains("endpoint")
         || normalized.contains("defender")
+}
+
+pub(crate) fn is_safe_network_target(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= MAX_TARGET_LEN
+        && !trimmed.contains('\0')
+        && !trimmed.contains("..")
+        && !trimmed
+            .chars()
+            .any(|ch| matches!(ch, '*' | '?' | '|' | '&' | ';' | '`' | '\'' | '"'))
 }
 
 #[allow(dead_code)]
@@ -438,6 +470,64 @@ fn validate_action_payload(
                 ));
             }
         }
+        "SET_DNS_SERVERS" => {
+            let adapter_name = payload
+                .and_then(|value| {
+                    value
+                        .get("adapterName")
+                        .or_else(|| value.get("adapter_name"))
+                })
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+
+            if !is_safe_network_target(adapter_name) {
+                return Err(safety_error(
+                    "invalid_adapter_name",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "adapter_name": adapter_name }),
+                ));
+            }
+
+            let dns_servers = payload.and_then(|value| {
+                value
+                    .get("dnsServers")
+                    .or_else(|| value.get("dns_servers"))
+                    .and_then(Value::as_array)
+            });
+            let all_safe = dns_servers
+                .map(|items| {
+                    !items.is_empty()
+                        && items.iter().all(|item| {
+                            item.as_str()
+                                .is_some_and(super::adaptive::is_safe_dns_literal)
+                        })
+                })
+                .unwrap_or(false);
+
+            if !all_safe {
+                return Err(safety_error(
+                    "invalid_dns_servers",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "dns_servers": dns_servers }),
+                ));
+            }
+        }
+        "RESET_WINSOCK_CATALOG" if !winsock_reset_confirmed(payload) => {
+            return Err(safety_error(
+                "winsock_reset_confirmation_required",
+                action_name,
+                payload,
+                context,
+                Some(profile),
+                json!({ "confirmation": "RESET_WINSOCK" }),
+            ));
+        }
         _ => {}
     }
 
@@ -507,6 +597,17 @@ fn purge_confirmed(payload: Option<&Value>) -> bool {
         .is_some_and(|value| value == "purge_cleanup_quarantine");
 
     confirmed && confirmation_matches
+}
+
+fn winsock_reset_confirmed(payload: Option<&Value>) -> bool {
+    let Some(payload) = payload else {
+        return false;
+    };
+    payload
+        .get("confirm")
+        .or_else(|| payload.get("confirmation"))
+        .and_then(Value::as_str)
+        .is_some_and(|value| value == "RESET_WINSOCK")
 }
 
 fn extract_target(payload: Option<&Value>) -> Option<String> {
@@ -842,5 +943,91 @@ mod tests {
         assert_eq!(profile.risk, super::RiskLevel::Sensitive);
         assert!(profile.requires_snapshot);
         assert!(!profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn flush_dns_cache_is_safe_and_requires_nothing_extra() {
+        let profile = validate_command(
+            "FLUSH_DNS_CACHE",
+            None,
+            &context(CommandSource::ManualUser, None, false),
+        )
+        .expect("flush dns cache should be allowed without confirmation");
+
+        assert_eq!(profile.risk, super::RiskLevel::Safe);
+        assert!(!profile.requires_local_confirmation);
+        assert!(!profile.requires_snapshot);
+        assert!(!profile.requires_privileged_helper);
+    }
+
+    fn context_with_helper(confirmation: bool) -> SafetyContext<'static> {
+        SafetyContext {
+            source: CommandSource::ManualUser,
+            allowed_actions: None,
+            local_confirmation: confirmation,
+            privileged_helper_available: true,
+        }
+    }
+
+    #[test]
+    fn set_dns_servers_requires_helper_and_valid_payload() {
+        let helper_unavailable = validate_command(
+            "SET_DNS_SERVERS",
+            Some(&json!({ "adapterName": "Ethernet", "dnsServers": ["1.1.1.1"] })),
+            &context(CommandSource::ManualUser, None, true),
+        );
+        assert_eq!(
+            helper_unavailable.unwrap_err().reason,
+            "privileged_helper_unavailable"
+        );
+
+        let missing_adapter = validate_command(
+            "SET_DNS_SERVERS",
+            Some(&json!({ "dnsServers": ["1.1.1.1"] })),
+            &context_with_helper(true),
+        );
+        assert_eq!(missing_adapter.unwrap_err().reason, "invalid_adapter_name");
+
+        let bad_dns = validate_command(
+            "SET_DNS_SERVERS",
+            Some(&json!({ "adapterName": "Ethernet", "dnsServers": ["$(bad)"] })),
+            &context_with_helper(true),
+        );
+        assert_eq!(bad_dns.unwrap_err().reason, "invalid_dns_servers");
+
+        let profile = validate_command(
+            "SET_DNS_SERVERS",
+            Some(&json!({ "adapterName": "Ethernet", "dnsServers": ["1.1.1.1", "8.8.8.8"] })),
+            &context_with_helper(true),
+        )
+        .expect("set dns servers should be allowed with a valid adapter and dns literals");
+
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn reset_winsock_catalog_requires_explicit_confirmation_payload() {
+        let missing_confirmation = validate_command(
+            "RESET_WINSOCK_CATALOG",
+            None,
+            &context_with_helper(true),
+        );
+        assert_eq!(
+            missing_confirmation.unwrap_err().reason,
+            "winsock_reset_confirmation_required"
+        );
+
+        let profile = validate_command(
+            "RESET_WINSOCK_CATALOG",
+            Some(&json!({ "confirm": "RESET_WINSOCK" })),
+            &context_with_helper(true),
+        )
+        .expect("winsock reset should be allowed after explicit confirmation");
+
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(!profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
     }
 }

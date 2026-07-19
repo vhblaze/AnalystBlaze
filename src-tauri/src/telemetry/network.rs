@@ -39,6 +39,14 @@ pub struct NetworkProbe {
     pub jitter_ms: Option<f64>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NetworkAdapterSummary {
+    pub name: String,
+    pub description: Option<String>,
+    pub status: Option<String>,
+}
+
 #[derive(Debug, Clone, Default)]
 struct AdapterInfo {
     name: Option<String>,
@@ -177,6 +185,32 @@ fn collect_active_adapter() -> AdapterInfo {
             })
             .unwrap_or_default(),
     }
+}
+
+pub fn list_network_adapters() -> Vec<NetworkAdapterSummary> {
+    let Some(value) = powershell_json(
+        "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object Name,InterfaceDescription,Status | ConvertTo-Json -Compress",
+    ) else {
+        return Vec::new();
+    };
+
+    let items: Vec<Value> = match value {
+        Value::Array(items) => items,
+        Value::Object(_) => vec![value],
+        _ => Vec::new(),
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let name = text_field(item, "Name")?;
+            Some(NetworkAdapterSummary {
+                name,
+                description: text_field(item, "InterfaceDescription"),
+                status: text_field(item, "Status"),
+            })
+        })
+        .collect()
 }
 
 fn collect_wifi_info() -> WifiInfo {

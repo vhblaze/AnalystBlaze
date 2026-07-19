@@ -165,8 +165,15 @@ No primeiro login de um computador, o desktop envia um fingerprint de hardware p
 
 Nao coloque secrets em variaveis `VITE_*`: elas entram no bundle publico.
 
+## Auto-Update
+
+O agente verifica atualizacoes em segundo plano (poucos minutos apos abrir, depois a cada ~8h) e via botao manual em Configuracoes. Ao detectar uma versao nova ele so avisa e baixa em segundo plano; instalar sempre exige clique em "Atualizar agora". O endpoint de manifesto e resolvido a partir da mesma `ANALYSTBLAZE_API_URL` usada pelo resto do agente (nunca duplicado), e todo pacote e verificado com a chave publica em `plugins.updater.pubkey` (`src-tauri/tauri.conf.json`) antes de instalar.
+
+Para gerar chaves, publicar uma release e registrar o manifesto no server, veja [`RELEASING.md`](RELEASING.md).
+
 ## Documentacao
 
+- [`RELEASING.md`](RELEASING.md): passo a passo de release, gestao da chave do updater e checklist de sanidade.
 - [`docs/README.md`](docs/README.md): indice dos documentos tecnicos.
 - [`docs/optimization-safety-matrix.md`](docs/optimization-safety-matrix.md): acoes reversiveis, irreversiveis, sensiveis e bloqueadas.
 - [`docs/security-assumptions.md`](docs/security-assumptions.md): premissas de seguranca do desktop.

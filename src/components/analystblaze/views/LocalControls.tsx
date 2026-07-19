@@ -18,6 +18,7 @@ import {
   getWindowsInventory,
   installPrivilegedHelper,
   isTauriRuntime,
+  listNetworkAdapters,
   restartPrivilegedHelper,
   runPerformanceScan,
   scanCleanupCategories,
@@ -32,6 +33,7 @@ import {
   type FocusSession,
   type GameModeSession,
   type LocalAiPolicy,
+  type NetworkAdapterSummary,
   type NetworkDiagnostics,
   type OptimizationSnapshot,
   type PerformanceReport,
@@ -64,6 +66,9 @@ export function LocalControls({
   onApplyCleanupCategory,
   onDelayStartupApp,
   onRestoreDelayedStartupApp,
+  onFlushDnsCache,
+  onSetDnsServers,
+  onResetWinsockCatalog,
 }: {
   status: AgentStatus | null;
   automaticGameModeAllowed?: boolean;
@@ -87,6 +92,9 @@ export function LocalControls({
   onApplyCleanupCategory: (category: string, mode?: string | null) => Promise<unknown>;
   onDelayStartupApp: (name: string, location?: string | null) => Promise<unknown>;
   onRestoreDelayedStartupApp: (name?: string | null) => Promise<unknown>;
+  onFlushDnsCache: () => Promise<unknown>;
+  onSetDnsServers: (adapterName: string, dnsServers: string[]) => Promise<unknown>;
+  onResetWinsockCatalog: () => Promise<unknown>;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("local_controls");
@@ -101,6 +109,10 @@ export function LocalControls({
   const [activeFocusSession, setActiveFocusSession] = useState<FocusSession | null>(status?.focus_session ?? null);
   const [localAiPolicy, setLocalAiPolicy] = useState<LocalAiPolicy | null>(null);
   const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(null);
+  const [networkAdapters, setNetworkAdapters] = useState<NetworkAdapterSummary[]>([]);
+  const [dnsAdapterName, setDnsAdapterName] = useState("");
+  const [dnsPrimary, setDnsPrimary] = useState("");
+  const [dnsSecondary, setDnsSecondary] = useState("");
   const [energyDiagnostics, setEnergyDiagnostics] = useState<EnergyDiagnostics | null>(null);
   const [performanceReport, setPerformanceReport] = useState<PerformanceReport | null>(null);
   const [cleanupCategories, setCleanupCategories] = useState<CleanupCategory[]>([]);
@@ -202,16 +214,23 @@ export function LocalControls({
     setDiagnosticsBusy(true);
     setDiagnosticsError(null);
     try {
-      const [nextNetwork, nextEnergy] = await Promise.all([
+      const [nextNetwork, nextEnergy, nextAdapters] = await Promise.all([
         getNetworkDiagnostics(),
         getEnergyDiagnostics(),
+        listNetworkAdapters(),
       ]);
       setNetworkDiagnostics(nextNetwork);
       setEnergyDiagnostics(nextEnergy);
+      setNetworkAdapters(nextAdapters);
+      setDnsAdapterName((current) => {
+        if (current && nextAdapters.some((adapter) => adapter.name === current)) return current;
+        return nextNetwork.adapter_name ?? nextAdapters[0]?.name ?? "";
+      });
       track("network_energy_refreshed");
     } catch (error) {
       setNetworkDiagnostics(null);
       setEnergyDiagnostics(null);
+      setNetworkAdapters([]);
       setDiagnosticsError(errorMessage(error));
     } finally {
       setDiagnosticsBusy(false);
@@ -325,6 +344,30 @@ export function LocalControls({
         await refreshOperationalHistory();
       },
       successMessage,
+    );
+  };
+
+  const runNetworkAction = async (action: () => Promise<unknown>, successMessage: string) => {
+    await runControlAction(
+      async () => {
+        const result = await action();
+        if (result === false) return false;
+        await refreshNetworkAndEnergy();
+        await refreshOperationalHistory();
+      },
+      successMessage,
+    );
+  };
+
+  const applyDnsServers = async () => {
+    const servers = [dnsPrimary, dnsSecondary].map((value) => value.trim()).filter(Boolean);
+    if (!dnsAdapterName || servers.length === 0) {
+      setActionMessage("Selecione um adaptador e informe ao menos um servidor DNS.");
+      return;
+    }
+    await runNetworkAction(
+      () => onSetDnsServers(dnsAdapterName, servers),
+      "Servidores DNS alterados.",
     );
   };
 
@@ -729,6 +772,75 @@ export function LocalControls({
               </div>
             }
           />
+        </div>
+
+        <div className="mt-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
+            <Wifi className="h-4 w-4 text-cyan-300" />
+            Ajustes de rede admin
+          </div>
+          <p className="mt-1 text-xs text-slate-500">
+            Acoes que mexem em DNS e no catalogo Winsock. Troca de DNS e reset de Winsock exigem o helper privilegiado instalado.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              disabled={busy || diagnosticsBusy || !runtimeAvailable}
+              onClick={() => void runNetworkAction(onFlushDnsCache, "Cache de DNS limpo.")}
+              className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+            >
+              Limpar cache DNS
+            </button>
+            <button
+              disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available}
+              onClick={() => void runNetworkAction(
+                onResetWinsockCatalog,
+                "Catalogo Winsock resetado. Reinicie o computador para concluir.",
+              )}
+              className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
+              title={!helperStatus?.available ? "Instale o helper privilegiado para liberar esta acao." : "Exige reinicializacao do computador."}
+            >
+              Resetar Winsock
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-2 sm:grid-cols-4">
+            <select
+              value={dnsAdapterName}
+              onChange={(event) => setDnsAdapterName(event.target.value)}
+              disabled={busy || diagnosticsBusy || !runtimeAvailable || networkAdapters.length === 0}
+              className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60 sm:col-span-2 disabled:opacity-50"
+            >
+              {networkAdapters.length === 0 ? (
+                <option value="">Nenhum adaptador ativo encontrado</option>
+              ) : (
+                networkAdapters.map((adapter) => (
+                  <option key={adapter.name} value={adapter.name}>
+                    {adapter.name}
+                  </option>
+                ))
+              )}
+            </select>
+            <input
+              value={dnsPrimary}
+              onChange={(event) => setDnsPrimary(event.target.value)}
+              placeholder="DNS primario (ex: 1.1.1.1)"
+              className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60"
+            />
+            <input
+              value={dnsSecondary}
+              onChange={(event) => setDnsSecondary(event.target.value)}
+              placeholder="DNS secundario (opcional)"
+              className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60"
+            />
+          </div>
+          <button
+            disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available || !dnsAdapterName}
+            onClick={() => void applyDnsServers()}
+            className="mt-3 inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
+            title={!helperStatus?.available ? "Instale o helper privilegiado para liberar esta acao." : undefined}
+          >
+            Aplicar DNS
+          </button>
         </div>
       </section>
 

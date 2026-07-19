@@ -6,6 +6,7 @@ mod auth;
 mod config;
 mod optimizations;
 mod telemetry;
+mod updater;
 
 use std::sync::Mutex;
 
@@ -463,6 +464,43 @@ async fn restore_windows_service(
 }
 
 #[tauri::command]
+async fn flush_dns_cache() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("FLUSH_DNS_CACHE", None).await)
+}
+
+#[tauri::command]
+async fn set_dns_servers(
+    adapter_name: String,
+    dns_servers: Vec<String>,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "SET_DNS_SERVERS",
+        Some(serde_json::json!({
+            "adapterName": adapter_name,
+            "dnsServers": dns_servers,
+        })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn reset_winsock_catalog() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "RESET_WINSOCK_CATALOG",
+        Some(serde_json::json!({ "confirm": "RESET_WINSOCK" })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn list_network_adapters() -> Result<Vec<telemetry::network::NetworkAdapterSummary>, String>
+{
+    tokio::task::spawn_blocking(telemetry::network::list_network_adapters)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn apply_visual_performance_mode() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command("APPLY_VISUAL_PERFORMANCE_MODE", None).await)
 }
@@ -720,6 +758,26 @@ async fn telemetry_snapshot(
 }
 
 #[tauri::command]
+async fn update_status(app: AppHandle) -> updater::UpdateStatus {
+    updater::get_status(app).await
+}
+
+#[tauri::command]
+async fn check_for_update(app: AppHandle, state: State<'_, AgentState>) -> Result<updater::UpdateStatus, String> {
+    Ok(updater::check_and_maybe_download(app, state.config.api_base_url.clone()).await)
+}
+
+#[tauri::command]
+async fn apply_update(app: AppHandle) -> Result<updater::UpdateStatus, String> {
+    updater::apply_update(app).await
+}
+
+#[tauri::command]
+async fn dismiss_update(app: AppHandle) -> Result<updater::UpdateStatus, String> {
+    Ok(updater::dismiss_update(app).await)
+}
+
+#[tauri::command]
 async fn fetch_authenticated_insights(
     accept_language: Option<String>,
     state: State<'_, AgentState>,
@@ -775,14 +833,19 @@ pub fn run() {
         telemetry_state: new_shared_telemetry_state(),
     };
 
+    let updater_api_base_url = state.config.api_base_url.clone();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
             let _ = app.emit("single-instance", SingleInstancePayload { args, cwd });
         }))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .manage(state)
-        .setup(|app| {
+        .manage(updater::new_shared_updater_state())
+        .setup(move |app| {
             configure_tray(app)?;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.center();
@@ -803,6 +866,9 @@ pub fn run() {
                 let _ = ensure_agent_running(&state, app.handle());
             }
             optimizations::performance_suite::spawn_delayed_startup_runner();
+
+            updater::reconcile_startup_outcome();
+            updater::spawn_background_checks(app.handle().clone(), updater_api_base_url.clone());
 
             Ok(())
         })
@@ -829,6 +895,10 @@ pub fn run() {
             windows_inventory,
             network_diagnostics,
             energy_diagnostics,
+            flush_dns_cache,
+            set_dns_servers,
+            reset_winsock_catalog,
+            list_network_adapters,
             protected_apps,
             add_protected_app,
             remove_protected_app,
@@ -869,6 +939,10 @@ pub fn run() {
             collect_once,
             telemetry_snapshot,
             fetch_authenticated_insights,
+            update_status,
+            check_for_update,
+            apply_update,
+            dismiss_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

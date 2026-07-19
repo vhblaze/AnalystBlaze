@@ -4,6 +4,8 @@ use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
 use sysinfo::{Components, Disks, ProcessesToUpdate, System};
 
+use crate::optimizations::detection;
+
 use super::advanced::{collect_advanced_telemetry, AdvancedTelemetry};
 use super::network::{best_latency_ms, collect_network_sample, NetworkDiagnostics};
 
@@ -1335,9 +1337,22 @@ fn detect_local_context(
             "twitch",
             "vlc",
         ]);
-    let gaming = gaming_process
-        || gaming_window
-        || (gpu_usage >= 65.0 && cpu_usage >= 25.0 && idle_seconds < 120);
+    let known_game_process = process_names
+        .iter()
+        .any(|name| detection::looks_like_game_process(name));
+    let gpu_cpu_co_activation = gpu_usage >= 65.0 && cpu_usage >= 25.0 && idle_seconds < 120;
+    let gaming = known_game_process || gaming_process || gaming_window || gpu_cpu_co_activation;
+    let (game_confidence, game_detection_reason) = if known_game_process {
+        (0.85, "known_game_process_running")
+    } else if gaming_process {
+        (0.55, "process_name_heuristic_match")
+    } else if gaming_window {
+        (0.45, "active_window_heuristic_match")
+    } else if gpu_cpu_co_activation {
+        (0.30, "gpu_cpu_co_activation")
+    } else {
+        (0.0, "no_game_signal")
+    };
     let idle = idle_seconds >= 300;
     let activity = if idle {
         "idle"
@@ -1353,11 +1368,22 @@ fn detect_local_context(
 
     json!({
         "activity": activity,
+        // "signals" is the object forwarded to the backend as-is (see
+        // backend_sample_context/compact_sample_context in telemetry/engine.rs, which only
+        // passes through /local_context/activity and /local_context/signals - anything added
+        // as a sibling of "signals" here never leaves the device). game_detected/game_confidence/
+        // game_detection_reason are a privacy-safe composite result (boolean/float/short reason
+        // string only, never the process name or window title) so the server can use a real
+        // signal instead of re-deriving one from `active_window`, which is redacted to
+        // "[local_only]" before transmission whenever diagnostic telemetry is off.
         "signals": {
             "gaming": gaming,
             "music": music,
             "video": video,
             "idle": idle,
+            "game_detected": gaming,
+            "game_confidence": game_confidence,
+            "game_detection_reason": game_detection_reason,
         },
         "media": {
             "music": music,

@@ -10,6 +10,7 @@ import {
   deepCleanTemp,
   delayStartupApp,
   disableStartupApp,
+  flushDnsCache,
   getAgentStatus,
   isTauriRuntime,
   logoutAgent,
@@ -25,7 +26,9 @@ import {
   restoreVisualEffects,
   restoreWindowsService,
   purgeCleanupQuarantine,
+  resetWinsockCatalog,
   setAgentTelemetryMode,
+  setDnsServers as setDnsServersAction,
   setPowerPlanBalanced,
   setPowerPlanHighPerformance,
   setPowerPlanPowerSaver,
@@ -456,6 +459,63 @@ export function useAuth() {
     [runAction],
   );
 
+  const flushDns = useCallback(async () => {
+    const result = await runAction(async () => {
+      const result = await flushDnsCache();
+      setMessage({
+        key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+        params: { message: result.message },
+      });
+      captureTelemetry({
+        name: result.success ? "dns_cache_flushed" : "dns_cache_flush_failed",
+        category: "agent",
+        properties: {},
+      });
+      return result;
+    }, { rethrow: true });
+    if (result && !result.success) throw new Error(result.message);
+    return result;
+  }, [runAction]);
+
+  const setDnsServers = useCallback(
+    async (adapterName: string, dnsServers: string[]) => {
+      const result = await runAction(async () => {
+        const result = await setDnsServersAction(adapterName, dnsServers);
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? "dns_servers_changed" : "dns_servers_change_failed",
+          category: "agent",
+          properties: { adapter: adapterName },
+        });
+        return result;
+      }, { rethrow: true });
+      if (result && !result.success) throw new Error(result.message);
+      return result;
+    },
+    [runAction],
+  );
+
+  const resetWinsock = useCallback(async () => {
+    const result = await runAction(async () => {
+      const result = await resetWinsockCatalog();
+      setMessage({
+        key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+        params: { message: result.message },
+      });
+      captureTelemetry({
+        name: result.success ? "winsock_catalog_reset" : "winsock_catalog_reset_failed",
+        category: "agent",
+        properties: {},
+      });
+      return result;
+    }, { rethrow: true });
+    if (result && !result.success) throw new Error(result.message);
+    return result;
+  }, [runAction]);
+
   const applyVisualPerformance = useCallback(async () => {
     const result = await runAction(async () => {
       const result = await applyVisualPerformanceMode();
@@ -706,6 +766,9 @@ export function useAuth() {
     stopService,
     restoreService,
     setPowerPlan,
+    flushDns,
+    setDnsServers,
+    resetWinsock,
     applyVisualPerformance,
     restoreVisualPerformance,
     cleanTempDeep,

@@ -80,6 +80,11 @@ pub enum SnapshotEntry {
         target_value_type: String,
         target_value_bytes: Vec<u8>,
     },
+    DnsConfiguration {
+        adapter_name: String,
+        previous_dns_servers: Vec<String>,
+        was_dhcp: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -610,6 +615,24 @@ pub fn restore_snapshot_entries(snapshot: &OptimizationSnapshot) -> SnapshotRest
                     }
                 },
             },
+            SnapshotEntry::DnsConfiguration {
+                adapter_name,
+                previous_dns_servers,
+                was_dhcp,
+            } => match restore_dns_configuration(adapter_name, previous_dns_servers, *was_dhcp) {
+                Ok(()) => {
+                    summary.restored_entries += 1;
+                    summary.messages.push(format!(
+                        "Configuracao de DNS restaurada para o adaptador {adapter_name}."
+                    ));
+                }
+                Err(error) => {
+                    summary.failed_entries += 1;
+                    summary.messages.push(format!(
+                        "Falha ao restaurar DNS do adaptador {adapter_name}: {error}"
+                    ));
+                }
+            },
         }
     }
 
@@ -851,6 +874,62 @@ fn start_service(service_name: &str) -> Result<(), String> {
         let _ = service_name;
         Err("Servicos do Windows indisponiveis nesta plataforma.".to_string())
     }
+}
+
+#[cfg(windows)]
+fn restore_dns_configuration(
+    adapter_name: &str,
+    previous_dns_servers: &[String],
+    was_dhcp: bool,
+) -> Result<(), String> {
+    let script = if was_dhcp {
+        format!(
+            "Set-DnsClientServerAddress -InterfaceAlias '{}' -ResetServerAddresses",
+            escape_powershell_literal(adapter_name)
+        )
+    } else {
+        let servers = previous_dns_servers
+            .iter()
+            .map(|server| format!("'{}'", escape_powershell_literal(server)))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "Set-DnsClientServerAddress -InterfaceAlias '{}' -ServerAddresses @({})",
+            escape_powershell_literal(adapter_name),
+            servers
+        )
+    };
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(windows)]
+fn escape_powershell_literal(value: &str) -> String {
+    value.replace('\'', "''")
+}
+
+#[cfg(not(windows))]
+fn restore_dns_configuration(
+    _adapter_name: &str,
+    _previous_dns_servers: &[String],
+    _was_dhcp: bool,
+) -> Result<(), String> {
+    Err("Configuracao de DNS indisponivel nesta plataforma.".to_string())
 }
 
 fn notify_user_settings_changed() {

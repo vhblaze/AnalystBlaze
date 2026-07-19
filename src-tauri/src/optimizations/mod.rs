@@ -6,6 +6,7 @@ pub mod focus;
 pub mod latency;
 pub mod local_ai_policy;
 pub mod memory;
+pub mod network_admin;
 pub mod performance_suite;
 pub mod privileged_helper;
 pub mod processes;
@@ -204,6 +205,9 @@ async fn execute_command_checked_with_helper(
         "EMPTY_TEMP" => cleanup::empty_temp(payload).await,
         "PURGE_CLEANUP_QUARANTINE" => cleanup::purge_cleanup_quarantine(payload).await,
         "CLEAR_STANDBY_LIST" => memory::clear_standby_list(payload).await,
+        "FLUSH_DNS_CACHE" => network_admin::flush_dns_cache(payload).await,
+        "SET_DNS_SERVERS" => network_admin::set_dns_servers(payload).await,
+        "RESET_WINSOCK_CATALOG" => network_admin::reset_winsock_catalog(payload).await,
         "APPLY_VISUAL_PERFORMANCE_MODE" => {
             visual_effects::apply_visual_performance_mode(payload).await
         }

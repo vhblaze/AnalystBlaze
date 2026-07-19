@@ -187,6 +187,22 @@ export type AuditEvent = {
   details: unknown;
 };
 
+export type UpdateStatus = {
+  currentVersion: string;
+  checking: boolean;
+  installing: boolean;
+  available: boolean;
+  version?: string | null;
+  notes?: string | null;
+  pubDate?: string | null;
+  minimumVersion?: string | null;
+  mandatory: boolean;
+  downloaded: boolean;
+  lastCheckedAt?: number | null;
+  lastError?: string | null;
+  dismissedUntil?: number | null;
+};
+
 export type OptimizationSnapshot = {
   id: string;
   action_name: string;
@@ -262,6 +278,12 @@ export type NetworkDiagnostics = {
   probes: NetworkProbe[];
   recommendations: string[];
   refreshed_at: number;
+};
+
+export type NetworkAdapterSummary = {
+  name: string;
+  description?: string | null;
+  status?: string | null;
 };
 
 export type EnergyDiagnostics = {
@@ -569,6 +591,40 @@ export async function getAuditLog(limit = 120): Promise<AuditEvent[]> {
   return invoke<AuditEvent[]>("audit_log", { limit });
 }
 
+const fallbackUpdateStatus: UpdateStatus = {
+  currentVersion: "0.1.0",
+  checking: false,
+  installing: false,
+  available: false,
+  mandatory: false,
+  downloaded: false,
+};
+
+export async function getUpdateStatus(): Promise<UpdateStatus> {
+  if (!isTauriRuntime()) return fallbackUpdateStatus;
+  return invoke<UpdateStatus>("update_status");
+}
+
+export async function checkForUpdate(): Promise<UpdateStatus> {
+  if (!isTauriRuntime()) return fallbackUpdateStatus;
+  return invoke<UpdateStatus>("check_for_update");
+}
+
+export async function applyUpdate(): Promise<UpdateStatus> {
+  requireTauriRuntime("Instalacao de atualizacoes");
+  return invoke<UpdateStatus>("apply_update");
+}
+
+export async function dismissUpdate(): Promise<UpdateStatus> {
+  requireTauriRuntime("Adiar atualizacao");
+  return invoke<UpdateStatus>("dismiss_update");
+}
+
+export async function listenToUpdateStatus(onStatus: (status: UpdateStatus) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<UpdateStatus>("update-status-changed", (event) => onStatus(event.payload));
+}
+
 export async function getOptimizationPreview(
   actionName: string,
   payload?: Record<string, unknown> | null,
@@ -600,6 +656,29 @@ export async function getNetworkDiagnostics(): Promise<NetworkDiagnostics> {
 export async function getEnergyDiagnostics(): Promise<EnergyDiagnostics> {
   requireTauriRuntime("Diagnostico real de energia");
   return invoke<EnergyDiagnostics>("energy_diagnostics");
+}
+
+export async function listNetworkAdapters(): Promise<NetworkAdapterSummary[]> {
+  requireTauriRuntime("Lista de adaptadores de rede");
+  return invoke<NetworkAdapterSummary[]>("list_network_adapters");
+}
+
+export async function flushDnsCache(): Promise<OptimizationResult> {
+  requireTauriRuntime("Limpeza de cache DNS");
+  return invoke<OptimizationResult>("flush_dns_cache");
+}
+
+export async function setDnsServers(
+  adapterName: string,
+  dnsServers: string[],
+): Promise<OptimizationResult> {
+  requireTauriRuntime("Alteracao de servidores DNS");
+  return invoke<OptimizationResult>("set_dns_servers", { adapterName, dnsServers });
+}
+
+export async function resetWinsockCatalog(): Promise<OptimizationResult> {
+  requireTauriRuntime("Reset do catalogo Winsock");
+  return invoke<OptimizationResult>("reset_winsock_catalog");
 }
 
 export async function getProtectedApps(): Promise<ProtectedApp[]> {

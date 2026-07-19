@@ -1,4 +1,4 @@
-import { Brain, Check, ExternalLink, Eye, Globe, LogOut, Moon, Shield, Sparkles, Sun, User as UserIcon, Zap } from "lucide-react";
+import { Brain, Check, DownloadCloud, ExternalLink, Eye, Globe, LogOut, Moon, RefreshCw, Shield, Sparkles, Sun, User as UserIcon, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -8,6 +8,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { isUpdateDismissedNow, useUpdater } from "@/hooks/useUpdater";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useTheme } from "@/hooks/useTheme";
 import { canUseAutomaticGameMode, type AgentMessage, type User } from "@/hooks/useAuth";
@@ -47,6 +48,16 @@ export function Settings({
   const { theme, setTheme } = useTheme();
   const { t, locale, setLocale } = useI18n();
   const track = useTelemetry("settings");
+  const updater = useUpdater();
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const checkForUpdatesNow = () => {
+    setCheckingUpdate(true);
+    updater
+      .check()
+      .then((next) => track("update_check_requested", { available: next.available }))
+      .catch(() => undefined)
+      .finally(() => setCheckingUpdate(false));
+  };
   const didMountPreferences = useRef(false);
   const [telem, setTelem] = useState(isTelemetryEnabled);
   const [queueSize, setQueueSize] = useState(getTelemetryQueueSize);
@@ -379,6 +390,44 @@ export function Settings({
         />
         <div className="mt-3 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4 font-mono text-[11px] uppercase tracking-widest text-slate-500">
           {t("settings.telemetryBuffer")}: {queueSize}
+        </div>
+      </section>
+
+      <section className="glass-panel cyber-glow p-6">
+        <div className="flex items-center gap-2 pb-4">
+          <DownloadCloud className="h-3.5 w-3.5 text-cyan-300" />
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("update.title")}</h2>
+          {updater.status?.available && (
+            <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-cyan-200">
+              <span className="h-1 w-1 animate-pulse rounded-full bg-cyan-300" />
+              {t("update.badgeAvailable")}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-col gap-3">
+          <Row
+            label={t("update.currentVersion")}
+            description={
+              updater.status?.available && isUpdateDismissedNow(updater.status)
+                ? t("update.availableTitle", { version: updater.status.version ?? "" })
+                : updater.status
+                  ? t("update.upToDate")
+                  : t("update.neverChecked")
+            }
+            control={
+              <button
+                disabled={checkingUpdate}
+                onClick={checkForUpdatesNow}
+                className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${checkingUpdate ? "animate-spin" : ""}`} />
+                {checkingUpdate ? t("update.checking") : t("update.checkButton")}
+              </button>
+            }
+          />
+          <div className="rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4 font-mono text-[11px] uppercase tracking-widest text-slate-500">
+            {updater.status?.currentVersion ?? "-"}
+          </div>
         </div>
       </section>
 
