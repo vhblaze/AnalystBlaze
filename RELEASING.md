@@ -146,12 +146,17 @@ tone in the UI (still asks for consent - see
 security fixes or server-breaking changes only; leave it `null` for routine
 releases.
 
-## 6. Update the web download wizard's SHA-256
+## 6. Update the web download wizard's env vars
 
-The web app's download/install wizard (`AnalystBlaze-web`) displays the
-installer's SHA-256 for manual verification. Update it with the value from
-`release-manifest.json` (`sha256` field) or the `.sha256` file in the release
-assets.
+The web app's download/install wizard (`AnalystBlaze-web`,
+`DownloadAgentView.tsx`) reads the installer URL/version/channel from
+`NEXT_PUBLIC_AGENT_INSTALLER_URL`, `NEXT_PUBLIC_AGENT_INSTALLER_VERSION`,
+`NEXT_PUBLIC_AGENT_RELEASE_CHANNEL`, and `NEXT_PUBLIC_AGENT_RELEASE_NOTES_URL`.
+Update these in the Vercel deploy to point at the new release. The SHA-256
+(`NEXT_PUBLIC_AGENT_INSTALLER_SHA256`, from `release-manifest.json`'s `sha256`
+field or the `.sha256` asset) is no longer shown in the end-user UI - it's
+kept only for the local install-consent record - but keep it in sync anyway
+since it's cheap and future UI may want it back.
 
 ## 7. Sanity checklist
 
