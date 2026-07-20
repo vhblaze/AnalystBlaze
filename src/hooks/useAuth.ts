@@ -35,8 +35,10 @@ import {
   startAgent,
   stopWindowsService,
   listenToAgentSessionInvalidated,
+  listenToPlanSynced,
   restorePerformanceSession,
   runPerformanceScan,
+  syncAccountPlan,
   type AgentStatus,
   type AgentTelemetrySample,
   type FocusModeProfile,
@@ -74,11 +76,34 @@ export function useAuth() {
   const [message, setMessage] = useState<AgentMessage>({ key: "agent.messages.initializing" });
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [syncingPlan, setSyncingPlan] = useState(false);
 
   const refreshStatus = useCallback(async () => {
     const nextStatus = await getAgentStatus();
     setStatus(nextStatus);
     return nextStatus;
+  }, []);
+
+  const syncPlan = useCallback(async () => {
+    setSyncingPlan(true);
+    try {
+      const nextStatus = await syncAccountPlan();
+      setStatus(nextStatus);
+      setMessage({
+        key: nextStatus.plan_sync_error ? "agent.messages.planSyncFailed" : "agent.messages.planSynced",
+      });
+      captureTelemetry({
+        name: nextStatus.plan_sync_error ? "plan_sync_failed" : "plan_synced",
+        category: "agent",
+      });
+      return nextStatus;
+    } catch (error) {
+      setMessage({ key: "agent.messages.error", params: { message: String(error) } });
+      captureTelemetry({ name: "plan_sync_failed", category: "agent" });
+      throw error;
+    } finally {
+      setSyncingPlan(false);
+    }
   }, []);
 
   const handleDeepLink = useCallback(async (url: string) => {
@@ -118,9 +143,17 @@ export function useAuth() {
       disposeInvalidated = dispose;
     });
 
+    let disposePlanSynced: (() => void) | undefined;
+    listenToPlanSynced((nextStatus) => {
+      setStatus(nextStatus);
+    }).then((dispose) => {
+      disposePlanSynced = dispose;
+    });
+
     return () => {
       disposeDeepLinks?.();
       disposeInvalidated?.();
+      disposePlanSynced?.();
     };
   }, [handleDeepLink, refreshStatus]);
 
@@ -749,6 +782,8 @@ export function useAuth() {
     sample,
     message,
     busy,
+    syncingPlan,
+    syncPlan,
     login,
     logout,
     openAccountSettings,

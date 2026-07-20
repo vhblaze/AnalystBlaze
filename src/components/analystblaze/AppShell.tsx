@@ -759,12 +759,14 @@ export function AppShell() {
                   status={auth.status}
                   message={auth.message}
                   busy={auth.busy}
+                  syncingPlan={auth.syncingPlan}
                   onLogin={auth.login}
                   onLogout={auth.logout}
                   onOpenAccountSettings={auth.openAccountSettings}
                   onOpenBilling={auth.openBilling}
                   onStartAgent={auth.start}
                   onCollectSample={auth.collectSample}
+                  onSyncPlan={auth.syncPlan}
                 />
               </Suspense>
             )}

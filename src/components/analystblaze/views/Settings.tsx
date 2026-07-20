@@ -27,23 +27,27 @@ export function Settings({
   status,
   message,
   busy,
+  syncingPlan,
   onLogin,
   onLogout,
   onOpenAccountSettings,
   onOpenBilling,
   onStartAgent,
   onCollectSample,
+  onSyncPlan,
 }: {
   user: User | null;
   status: AgentStatus | null;
   message: AgentMessage;
   busy: boolean;
+  syncingPlan: boolean;
   onLogin: () => Promise<void>;
   onLogout: () => Promise<void>;
   onOpenAccountSettings: () => Promise<void>;
   onOpenBilling: () => Promise<void>;
   onStartAgent: () => Promise<void>;
   onCollectSample: () => Promise<AgentTelemetrySample>;
+  onSyncPlan: () => Promise<unknown>;
 }) {
   const { theme, setTheme } = useTheme();
   const { t, locale, setLocale } = useI18n();
@@ -454,6 +458,29 @@ export function Settings({
                 <span className="h-1 w-1 rounded-full bg-emerald-400" />
                 {isReady ? t("common.online") : t("common.pending")}
               </div>
+              <div className="mt-2 flex items-center gap-2">
+                <span
+                  className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${
+                    status?.plan_sync_error
+                      ? "border-amber-400/30 bg-amber-400/10 text-amber-300"
+                      : "border-cyan-500/20 bg-slate-950/60 text-slate-400"
+                  }`}
+                >
+                  {status?.plan_sync_error
+                    ? t("settings.planSyncFailed", { category: status.plan_sync_error })
+                    : status?.plan_synced_at
+                      ? t("settings.planSyncOk", { time: formatSyncedAgo(status.plan_synced_at) })
+                      : t("settings.planSyncNever")}
+                </span>
+                <button
+                  disabled={syncingPlan}
+                  onClick={() => void onSyncPlan().catch(() => undefined)}
+                  className="inline-flex items-center gap-1.5 rounded-md border border-cyan-500/20 bg-slate-950/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-cyan-300 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+                >
+                  <RefreshCw className={`h-3 w-3 ${syncingPlan ? "animate-spin" : ""}`} />
+                  {syncingPlan ? t("settings.planSyncButtonBusy") : t("settings.planSyncButton")}
+                </button>
+              </div>
             </div>
             <button
               onClick={() => void onOpenAccountSettings()}
@@ -529,6 +556,17 @@ function planLabel(plan: string) {
   const normalized = plan.trim().toLowerCase();
   if (!normalized || normalized === "free") return "Starter";
   return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
+}
+
+function formatSyncedAgo(unixSeconds: number): string {
+  const deltaSeconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+  if (deltaSeconds < 60) return "poucos segundos";
+  const minutes = Math.floor(deltaSeconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return `${days} d`;
 }
 
 function Row({
