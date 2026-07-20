@@ -474,11 +474,11 @@ export function LocalControls({
                   onClick={() => void deactivateGameMode()}
                   className="text-left text-xs font-medium text-amber-200 transition hover:text-amber-100 disabled:opacity-50"
                 >
-                  Desativar
+                  {t("common.deactivate")}
                 </button>
               )}
               {!paidGameModeAllowed && (
-                <span className="text-xs text-slate-500">Disponivel nos planos pagos</span>
+                <span className="text-xs text-slate-500">{t("common.paidPlansOnly")}</span>
               )}
             </div>
             <button
@@ -714,7 +714,7 @@ export function LocalControls({
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
             <Wifi className="h-3.5 w-3.5 text-cyan-300" />
-            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Rede e energia</h2>
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("controls.networkAndPower")}</h2>
           </div>
           <button
             disabled={diagnosticsBusy}
@@ -811,7 +811,7 @@ export function LocalControls({
               className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60 sm:col-span-2 disabled:opacity-50"
             >
               {networkAdapters.length === 0 ? (
-                <option value="">Nenhum adaptador ativo encontrado</option>
+                <option value="">{t("controls.noActiveAdapter")}</option>
               ) : (
                 networkAdapters.map((adapter) => (
                   <option key={adapter.name} value={adapter.name}>

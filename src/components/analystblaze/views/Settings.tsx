@@ -263,7 +263,7 @@ export function Settings({
         {!automaticGameModeAllowed && (
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-3 py-2 text-[11px] text-cyan-100/80">
             <Shield className="h-3 w-3" />
-            Automacoes do Agente Local ficam disponiveis nos planos Pro e Family. No Starter, o PC Limpo continua manual.
+            {t("settings.aiAutomationPlanNotice")}
           </div>
         )}
 
