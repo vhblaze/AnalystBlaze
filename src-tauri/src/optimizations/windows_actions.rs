@@ -6,7 +6,7 @@ use super::{
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
     windows_inventory, ExecutionResult,
 };
-use crate::process_ext::CommandExt;
+use crate::process_ext::{decode_console_bytes, CommandExt};
 
 pub async fn disable_startup_app(payload: Option<Value>) -> ExecutionResult {
     let target = extract_payload_string(payload.as_ref(), &["target", "name", "app", "value_name"]);
@@ -380,8 +380,8 @@ fn stop_service_sync(service_name: &str) -> ExecutionResult {
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = decode_console_bytes(&output.stdout);
+    let stderr = decode_console_bytes(&output.stderr);
     let combined = format!("{stdout}\n{stderr}");
     let accepted = output.status.success()
         || combined.contains("STOP_PENDING")
@@ -446,10 +446,10 @@ fn query_service_state(service_name: &str) -> Result<ServiceState, String> {
         .map_err(|error| error.to_string())?;
 
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(decode_console_bytes(&output.stderr).trim().to_string());
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stdout = decode_console_bytes(&output.stdout);
     let running = stdout.contains("RUNNING")
         || stdout.contains("START_PENDING")
         || stdout.contains("PAUSED")

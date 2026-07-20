@@ -8,7 +8,7 @@ use super::{
     ExecutionResult,
 };
 use crate::audit;
-use crate::process_ext::CommandExt;
+use crate::process_ext::{decode_console_bytes, CommandExt};
 
 pub async fn flush_dns_cache(_payload: Option<Value>) -> ExecutionResult {
     match tokio::task::spawn_blocking(flush_dns_cache_sync).await {
@@ -86,7 +86,7 @@ fn flush_dns_cache_sync() -> ExecutionResult {
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stdout = decode_console_bytes(&output.stdout);
     let success = output.status.success();
 
     let _ = audit::record_event(
@@ -232,8 +232,8 @@ fn reset_winsock_catalog_sync() -> ExecutionResult {
         }
     };
 
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout = decode_console_bytes(&output.stdout);
+    let stderr = decode_console_bytes(&output.stderr);
     let success = output.status.success();
 
     let _ = audit::record_event(
@@ -300,9 +300,9 @@ fn run_powershell(script: &str) -> Result<String, String> {
         .map_err(|error| error.to_string())?;
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        Ok(decode_console_bytes(&output.stdout))
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(decode_console_bytes(&output.stderr).trim().to_string())
     }
 }
 

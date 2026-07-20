@@ -6,7 +6,7 @@ use super::{
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
     ExecutionResult,
 };
-use crate::process_ext::CommandExt;
+use crate::process_ext::{decode_console_bytes, CommandExt};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct EnergyDiagnostics {
@@ -371,7 +371,7 @@ fn powershell_json(script: &str) -> Option<Value> {
         return None;
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let text = decode_console_bytes(&output.stdout).trim().to_string();
     if text.is_empty() {
         return None;
     }

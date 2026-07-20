@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::process::Command;
 
-use crate::process_ext::CommandExt;
+use crate::process_ext::{decode_console_bytes, CommandExt};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkDiagnostics {
@@ -224,7 +224,7 @@ fn collect_wifi_info() -> WifiInfo {
     let Some(output) = output.filter(|output| output.status.success()) else {
         return WifiInfo::default();
     };
-    let text = String::from_utf8_lossy(&output.stdout);
+    let text = decode_console_bytes(&output.stdout);
     let mut info = WifiInfo::default();
 
     for line in text.lines() {
@@ -281,7 +281,7 @@ fn probe_latency(label: &str, target: &str, count: u32) -> NetworkProbe {
             ..NetworkProbe::default()
         };
     };
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = decode_console_bytes(&output.stdout);
     let latencies = parse_ping_latencies(&stdout);
     let received = latencies.len() as u32;
     let packet_loss_percent = if count > 0 {
@@ -369,7 +369,7 @@ fn powershell_json(script: &str) -> Option<Value> {
         return None;
     }
 
-    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let text = decode_console_bytes(&output.stdout).trim().to_string();
     if text.is_empty() {
         return None;
     }

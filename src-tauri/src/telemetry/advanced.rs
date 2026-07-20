@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::process::Command;
 
-use crate::process_ext::CommandExt;
+use crate::process_ext::{decode_console_bytes, CommandExt};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AdvancedTelemetry {
@@ -271,7 +271,7 @@ fn powershell_text(script: &str) -> Option<String> {
         return None;
     }
 
-    Some(String::from_utf8_lossy(&output.stdout).to_string())
+    Some(decode_console_bytes(&output.stdout))
 }
 
 fn clean_string(value: &str) -> String {
