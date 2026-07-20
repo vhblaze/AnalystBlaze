@@ -566,6 +566,7 @@ async fn complete_auth_from_deep_link(
     state: State<'_, AgentState>,
     app: AppHandle,
 ) -> Result<AgentStatus, String> {
+    show_main_window(&app);
     let tokens = match auth_callback_from_deep_link(&raw_url)? {
         AuthCallback::Tokens(tokens) => tokens,
         AuthCallback::PairingCode(code) => state.api.exchange_desktop_pairing_code(&code).await?,
@@ -838,6 +839,12 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, args, cwd| {
+            // A relaunch attempt (deep-link auth included) means the user is
+            // actively trying to interact with the app right now - closing
+            // the window only hides it (see CloseRequested below), so
+            // without this the app can silently finish pairing in the tray
+            // and the user never sees it happen.
+            show_main_window(app);
             let _ = app.emit("single-instance", SingleInstancePayload { args, cwd });
         }))
         .plugin(tauri_plugin_deep_link::init())
