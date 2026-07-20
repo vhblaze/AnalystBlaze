@@ -2,7 +2,12 @@ use std::time::Duration;
 use url::Url;
 
 const DEV_API_BASE_URL: &str = "http://127.0.0.1:8000";
-const PROD_API_BASE_URL: &str = "https://api.analystblaze.com";
+// TEMPORARY: api.analystblaze.com's DNS points at a stuck/unactivated Railway
+// custom domain (verified in DNS but Railway's edge still rejects the host
+// header - see incident notes). Using Railway's own default domain directly
+// unblocks login/telemetry/everything now; revert to the custom domain once
+// Railway confirms it's actually routing.
+const PROD_API_BASE_URL: &str = "https://analystblaze-server-production.up.railway.app";
 const DEV_WEB_BASE_URL: &str = "http://localhost:3000";
 const PROD_WEB_BASE_URL: &str = "https://analystblaze.com";
 
@@ -233,7 +238,7 @@ mod tests {
     fn production_default_api_url_is_https() {
         assert_eq!(
             default_api_base_url(RuntimeEnvironment::Production),
-            "https://api.analystblaze.com"
+            "https://analystblaze-server-production.up.railway.app"
         );
     }
 

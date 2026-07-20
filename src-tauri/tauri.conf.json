@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AnalystBlaze",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "identifier": "com.analystblaze.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -21,7 +21,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' data:; connect-src 'self' http://localhost:* https://api.analystblaze.com; frame-src 'none'; object-src 'none'; base-uri 'none'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data:; font-src 'self' data:; connect-src 'self' http://localhost:* https://api.analystblaze.com https://analystblaze-server-production.up.railway.app; frame-src 'none'; object-src 'none'; base-uri 'none'"
     }
   },
   "bundle": {
@@ -55,7 +55,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDREM0Q3OTIwNzczNjNFMTgKUldRWVBqWjNJSGs5VFc0UEVicC81cXpxUzF5MFNTQ01EMHM5QW5wUlg2Rmk0cGluREdXajJwQ0sK",
       "endpoints": [
-        "https://api.analystblaze.com/api/v1/updates/manifest?target={{target}}&arch={{arch}}&current_version={{current_version}}"
+        "https://analystblaze-server-production.up.railway.app/api/v1/updates/manifest?target={{target}}&arch={{arch}}&current_version={{current_version}}"
       ],
       "windows": {
         "installMode": "passive"

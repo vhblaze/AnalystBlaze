@@ -440,7 +440,10 @@ type SingleInstancePayload = {
 };
 
 const DEV_API_BASE_URL = "http://127.0.0.1:8000";
-const PROD_API_BASE_URL = "https://api.analystblaze.com";
+// TEMPORARY: see the matching comment in src-tauri/src/config.rs -
+// api.analystblaze.com's custom domain is stuck on Railway's side, so this
+// points at Railway's default domain directly until that's fixed.
+const PROD_API_BASE_URL = "https://analystblaze-server-production.up.railway.app";
 const DEV_WEB_LOGIN_URL = "http://localhost:3000/login";
 const PROD_WEB_LOGIN_URL = "https://analystblaze.com/login";
 const DEV_ACCOUNT_SETTINGS_URL = "http://localhost:3000/configuration";
