@@ -29,6 +29,11 @@ pub struct StoredCredentials {
     pub user_email: Option<String>,
     pub plan: Option<String>,
     pub has_paid_plan: Option<bool>,
+    /// Unix seconds of the last time `plan`/`has_paid_plan` were confirmed
+    /// against the server (not just decoded from a locally-cached JWT).
+    /// `None` means it has never been actively confirmed since pairing -
+    /// see sync_account_plan in lib.rs.
+    pub plan_synced_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]

@@ -38,6 +38,11 @@ struct AgentState {
     store: SecureStore,
     telemetry: Mutex<Option<TelemetryEngineHandle>>,
     telemetry_state: SharedTelemetryState,
+    /// Category of the last background plan-sync failure ("network", "tls",
+    /// "timeout", "dns", "unavailable", "unknown"), if any. Cleared on the
+    /// next successful sync. Never used to alter the cached plan itself -
+    /// see refresh_account_profile_if_needed.
+    plan_sync_error: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,6 +61,13 @@ struct AgentStatus {
     billing_url: String,
     insights_url: String,
     focus_session: Option<optimizations::focus::FocusSession>,
+    /// Unix seconds of the last confirmed server-side plan check, or `None`
+    /// if it has never succeeded since pairing (plan shown is still the
+    /// last known-good value from login/registration - never blank).
+    plan_synced_at: Option<i64>,
+    /// Set when the most recent background/manual sync attempt failed, so
+    /// the UI can show "not synced" instead of silently implying freshness.
+    plan_sync_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -528,6 +540,16 @@ async fn set_power_plan_power_saver() -> Result<optimizations::ExecutionResult, 
 
 #[tauri::command]
 async fn agent_status(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
+    // Deliberately does NOT block on a network call: on some Windows 10
+    // machines a TLS/cert-store hiccup can make that request hang, which
+    // used to freeze the whole "is my plan verified" flow on every app
+    // open. Freshness comes from the background sync loop (see
+    // spawn_plan_sync_loop) and the manual sync_account_plan command.
+    status(&state)
+}
+
+#[tauri::command]
+async fn sync_account_plan(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
     refresh_account_profile_if_needed(&state).await?;
     status(&state)
 }
@@ -643,31 +665,95 @@ fn credentials_from_registration(
             .has_paid_plan
             .or(existing_profile.has_paid_plan)
             .or(Some(false)),
+        // Not yet actively confirmed via refresh_account_profile_if_needed -
+        // the background sync loop populates this on its first tick.
+        plan_synced_at: None,
     }
 }
 
+/// Confirms the cached plan against the server and persists it on success.
+/// Never removes or downgrades the cached plan on failure - a network drop,
+/// TLS error, or a temporarily unreachable API leaves the last known-good
+/// value in place; the failure is only recorded for diagnostics/UI display.
 async fn refresh_account_profile_if_needed(state: &AgentState) -> Result<(), String> {
     let credentials = state.store.load()?;
     let Some(access_token) = credentials.access_token.clone() else {
         return Ok(());
     };
-    let Some(api_profile) = state
-        .api
-        .account_profile(&access_token)
-        .await
-        .ok()
-        .flatten()
-        .map(|value| profile_from_value(&value))
-    else {
-        return Ok(());
-    };
-    if profile_is_empty(&api_profile) {
-        return Ok(());
+
+    match state.api.account_profile(&access_token).await {
+        Ok(Some(value)) => {
+            let api_profile = profile_from_value(&value);
+            if profile_is_empty(&api_profile) {
+                record_plan_sync_outcome(
+                    state,
+                    Some("empty_profile".to_string()),
+                    "Resposta da API sem dados de plano reconheciveis.",
+                );
+                return Ok(());
+            }
+            let mut updated = credentials_with_profile(credentials, api_profile);
+            updated.plan_synced_at = Some(current_unix_time());
+            state.store.save(&updated)?;
+            record_plan_sync_outcome(state, None, "Plano sincronizado com o servidor.");
+        }
+        Ok(None) => {
+            record_plan_sync_outcome(
+                state,
+                Some("unavailable".to_string()),
+                "Nenhum endpoint de conta respondeu com sucesso.",
+            );
+        }
+        Err(error) => {
+            let category = categorize_plan_sync_error(&error);
+            record_plan_sync_outcome(state, Some(category.to_string()), &error);
+        }
     }
 
-    state
-        .store
-        .save(&credentials_with_profile(credentials, api_profile))
+    Ok(())
+}
+
+fn current_unix_time() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Best-effort classification of a reqwest error string into a stable,
+/// loggable category. reqwest's Display output reliably contains these
+/// substrings across TLS/DNS/timeout failure modes on Windows.
+fn categorize_plan_sync_error(message: &str) -> &'static str {
+    let lower = message.to_lowercase();
+    if lower.contains("certificate") || lower.contains("tls") || lower.contains("ssl") {
+        "tls"
+    } else if lower.contains("timed out") || lower.contains("timeout") {
+        "timeout"
+    } else if lower.contains("dns") || lower.contains("resolve") || lower.contains("lookup") {
+        "dns"
+    } else if lower.contains("connect") {
+        "network"
+    } else {
+        "unknown"
+    }
+}
+
+fn record_plan_sync_outcome(state: &AgentState, category: Option<String>, message: &str) {
+    if let Ok(mut guard) = state.plan_sync_error.lock() {
+        *guard = category.clone();
+    }
+    let level = if category.is_some() { "warning" } else { "info" };
+    let event = if category.is_some() {
+        "account.plan_sync_failed"
+    } else {
+        "account.plan_synced"
+    };
+    let _ = audit::record_event(
+        level,
+        event,
+        message,
+        serde_json::json!({ "category": category }),
+    );
 }
 
 fn credentials_with_profile(
@@ -833,6 +919,7 @@ pub fn run() {
         store,
         telemetry: Mutex::new(None),
         telemetry_state: new_shared_telemetry_state(),
+        plan_sync_error: Mutex::new(None),
     };
 
     let updater_api_base_url = state.config.api_base_url.clone();
@@ -873,6 +960,7 @@ pub fn run() {
             {
                 let _ = ensure_agent_running(&state, app.handle());
             }
+            spawn_plan_sync_loop(app.handle().clone());
             optimizations::performance_suite::spawn_delayed_startup_runner();
 
             updater::reconcile_startup_outcome();
@@ -888,6 +976,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agent_status,
+            sync_account_plan,
             open_login,
             open_account_settings,
             open_billing,
@@ -1012,6 +1101,33 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+const PLAN_SYNC_PERIODIC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// Runs for the whole life of the app once credentials exist: an immediate
+/// sync right after startup (so a stale/changed plan gets corrected without
+/// requiring a manual action), then a retry every 30 minutes. Failures are
+/// logged via record_plan_sync_outcome and simply retried on the next tick -
+/// never surfaced as a hard error (see refresh_account_profile_if_needed).
+fn spawn_plan_sync_loop(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let state = app.state::<AgentState>();
+            let credentials_complete = state
+                .store
+                .load()
+                .map(|credentials| credentials_complete(&credentials))
+                .unwrap_or(false);
+            if credentials_complete {
+                let _ = refresh_account_profile_if_needed(&state).await;
+                if let Ok(fresh_status) = status(&state) {
+                    let _ = app.emit("plan-synced", fresh_status);
+                }
+            }
+            tokio::time::sleep(PLAN_SYNC_PERIODIC_INTERVAL).await;
+        }
+    });
+}
+
 fn ensure_agent_running(state: &AgentState, app: &AppHandle) -> Result<(), String> {
     let mut guard = state
         .telemetry
@@ -1060,6 +1176,11 @@ fn status(state: &AgentState) -> Result<AgentStatus, String> {
         .as_ref()
         .map(|engine| engine.mode().as_str().to_string())
         .unwrap_or_else(|| "stopped".to_string());
+    let plan_sync_error = state
+        .plan_sync_error
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .clone();
 
     Ok(AgentStatus {
         authenticated: credentials.access_token.is_some(),
@@ -1078,5 +1199,64 @@ fn status(state: &AgentState) -> Result<AgentStatus, String> {
         billing_url: state.config.web_billing_url.clone(),
         insights_url: state.config.web_insights_url.clone(),
         focus_session: optimizations::focus::active_focus_session(),
+        plan_synced_at: credentials.plan_synced_at,
+        plan_sync_error,
     })
+}
+
+#[cfg(test)]
+mod plan_sync_tests {
+    use super::*;
+
+    #[test]
+    fn categorizes_tls_and_certificate_failures() {
+        assert_eq!(
+            categorize_plan_sync_error("invalid peer certificate: UnknownIssuer"),
+            "tls"
+        );
+        assert_eq!(categorize_plan_sync_error("SSL routines failure"), "tls");
+    }
+
+    #[test]
+    fn categorizes_timeouts_separately_from_generic_connect_errors() {
+        assert_eq!(
+            categorize_plan_sync_error("error sending request: operation timed out"),
+            "timeout"
+        );
+        assert_eq!(
+            categorize_plan_sync_error("error sending request: tcp connect error"),
+            "network"
+        );
+    }
+
+    #[test]
+    fn categorizes_dns_failures() {
+        assert_eq!(
+            categorize_plan_sync_error("error trying to connect: dns error: failed to lookup address"),
+            "dns"
+        );
+    }
+
+    #[test]
+    fn unrecognized_errors_fall_back_to_unknown() {
+        assert_eq!(categorize_plan_sync_error("something unexpected"), "unknown");
+    }
+
+    #[test]
+    fn credentials_from_registration_starts_with_unsynced_plan() {
+        let tokens = AuthTokens {
+            access_token: "token".to_string(),
+            refresh_token: None,
+            profile: AuthProfile::default(),
+        };
+        let registration = api::HardwareRegistration {
+            id: Uuid::nil(),
+            status: "active".to_string(),
+            hw_secret: "secret".to_string(),
+            message: "ok".to_string(),
+        };
+        let credentials =
+            credentials_from_registration(tokens, registration, StoredCredentials::default());
+        assert_eq!(credentials.plan_synced_at, None);
+    }
 }
