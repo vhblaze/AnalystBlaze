@@ -1,6 +1,6 @@
 import { BatteryCharging, BookOpen, Briefcase, Download, FileWarning, Film, Gamepad2, Gauge, HardDrive, History, ListChecks, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench, X } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { canUseAutomaticGameMode, canUsePaidGameMode } from "@/hooks/useAuth";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
@@ -76,6 +76,8 @@ export function LocalControls({
   onFlushDnsCache,
   onSetDnsServers,
   onResetWinsockCatalog,
+  focusDiskUsage,
+  onDiskUsageFocused,
 }: {
   status: AgentStatus | null;
   automaticGameModeAllowed?: boolean;
@@ -102,6 +104,10 @@ export function LocalControls({
   onFlushDnsCache: () => Promise<unknown>;
   onSetDnsServers: (adapterName: string, dnsServers: string[]) => Promise<unknown>;
   onResetWinsockCatalog: () => Promise<unknown>;
+  /** Set (transiently) when the user navigated here from an Insights card
+   * asking to see disk-usage details - triggers a scan/scroll on arrival. */
+  focusDiskUsage?: boolean;
+  onDiskUsageFocused?: () => void;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("local_controls");
@@ -129,6 +135,9 @@ export function LocalControls({
   const [diskUsageError, setDiskUsageError] = useState<string | null>(null);
   const [diskUsageProgress, setDiskUsageProgress] = useState<DiskUsageProgress | null>(null);
   const [confirmingDeletePath, setConfirmingDeletePath] = useState<string | null>(null);
+  const [diskUsageMinSizeBytes, setDiskUsageMinSizeBytes] = useState(0);
+  const [diskUsageSortBy, setDiskUsageSortBy] = useState<"size" | "date">("size");
+  const diskUsageSectionRef = useRef<HTMLElement | null>(null);
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [performanceBusy, setPerformanceBusy] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
@@ -323,6 +332,16 @@ export function LocalControls({
       setActionMessage(errorMessage(error));
     }
   };
+
+  useEffect(() => {
+    if (!focusDiskUsage) return;
+    diskUsageSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (!diskUsageSummary && !diskUsageBusy) {
+      void scanDiskUsage(false);
+    }
+    onDiskUsageFocused?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusDiskUsage]);
 
   const addProtected = async () => {
     const name = protectedInput.trim();
@@ -774,7 +793,7 @@ export function LocalControls({
         </div>
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section ref={diskUsageSectionRef} className="glass-panel cyber-glow p-6 scroll-mt-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
             <HardDrive className="h-3.5 w-3.5 text-cyan-300" />
@@ -821,10 +840,33 @@ export function LocalControls({
         )}
         {diskUsageSummary && !diskUsageBusy && (
           <>
-            <p className="mb-3 text-xs text-slate-500">
-              Ultima analise ha {formatTimeAgo(diskUsageSummary.scannedAt)}
-              {diskUsageSummary.canceled ? " - cancelada, resultado parcial" : ""}.
-            </p>
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-slate-500">
+                Ultima analise ha {formatTimeAgo(diskUsageSummary.scannedAt)}
+                {diskUsageSummary.canceled ? " - cancelada, resultado parcial" : ""}.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={diskUsageMinSizeBytes}
+                  onChange={(event) => setDiskUsageMinSizeBytes(Number(event.target.value))}
+                  className="h-9 rounded-lg border border-cyan-500/20 bg-slate-950/60 px-2 text-xs text-slate-200 outline-none focus:border-cyan-300/60"
+                >
+                  <option value={0}>Qualquer tamanho</option>
+                  <option value={100 * 1024 * 1024}>Acima de 100 MB</option>
+                  <option value={500 * 1024 * 1024}>Acima de 500 MB</option>
+                  <option value={1024 * 1024 * 1024}>Acima de 1 GB</option>
+                  <option value={5 * 1024 * 1024 * 1024}>Acima de 5 GB</option>
+                </select>
+                <select
+                  value={diskUsageSortBy}
+                  onChange={(event) => setDiskUsageSortBy(event.target.value as "size" | "date")}
+                  className="h-9 rounded-lg border border-cyan-500/20 bg-slate-950/60 px-2 text-xs text-slate-200 outline-none focus:border-cyan-300/60"
+                >
+                  <option value="size">Ordenar por tamanho</option>
+                  <option value="date">Ordenar por data</option>
+                </select>
+              </div>
+            </div>
             <div className="grid gap-3 md:grid-cols-2">
               {diskUsageSummary.categories.map((category) => (
                 <DiskUsageCategoryPanel
@@ -834,6 +876,8 @@ export function LocalControls({
                   confirmingDeletePath={confirmingDeletePath}
                   onRequestDelete={setConfirmingDeletePath}
                   onConfirmDelete={(item) => void deleteDiskItem(category, item)}
+                  minSizeBytes={diskUsageMinSizeBytes}
+                  sortBy={diskUsageSortBy}
                 />
               ))}
             </div>
@@ -1530,13 +1574,24 @@ function DiskUsageCategoryPanel({
   confirmingDeletePath,
   onRequestDelete,
   onConfirmDelete,
+  minSizeBytes,
+  sortBy,
 }: {
   category: DiskUsageCategory;
   disabled: boolean;
   confirmingDeletePath: string | null;
   onRequestDelete: (path: string | null) => void;
   onConfirmDelete: (item: DiskUsageCategory["items"][number]) => void;
+  minSizeBytes: number;
+  sortBy: "size" | "date";
 }) {
+  const visibleItems = category.items
+    .filter((item) => item.sizeBytes >= minSizeBytes)
+    .slice()
+    .sort((a, b) =>
+      sortBy === "date" ? (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0) : b.sizeBytes - a.sizeBytes,
+    );
+
   return (
     <AdvancedSection
       icon={diskUsageCategoryIcon(category.kind)}
@@ -1549,9 +1604,11 @@ function DiskUsageCategoryPanel({
     >
       {category.items.length === 0 ? (
         <p className="text-xs text-slate-500">Nada encontrado nesta categoria.</p>
+      ) : visibleItems.length === 0 ? (
+        <p className="text-xs text-slate-500">Nenhum item acima do tamanho filtrado.</p>
       ) : (
         <div className="flex flex-col gap-2">
-          {category.items.map((item) => (
+          {visibleItems.map((item) => (
             <div key={item.path} className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
               <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
                 <div className="min-w-0">
@@ -1565,7 +1622,10 @@ function DiskUsageCategoryPanel({
                       </span>
                     )}
                   </div>
-                  <div className="mt-0.5 truncate text-xs text-slate-500">{formatBytes(item.sizeBytes)}</div>
+                  <div className="mt-0.5 truncate text-xs text-slate-500">
+                    {formatBytes(item.sizeBytes)}
+                    {item.modifiedAt ? ` - modificado ha ${formatTimeAgo(item.modifiedAt)}` : ""}
+                  </div>
                 </div>
                 {item.actionable && (
                   <div className="flex shrink-0 gap-2">

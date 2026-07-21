@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
-import { Brain, Cpu, Droplets, ExternalLink, RefreshCw, Sparkles, Wind, Zap } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, Brain, Cpu, Droplets, ExternalLink, RefreshCw, Sparkles, Wind, Zap } from "lucide-react";
 import { fetchInsights, type Insight } from "@/services/insights";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
-import { isTauriRuntime, openAgentInsights } from "@/services/tauri/agent";
+import { isTauriRuntime, openAgentInsights, type AgentTelemetrySnapshot } from "@/services/tauri/agent";
+
+const DISK_USAGE_WARNING_THRESHOLD_PERCENT = 80;
 
 type Category = "performance" | "energia" | "rede" | "limpeza";
 
@@ -34,12 +36,44 @@ const meta: Record<Category, { icon: React.ComponentType<{ className?: string }>
   },
 };
 
-export function Insights() {
+export function Insights({
+  telemetry,
+  onOpenDiskUsage,
+}: {
+  telemetry?: AgentTelemetrySnapshot | null;
+  onOpenDiskUsage?: () => void;
+}) {
   const { t, locale } = useI18n();
   const track = useTelemetry("insights");
   const [insights, setInsights] = useState<Insight[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const diskUsageInsight = useMemo<Insight | null>(() => {
+    const percent = telemetry?.disk_usage_percent;
+    if (percent == null || !Number.isFinite(percent) || percent < DISK_USAGE_WARNING_THRESHOLD_PERCENT) {
+      return null;
+    }
+    if (!onOpenDiskUsage) return null;
+    return {
+      title: "Disco quase cheio",
+      explanation: `Seu disco esta com ${Math.round(percent)}% de uso. Veja o detalhamento por jogos, apps, videos, downloads e arquivos grandes para decidir o que liberar.`,
+      impact: `${Math.round(percent)}% usado`,
+      category: "limpeza",
+      action: {
+        label: "Ver detalhes",
+        onClick: () => {
+          track("disk_usage_insight_opened", { percent: Math.round(percent) });
+          onOpenDiskUsage();
+        },
+      },
+    };
+  }, [telemetry?.disk_usage_percent, onOpenDiskUsage, track]);
+
+  const visibleInsights = useMemo(
+    () => (diskUsageInsight ? [diskUsageInsight, ...insights] : insights),
+    [diskUsageInsight, insights],
+  );
 
   const generate = async () => {
     setLoading(true);
@@ -113,7 +147,7 @@ export function Insights() {
         </div>
       )}
 
-      {loading && insights.length === 0 ? (
+      {loading && visibleInsights.length === 0 ? (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="glass-panel h-44 animate-pulse p-6">
@@ -126,7 +160,7 @@ export function Insights() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          {insights.map((ins, i) => {
+          {visibleInsights.map((ins, i) => {
             const m = meta[ins.category] ?? meta.performance;
             const Icon = m.icon;
             return (
@@ -156,6 +190,15 @@ export function Insights() {
                     {ins.impact}
                   </span>
                 </div>
+                {ins.action && (
+                  <button
+                    onClick={ins.action.onClick}
+                    className="group/action mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-200 transition hover:text-cyan-100"
+                  >
+                    {ins.action.label}
+                    <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover/action:translate-x-0.5" />
+                  </button>
+                )}
               </article>
             );
           })}

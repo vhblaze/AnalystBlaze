@@ -428,6 +428,7 @@ export type DiskUsageItem = {
   path: string;
   label: string;
   sizeBytes: number;
+  modifiedAt?: number | null;
   protected: boolean;
   actionable: boolean;
   /** Cache-category items delete through applyCleanupCategory(path) instead
