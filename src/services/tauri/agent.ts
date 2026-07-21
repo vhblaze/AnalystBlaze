@@ -103,6 +103,41 @@ export type AgentTelemetrySnapshot = AgentTelemetrySample & {
   device_online: boolean;
 };
 
+export type LiveModeSample = {
+  timestamp: number;
+  pingMs?: number | null;
+  jitterMs?: number | null;
+  packetLossPercent?: number | null;
+};
+
+/** Local, honest estimate - AnalystBlaze has no integration with OBS/
+ * Streamlabs/etc. and never applies this value anywhere; it's only a
+ * suggestion for the user to enter in their own streaming software. */
+export type BitrateRecommendation = {
+  recommendedKbps: number;
+  confidence: number;
+  reason: string;
+};
+
+export type ProbableCause = {
+  label: string;
+  confidence: number;
+  evidence: string;
+};
+
+export type IncidentReport = {
+  generatedAt: number;
+  causes: ProbableCause[];
+  sampleCount: number;
+};
+
+export type LiveModeStatus = {
+  active: boolean;
+  samples: LiveModeSample[];
+  bitrateRecommendation?: BitrateRecommendation | null;
+  lastIncident?: IncidentReport | null;
+};
+
 export type RemoteCommandConfirmationRequest = {
   requestId: string;
   commandId: string;
@@ -1023,6 +1058,44 @@ export async function fetchAuthenticatedInsights(acceptLanguage?: string): Promi
 export async function listenToAgentTelemetry(onSnapshot: (snapshot: AgentTelemetrySnapshot) => void) {
   if (!isTauriRuntime()) return () => undefined;
   return listen<AgentTelemetrySnapshot>("telemetry-update", (event) => onSnapshot(event.payload));
+}
+
+/** Best-effort match against a known list of streaming apps (OBS,
+ * Streamlabs, XSplit, ...) in the foreground right now - never guesses,
+ * returns null when nothing recognized is running in front. */
+export async function detectLiveModeStreamingApp(): Promise<string | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<string | null>("detect_live_mode_streaming_app");
+}
+
+export async function startLiveMode(): Promise<void> {
+  requireTauriRuntime("Modo Live");
+  return invoke<void>("start_live_mode");
+}
+
+export async function stopLiveMode(): Promise<void> {
+  requireTauriRuntime("Modo Live");
+  return invoke<void>("stop_live_mode");
+}
+
+export async function getLiveModeStatus(): Promise<LiveModeStatus> {
+  requireTauriRuntime("Modo Live");
+  return invoke<LiveModeStatus>("live_mode_status");
+}
+
+export async function generateLiveModeIncidentReport(): Promise<IncidentReport> {
+  requireTauriRuntime("Modo Live");
+  return invoke<IncidentReport>("generate_live_mode_incident_report");
+}
+
+export async function listenToLiveModeSample(onSample: (sample: LiveModeSample) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<LiveModeSample>("live-mode-sample", (event) => onSample(event.payload));
+}
+
+export async function listenToLiveModeIncident(onIncident: (report: IncidentReport) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<IncidentReport>("live-mode-incident", (event) => onIncident(event.payload));
 }
 
 export async function listenToAgentSessionInvalidated(onInvalidated: () => void) {

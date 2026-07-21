@@ -49,6 +49,13 @@ struct AgentState {
     /// Set while a scan is in flight so cancel_disk_usage_scan has
     /// something to signal; cleared when the scan finishes either way.
     disk_usage_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    /// Rolling ~10 minute window of network samples collected only while
+    /// Modo Live is active - see spawn_live_mode_loop.
+    live_mode_samples: Mutex<std::collections::VecDeque<telemetry::live_mode::LiveModeSample>>,
+    /// Set while the Modo Live loop is running so stop_live_mode has
+    /// something to signal; None means the loop isn't active.
+    live_mode_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    live_mode_last_incident: Mutex<Option<telemetry::live_mode::IncidentReport>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -473,6 +480,181 @@ async fn delete_disk_usage_item(path: String) -> Result<optimizations::Execution
         Some(serde_json::json!({ "path": path })),
     )
     .await)
+}
+
+const LIVE_MODE_SAMPLE_EVENT: &str = "live-mode-sample";
+const LIVE_MODE_INCIDENT_EVENT: &str = "live-mode-incident";
+const LIVE_MODE_MAX_SAMPLES: usize = 300;
+const LIVE_MODE_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+const LIVE_MODE_INCIDENT_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(120);
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LiveModeStatus {
+    active: bool,
+    samples: Vec<telemetry::live_mode::LiveModeSample>,
+    bitrate_recommendation: Option<telemetry::live_mode::BitrateRecommendation>,
+    last_incident: Option<telemetry::live_mode::IncidentReport>,
+}
+
+#[tauri::command]
+async fn detect_live_mode_streaming_app() -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(telemetry::live_mode::detect_foreground_streaming_app)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn start_live_mode(state: State<'_, AgentState>, app: AppHandle) -> Result<(), String> {
+    let mut guard = state
+        .live_mode_cancel
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?;
+    if guard.is_some() {
+        return Ok(());
+    }
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    *guard = Some(cancel.clone());
+    drop(guard);
+
+    if let Ok(mut samples) = state.live_mode_samples.lock() {
+        samples.clear();
+    }
+    spawn_live_mode_loop(app, cancel);
+    let _ = audit::record_event(
+        "info",
+        "live_mode.started",
+        "Modo Live ativado.",
+        serde_json::json!({}),
+    );
+    Ok(())
+}
+
+#[tauri::command]
+async fn stop_live_mode(state: State<'_, AgentState>) -> Result<(), String> {
+    let mut guard = state
+        .live_mode_cancel
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?;
+    if let Some(cancel) = guard.take() {
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = audit::record_event(
+            "info",
+            "live_mode.stopped",
+            "Modo Live desativado.",
+            serde_json::json!({}),
+        );
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn live_mode_status(state: State<'_, AgentState>) -> Result<LiveModeStatus, String> {
+    let active = state
+        .live_mode_cancel
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .is_some();
+    let samples: std::collections::VecDeque<_> = state
+        .live_mode_samples
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .clone();
+    let bitrate_recommendation = telemetry::live_mode::recommend_bitrate(&samples);
+    let last_incident = state
+        .live_mode_last_incident
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .clone();
+
+    Ok(LiveModeStatus {
+        active,
+        samples: samples.into_iter().collect(),
+        bitrate_recommendation,
+        last_incident,
+    })
+}
+
+#[tauri::command]
+async fn generate_live_mode_incident_report(
+    state: State<'_, AgentState>,
+) -> Result<telemetry::live_mode::IncidentReport, String> {
+    let samples = state
+        .live_mode_samples
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .clone();
+    let report = telemetry::live_mode::build_incident_report(&samples);
+    if let Ok(mut guard) = state.live_mode_last_incident.lock() {
+        *guard = Some(report.clone());
+    }
+    let _ = audit::record_event(
+        "warning",
+        "live_mode.incident_report",
+        "Relatorio de incidente do Modo Live gerado manualmente.",
+        serde_json::json!({ "causes": report.causes, "sampleCount": report.sample_count }),
+    );
+    Ok(report)
+}
+
+/// Runs only while Modo Live is active (see start_live_mode/stop_live_mode).
+/// Every tick is a single lightweight network sample - never touches
+/// Windows state, never calls execute_command, never escalates to the
+/// safety/execution pipeline. Auto-generates an incident report (with a
+/// cooldown, so one bad tick doesn't spam the audit log) when the latest
+/// sample looks like a real anomaly.
+fn spawn_live_mode_loop(app: AppHandle, cancel: std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    tauri::async_runtime::spawn(async move {
+        let mut last_incident_at: Option<std::time::Instant> = None;
+        loop {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+
+            if let Ok(sample) = tokio::task::spawn_blocking(telemetry::live_mode::sample_now).await
+            {
+                let state = app.state::<AgentState>();
+                let pushed = {
+                    let mut samples = state.live_mode_samples.lock().ok();
+                    samples.as_mut().map(|samples| {
+                        samples.push_back(sample.clone());
+                        while samples.len() > LIVE_MODE_MAX_SAMPLES {
+                            samples.pop_front();
+                        }
+                        let anomaly = telemetry::live_mode::detect_anomaly(samples);
+                        (anomaly, (**samples).clone())
+                    })
+                };
+                let _ = app.emit(LIVE_MODE_SAMPLE_EVENT, &sample);
+
+                if let Some((anomaly, samples_snapshot)) = pushed {
+                    let should_report = anomaly
+                        && last_incident_at
+                            .map(|at| at.elapsed() >= LIVE_MODE_INCIDENT_COOLDOWN)
+                            .unwrap_or(true);
+                    if should_report {
+                        last_incident_at = Some(std::time::Instant::now());
+                        let report = telemetry::live_mode::build_incident_report(&samples_snapshot);
+                        if let Ok(mut guard) = state.live_mode_last_incident.lock() {
+                            *guard = Some(report.clone());
+                        }
+                        let _ = audit::record_event(
+                            "warning",
+                            "live_mode.incident_report_auto",
+                            "Anomalia de rede detectada automaticamente pelo Modo Live.",
+                            serde_json::json!({ "causes": report.causes, "sampleCount": report.sample_count }),
+                        );
+                        let _ = app.emit(LIVE_MODE_INCIDENT_EVENT, &report);
+                    }
+                }
+            }
+
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            tokio::time::sleep(LIVE_MODE_SAMPLE_INTERVAL).await;
+        }
+    });
 }
 
 #[tauri::command]
@@ -1013,6 +1195,9 @@ pub fn run() {
         plan_sync_error: Mutex::new(None),
         disk_usage_cache: Mutex::new(None),
         disk_usage_cancel: Mutex::new(None),
+        live_mode_samples: Mutex::new(std::collections::VecDeque::new()),
+        live_mode_cancel: Mutex::new(None),
+        live_mode_last_incident: Mutex::new(None),
     };
 
     let updater_api_base_url = state.config.api_base_url.clone();
@@ -1116,6 +1301,11 @@ pub fn run() {
             disk_usage_summary,
             cancel_disk_usage_scan,
             delete_disk_usage_item,
+            detect_live_mode_streaming_app,
+            start_live_mode,
+            stop_live_mode,
+            live_mode_status,
+            generate_live_mode_incident_report,
             scan_startup_impact,
             delay_startup_app,
             restore_delayed_startup_app,

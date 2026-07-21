@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
+  AlertTriangle,
   BarChart3,
   Cpu,
+  FileWarning,
   Gauge,
   HardDrive,
   MemoryStick,
@@ -11,13 +13,29 @@ import {
   RefreshCw,
   Thermometer,
   Timer,
+  Video,
   Wifi,
   Zap,
   type LucideIcon,
 } from "lucide-react";
-import type { AgentTelemetrySample } from "@/services/tauri/agent";
+import {
+  detectLiveModeStreamingApp,
+  generateLiveModeIncidentReport,
+  getLiveModeStatus,
+  listenToLiveModeIncident,
+  listenToLiveModeSample,
+  startLiveMode,
+  stopLiveMode,
+  type AgentTelemetrySample,
+  type BitrateRecommendation,
+  type IncidentReport,
+  type LiveModeSample,
+} from "@/services/tauri/agent";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
+
+const LIVE_MODE_SAMPLE_HISTORY = 60;
+const STREAMING_APP_POLL_MS = 15_000;
 
 type HistoryValue = number | null;
 
@@ -158,6 +176,13 @@ export function Telemetry({
     Object.fromEntries(metrics.map((metric) => [metric.key, []])),
   );
   const [timestamps, setTimestamps] = useState<number[]>([]);
+  const [liveModeActive, setLiveModeActive] = useState(false);
+  const [liveModeBusy, setLiveModeBusy] = useState(false);
+  const [liveModeSamples, setLiveModeSamples] = useState<LiveModeSample[]>([]);
+  const [streamingAppDetected, setStreamingAppDetected] = useState<string | null>(null);
+  const [bitrateRecommendation, setBitrateRecommendation] = useState<BitrateRecommendation | null>(null);
+  const [lastIncident, setLastIncident] = useState<IncidentReport | null>(null);
+  const [incidentReportBusy, setIncidentReportBusy] = useState(false);
   const realtimeActive = agentMode === "realtime";
   const selectedMetric = metrics.find((metric) => metric.key === selectedKey) ?? metrics[0];
   const selectedData = history[selectedMetric.key] ?? [];
@@ -203,12 +228,109 @@ export function Telemetry({
     if (latestSample) appendSample(latestSample);
   }, [appendSample, latestSample]);
 
+  useEffect(() => {
+    if (!isReady) return;
+    let canceled = false;
+    const poll = () => {
+      detectLiveModeStreamingApp()
+        .then((app) => {
+          if (!canceled) setStreamingAppDetected(app);
+        })
+        .catch(() => undefined);
+    };
+    poll();
+    const id = window.setInterval(poll, STREAMING_APP_POLL_MS);
+    return () => {
+      canceled = true;
+      window.clearInterval(id);
+    };
+  }, [isReady]);
+
+  useEffect(() => {
+    if (!isReady) return;
+    getLiveModeStatus()
+      .then((status) => {
+        setLiveModeActive(status.active);
+        setLiveModeSamples(status.samples.slice(-LIVE_MODE_SAMPLE_HISTORY));
+        setBitrateRecommendation(status.bitrateRecommendation ?? null);
+        setLastIncident(status.lastIncident ?? null);
+      })
+      .catch(() => undefined);
+  }, [isReady]);
+
+  useEffect(() => {
+    let disposeSample: (() => void) | undefined;
+    let disposeIncident: (() => void) | undefined;
+    listenToLiveModeSample((liveSample) => {
+      setLiveModeSamples((current) => [...current.slice(-(LIVE_MODE_SAMPLE_HISTORY - 1)), liveSample]);
+    }).then((dispose) => {
+      disposeSample = dispose;
+    });
+    listenToLiveModeIncident((report) => {
+      setLastIncident(report);
+    }).then((dispose) => {
+      disposeIncident = dispose;
+    });
+    return () => {
+      disposeSample?.();
+      disposeIncident?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!liveModeActive) return;
+    const id = window.setInterval(() => {
+      getLiveModeStatus()
+        .then((status) => {
+          setBitrateRecommendation(status.bitrateRecommendation ?? null);
+          setLastIncident(status.lastIncident ?? null);
+        })
+        .catch(() => undefined);
+    }, 5_000);
+    return () => window.clearInterval(id);
+  }, [liveModeActive]);
+
+  const toggleLiveMode = useCallback(async () => {
+    if (!isReady || liveModeBusy) return;
+    setLiveModeBusy(true);
+    try {
+      if (liveModeActive) {
+        await stopLiveMode();
+        setLiveModeActive(false);
+      } else {
+        setLiveModeSamples([]);
+        await startLiveMode();
+        setLiveModeActive(true);
+      }
+      track("live_mode_toggled", { enabled: !liveModeActive });
+    } catch {
+      track("live_mode_toggle_failed");
+    } finally {
+      setLiveModeBusy(false);
+    }
+  }, [isReady, liveModeActive, liveModeBusy, track]);
+
+  const generateIncidentReport = useCallback(async () => {
+    if (incidentReportBusy) return;
+    setIncidentReportBusy(true);
+    try {
+      const report = await generateLiveModeIncidentReport();
+      setLastIncident(report);
+      track("live_mode_incident_report_generated");
+    } catch {
+      track("live_mode_incident_report_failed");
+    } finally {
+      setIncidentReportBusy(false);
+    }
+  }, [incidentReportBusy, track]);
+
   const selectedValue = readMetricValue(sample, selectedMetric);
   const selectedStatus = selectedMetric.status?.(selectedValue) ?? "good";
   const stats = metricStats(selectedData);
   const age = sample ? Math.max(0, Math.round(Date.now() / 1000 - sample.event_timestamp)) : null;
   const rate = sampleRate(timestamps);
   const systemSignals = systemSignalsFor(sample, t);
+  const latestLiveSample = liveModeSamples[liveModeSamples.length - 1] ?? null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -329,6 +451,109 @@ export function Telemetry({
             </div>
           </aside>
         </div>
+      </section>
+
+      <section className="glass-panel cyber-glow p-5">
+        <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <Video className="h-3.5 w-3.5 text-cyan-300" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Modo Live</h2>
+            {liveModeActive && (
+              <span className="inline-flex items-center gap-1 rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-emerald-200">
+                <span className="h-1 w-1 animate-pulse rounded-full bg-emerald-300" />
+                ativo
+              </span>
+            )}
+          </div>
+          <button
+            role="switch"
+            aria-checked={liveModeActive}
+            disabled={!isReady || liveModeBusy}
+            onClick={() => void toggleLiveMode()}
+            className={`inline-flex min-h-11 items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition-all disabled:opacity-50 ${
+              liveModeActive
+                ? "border-emerald-300/50 bg-emerald-400/15 text-emerald-100"
+                : "border-cyan-400/40 bg-cyan-400/10 text-cyan-100 hover:border-cyan-300/60"
+            }`}
+          >
+            <Radio className="h-4 w-4" />
+            {liveModeActive ? "Desativar Modo Live" : "Ativar Modo Live"}
+          </button>
+        </div>
+
+        {streamingAppDetected && !liveModeActive && (
+          <div className="mb-3 flex items-center gap-3 rounded-xl border border-cyan-400/20 bg-cyan-400/5 px-4 py-3 text-sm text-cyan-100">
+            <Video className="h-4 w-4 shrink-0" />
+            Detectamos {streamingAppDetected} em primeiro plano. O Modo Live amostra a rede com mais frequencia e avisa de instabilidades durante a transmissao.
+          </div>
+        )}
+
+        {!liveModeActive && !streamingAppDetected && (
+          <p className="text-sm text-slate-400">
+            Ativacao manual: amostra a rede com mais frequencia durante uma transmissao e gera recomendacao de
+            bitrate e relatorio de incidentes. O AnalystBlaze nao tem integracao com OBS/Streamlabs/etc. - so observa
+            a rede local, nunca aplica nada no seu software de transmissao.
+          </p>
+        )}
+
+        {liveModeActive && (
+          <>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <MiniStat label="ping" value={formatLiveMetric(latestLiveSample?.pingMs, "ms")} />
+              <MiniStat label="jitter" value={formatLiveMetric(latestLiveSample?.jitterMs, "ms")} />
+              <MiniStat label="perda" value={formatLiveMetric(latestLiveSample?.packetLossPercent, "%")} />
+            </div>
+
+            {bitrateRecommendation && (
+              <div className="mt-3 rounded-xl border border-cyan-500/10 bg-slate-950/45 p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                    Recomendacao de bitrate (estimativa local)
+                  </div>
+                  <span className="font-mono text-[10px] text-slate-500">
+                    {Math.round(bitrateRecommendation.confidence * 100)}% confianca
+                  </span>
+                </div>
+                <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-50 tabular-nums">
+                  {bitrateRecommendation.recommendedKbps} kbps
+                </div>
+                <p className="mt-1 text-xs leading-relaxed text-slate-500">{bitrateRecommendation.reason}</p>
+              </div>
+            )}
+
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <span className="text-xs text-slate-500">{liveModeSamples.length} amostras nesta sessao</span>
+              <button
+                disabled={incidentReportBusy}
+                onClick={() => void generateIncidentReport()}
+                className="inline-flex items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition-all hover:border-amber-300/50 disabled:opacity-50"
+              >
+                <FileWarning className="h-3.5 w-3.5" />
+                Gerar relatorio de incidente
+              </button>
+            </div>
+
+            {lastIncident && (
+              <div className="mt-3 rounded-xl border border-amber-400/15 bg-amber-400/5 p-4">
+                <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-amber-200">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  Causas provaveis (baseado em {lastIncident.sampleCount} amostras)
+                </div>
+                <ul className="flex flex-col gap-2">
+                  {lastIncident.causes.map((cause) => (
+                    <li key={cause.label} className="text-xs leading-relaxed text-amber-100/85">
+                      <span className="font-semibold text-amber-100">{cause.label}</span>
+                      {" "}
+                      <span className="font-mono text-amber-200/70">({Math.round(cause.confidence * 100)}%)</span>
+                      {" - "}
+                      {cause.evidence}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
+        )}
       </section>
 
       {!sample && (
@@ -608,6 +833,11 @@ function formatMetricValue(value: number, unit: string) {
   if (!Number.isFinite(value)) return "--";
   if (unit === "ms") return value < 10 ? value.toFixed(1) : Math.round(value).toString();
   return Math.round(value).toString();
+}
+
+function formatLiveMetric(value: number | null | undefined, unit: "ms" | "%") {
+  if (value == null || !Number.isFinite(value)) return "--";
+  return `${Math.round(value)} ${unit}`;
 }
 
 function formatMb(value: number) {
