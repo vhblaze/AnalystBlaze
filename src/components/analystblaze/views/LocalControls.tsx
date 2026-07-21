@@ -1,4 +1,4 @@
-import { BatteryCharging, BookOpen, Briefcase, Download, FileWarning, Film, Gamepad2, Gauge, HardDrive, History, ListChecks, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench, X } from "lucide-react";
+import { BatteryCharging, BookOpen, Briefcase, Download, FileWarning, Film, Gamepad2, Gauge, HardDrive, History, ListChecks, Lock, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { canUseAutomaticGameMode, canUsePaidGameMode } from "@/hooks/useAuth";
@@ -81,6 +81,7 @@ export function LocalControls({
   onResetWinsockCatalog,
   focusDiskUsage,
   onDiskUsageFocused,
+  onOpenBilling,
 }: {
   status: AgentStatus | null;
   automaticGameModeAllowed?: boolean;
@@ -111,6 +112,7 @@ export function LocalControls({
    * asking to see disk-usage details - triggers a scan/scroll on arrival. */
   focusDiskUsage?: boolean;
   onDiskUsageFocused?: () => void;
+  onOpenBilling: () => Promise<unknown>;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("local_controls");
@@ -498,6 +500,11 @@ export function LocalControls({
     );
   };
 
+  const handleGameModeUpsellClick = async () => {
+    track("game_mode_upsell_clicked");
+    await onOpenBilling();
+  };
+
   const deactivateGameMode = async () => {
     await runControlAction(
       async () => {
@@ -571,23 +578,29 @@ export function LocalControls({
           <div className="flex flex-wrap gap-2 lg:justify-end">
             <div className="flex flex-col items-stretch gap-1">
               <button
-                disabled={busy || performanceBusy || !runtimeAvailable || (!paidGameModeAllowed && !gameModeActive)}
-                onClick={() =>
-                  gameModeActive
-                    ? void deactivateGameMode()
-                    : void runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.")
-                }
+                disabled={busy || performanceBusy || !runtimeAvailable}
+                onClick={() => {
+                  if (gameModeActive) {
+                    void deactivateGameMode();
+                    return;
+                  }
+                  if (!paidGameModeAllowed) {
+                    void handleGameModeUpsellClick();
+                    return;
+                  }
+                  void runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.");
+                }}
                 className={`inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all disabled:opacity-70 ${
                   gameModeActive
                     ? "border-emerald-300/55 bg-emerald-400/15 text-emerald-50 hover:border-amber-300/60 hover:bg-amber-400/15"
                     : "border-cyan-300/50 bg-cyan-400/15 text-cyan-50 hover:bg-cyan-400/20"
                 }`}
               >
-                {gameModeActive ? <ShieldCheck className="h-4 w-4" /> : <Gamepad2 className="h-4 w-4" />}
-                {gameModeActive ? "Desativar Modo Gamer" : paidGameModeAllowed ? "Ativar Modo Gamer" : "Modo Gamer pago"}
+                {gameModeActive ? <ShieldCheck className="h-4 w-4" /> : paidGameModeAllowed ? <Gamepad2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                {gameModeActive ? "Desativar Modo Gamer" : paidGameModeAllowed ? "Ativar Modo Gamer" : "Desbloquear Modo Gamer"}
               </button>
               {!paidGameModeAllowed && (
-                <span className="text-xs text-slate-500">{t("common.paidPlansOnly")}</span>
+                <span className="text-xs text-slate-500">Abre a pagina de planos</span>
               )}
             </div>
             <button

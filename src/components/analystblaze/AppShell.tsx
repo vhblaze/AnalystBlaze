@@ -499,6 +499,7 @@ export function AppShell() {
                       auth.pcCleanFast,
                     );
                   }}
+                  onOpenBilling={auth.openBilling}
                   busy={auth.busy}
                 />
               </Suspense>
@@ -769,6 +770,7 @@ export function AppShell() {
                   }
                   focusDiskUsage={focusDiskUsage}
                   onDiskUsageFocused={() => setFocusDiskUsage(false)}
+                  onOpenBilling={auth.openBilling}
                 />
               </Suspense>
             ) : (

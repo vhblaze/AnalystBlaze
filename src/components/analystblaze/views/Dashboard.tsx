@@ -6,6 +6,7 @@ import {
   Gamepad2,
   Gauge,
   HardDrive,
+  Lock,
   MemoryStick,
   MonitorPlay,
   PlugZap,
@@ -37,6 +38,7 @@ export function Dashboard({
   onActivateGameMode,
   onRestoreGameMode,
   onApplyPcCleanFast,
+  onOpenBilling,
   busy,
 }: {
   user: User | null;
@@ -46,6 +48,7 @@ export function Dashboard({
   onActivateGameMode: () => Promise<void>;
   onRestoreGameMode: () => Promise<void>;
   onApplyPcCleanFast: () => Promise<void>;
+  onOpenBilling: () => Promise<void>;
   busy: boolean;
 }) {
   const { t } = useI18n();
@@ -107,6 +110,11 @@ export function Dashboard({
     track("pc_clean_fast_clicked");
     if (!isReady) return;
     await onApplyPcCleanFast();
+  };
+
+  const handleGameModeUpsellClick = async () => {
+    track("game_mode_upsell_clicked");
+    await onOpenBilling();
   };
 
   const healthLabel = useMemo(() => healthLevelLabel(telemetry?.health_level, t), [telemetry?.health_level, t]);
@@ -193,7 +201,7 @@ export function Dashboard({
             <div className="flex flex-col items-start gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <button
-                  disabled={busy || !isReady || (!paidGameModeAllowed && !gameModeActive)}
+                  disabled={busy || !isReady}
                   onClick={() => {
                     if (!isReady) {
                       void onStartAgent();
@@ -201,6 +209,10 @@ export function Dashboard({
                     }
                     if (gameModeActive) {
                       void handleGameModeDeactivate();
+                      return;
+                    }
+                    if (!paidGameModeAllowed) {
+                      void handleGameModeUpsellClick();
                       return;
                     }
                     void handleGameModeClick();
@@ -213,6 +225,8 @@ export function Dashboard({
                 >
                   {gameModeActive ? (
                     <ShieldCheck className="h-4 w-4" />
+                  ) : isReady && !paidGameModeAllowed ? (
+                    <Lock className="h-4 w-4" />
                   ) : (
                     <Gamepad2 className="h-4 w-4 transition-transform group-hover:-rotate-12" />
                   )}
@@ -221,7 +235,7 @@ export function Dashboard({
                       ? "Desativar Modo Gamer"
                       : paidGameModeAllowed
                         ? t("dashboard.gameMode")
-                        : "Modo Gamer pago"
+                        : "Desbloquear Modo Gamer"
                     : t("dashboard.startAgent")}
                   {!gameModeActive && <ArrowUpRight className="h-4 w-4 opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />}
                 </button>
@@ -235,7 +249,7 @@ export function Dashboard({
                 </button>
               </div>
               {isReady && !paidGameModeAllowed && (
-                <span className="text-xs text-slate-500">{t("common.paidPlansOnly")}</span>
+                <span className="text-xs text-slate-500">Abre a pagina de planos</span>
               )}
             </div>
             <Sparkline data={cpuHistory} />
