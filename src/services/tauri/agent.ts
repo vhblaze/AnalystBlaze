@@ -149,6 +149,18 @@ export type WeeklyAiUsage = {
   limitReached: boolean;
 };
 
+/** An admin-broadcast message shown in the notification bell (e.g. "overlay
+ * changes coming next week") - unrelated to a specific app release. */
+export type Announcement = {
+  id: string;
+  title: string;
+  body: string;
+  tone: "info" | "warning" | "danger";
+  isActive: boolean;
+  expiresAt?: string | null;
+  createdAt: string;
+};
+
 export type RemoteCommandConfirmationRequest = {
   requestId: string;
   commandId: string;
@@ -1125,6 +1137,16 @@ export async function getWeeklyAiUsage(): Promise<WeeklyAiUsage | null> {
 export async function listenToWeeklyAiUsage(onUsage: (usage: WeeklyAiUsage | null) => void) {
   if (!isTauriRuntime()) return () => undefined;
   return listen<WeeklyAiUsage | null>("weekly-ai-usage", (event) => onUsage(event.payload));
+}
+
+export async function getActiveAnnouncements(): Promise<Announcement[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<Announcement[]>("active_announcements");
+}
+
+export async function listenToAnnouncements(onAnnouncements: (announcements: Announcement[]) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<Announcement[]>("announcements-updated", (event) => onAnnouncements(event.payload));
 }
 
 export async function listenToAgentSessionInvalidated(onInvalidated: () => void) {

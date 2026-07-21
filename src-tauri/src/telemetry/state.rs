@@ -10,6 +10,7 @@ use super::collector::TelemetrySample;
 pub const TELEMETRY_UPDATE_EVENT: &str = "telemetry-update";
 pub const AGENT_SESSION_INVALIDATED_EVENT: &str = "agent-session-invalidated";
 pub const WEEKLY_AI_USAGE_EVENT: &str = "weekly-ai-usage";
+pub const ANNOUNCEMENTS_EVENT: &str = "announcements-updated";
 
 pub type SharedTelemetryState = Arc<RwLock<Option<TelemetryDashboardSnapshot>>>;
 
