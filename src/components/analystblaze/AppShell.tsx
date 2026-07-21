@@ -786,6 +786,7 @@ export function AppShell() {
                   onStartAgent={auth.start}
                   onCollectSample={auth.collectSample}
                   onSyncPlan={auth.syncPlan}
+                  onOpenHistory={() => handleViewChange("controls")}
                 />
               </Suspense>
             )}

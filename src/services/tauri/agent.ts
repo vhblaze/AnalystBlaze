@@ -379,6 +379,10 @@ export type LocalAiPolicy = {
   thermal_gpu_limit_c: number;
   battery_saver_threshold_percent: number;
   network_latency_threshold_ms: number;
+  cleanup_cache_min_age_minutes: number;
+  cleanup_temp_min_age_minutes: number;
+  cleanup_system_min_age_minutes: number;
+  adaptive_idle_eco_threshold_seconds: number;
 };
 
 export type PerformanceReport = {
@@ -975,6 +979,10 @@ export async function getLocalAiPolicy(): Promise<LocalAiPolicy> {
       thermal_gpu_limit_c: 84,
       battery_saver_threshold_percent: 20,
       network_latency_threshold_ms: 100,
+      cleanup_cache_min_age_minutes: 360,
+      cleanup_temp_min_age_minutes: 60,
+      cleanup_system_min_age_minutes: 1440,
+      adaptive_idle_eco_threshold_seconds: 600,
     };
   }
   return invoke<LocalAiPolicy>("local_ai_policy");
