@@ -10,6 +10,15 @@ use crate::process_ext::CommandExt;
 use super::advanced::{collect_advanced_telemetry, AdvancedTelemetry};
 use super::network::{best_latency_ms, collect_network_sample, NetworkDiagnostics};
 
+/// Typical TjMax for modern (post-~2015) consumer/prosumer Intel and AMD
+/// CPUs. The real per-model value lives in a hardware register (MSR) that
+/// Windows usermode - even as SYSTEM - cannot read without a kernel-mode
+/// driver (that's what tools like LibreHardwareMonitor bundle). This app
+/// deliberately doesn't ship a kernel driver, so throttle_distance_c is
+/// always an estimate against this assumed default, never a value read off
+/// the actual chip - see throttle_distance_assumed_tjmax_c on TelemetrySample.
+const ASSUMED_TJMAX_C: f64 = 100.0;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpuInfo {
     pub name: String,
@@ -39,6 +48,17 @@ pub struct TelemetrySample {
     pub cpu_temperature_available: bool,
     pub cpu_temperature_source: Option<String>,
     pub cpu_temperature_methods: Vec<CpuTemperatureMethod>,
+    /// Estimated headroom before the CPU is expected to start throttling -
+    /// see ASSUMED_TJMAX_C. None whenever cpu_temperature itself is
+    /// unavailable, same as every other "missing sensor" in this struct.
+    pub throttle_distance_c: Option<f64>,
+    /// The TjMax value throttle_distance_c was computed against. Always
+    /// ASSUMED_TJMAX_C today - this is a typical default for modern Intel/
+    /// AMD consumer CPUs, not read from the actual chip (that needs an MSR
+    /// read, which requires a kernel-mode driver on Windows - out of scope,
+    /// see the Task C3 write-up). Exposed so no consumer of this field can
+    /// mistake it for a precise per-model reading.
+    pub throttle_distance_assumed_tjmax_c: Option<f64>,
     pub gpu_usage: f64,
     pub gpu_usage_available: bool,
     pub gpu_name: String,
@@ -188,6 +208,8 @@ impl TelemetryCollector {
         let cpu_temperature = cpu_temperature_reading.value_c.unwrap_or_default();
         let cpu_temperature_source = cpu_temperature_reading.source.clone();
         let cpu_temperature_methods = cpu_temperature_reading.methods.clone();
+        let (throttle_distance_c, throttle_distance_assumed_tjmax_c) =
+            throttle_distance(cpu_temperature_reading.value_c);
         let nvidia_sensors = self
             .nvidia_sensor_reader
             .as_ref()
@@ -280,6 +302,8 @@ impl TelemetryCollector {
             cpu_temperature_available,
             cpu_temperature_source: cpu_temperature_source.clone(),
             cpu_temperature_methods: cpu_temperature_methods.clone(),
+            throttle_distance_c,
+            throttle_distance_assumed_tjmax_c,
             gpu_usage: gpu_usage.unwrap_or_default(),
             gpu_usage_available: gpu_usage.is_some(),
             gpu_name: gpu_name.clone(),
@@ -1020,6 +1044,17 @@ fn bytes_to_gb(value: u64) -> f64 {
 
 fn clamp_percent(value: f64) -> f64 {
     value.clamp(0.0, 100.0)
+}
+
+/// Returns (distance_to_assumed_throttle_c, assumed_tjmax_c) - both None
+/// when there's no CPU temperature reading to estimate from. See
+/// ASSUMED_TJMAX_C for why this is a headroom estimate, not a precise
+/// per-model throttle point.
+fn throttle_distance(cpu_temperature_c: Option<f64>) -> (Option<f64>, Option<f64>) {
+    match cpu_temperature_c {
+        Some(value) => (Some(ASSUMED_TJMAX_C - value), Some(ASSUMED_TJMAX_C)),
+        None => (None, None),
+    }
 }
 
 fn round1(value: f64) -> f64 {
@@ -1950,6 +1985,24 @@ fn idle_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn throttle_distance_uses_the_assumed_tjmax_when_temperature_is_available() {
+        let (distance, tjmax) = throttle_distance(Some(72.0));
+        assert_eq!(distance, Some(28.0));
+        assert_eq!(tjmax, Some(ASSUMED_TJMAX_C));
+    }
+
+    #[test]
+    fn throttle_distance_is_none_without_a_temperature_reading() {
+        assert_eq!(throttle_distance(None), (None, None));
+    }
+
+    #[test]
+    fn throttle_distance_goes_negative_past_the_assumed_ceiling() {
+        let (distance, _) = throttle_distance(Some(104.0));
+        assert_eq!(distance, Some(-4.0));
+    }
 
     #[test]
     fn parses_external_hardware_monitor_sensors() {
