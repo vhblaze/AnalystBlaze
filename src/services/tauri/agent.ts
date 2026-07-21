@@ -17,6 +17,13 @@ export type AgentStatus = {
   billing_url: string;
   insights_url: string;
   focus_session?: FocusSession | null;
+  /** Unix seconds of the last confirmed server-side plan check, or null if
+   * it has never succeeded since pairing (the plan shown is still the last
+   * known-good value - it's never blanked out). */
+  plan_synced_at?: number | null;
+  /** Set when the most recent sync attempt failed: "network" | "tls" |
+   * "timeout" | "dns" | "unavailable" | "empty_profile" | "unknown". */
+  plan_sync_error?: string | null;
 };
 
 export type AgentTelemetrySample = {
@@ -534,6 +541,8 @@ const fallbackStatus: AgentStatus = {
     PROD_INSIGHTS_URL,
   ),
   focus_session: null,
+  plan_synced_at: null,
+  plan_sync_error: null,
 };
 
 export function isTauriRuntime() {
@@ -549,6 +558,20 @@ function requireTauriRuntime(feature: string) {
 export async function getAgentStatus() {
   if (!isTauriRuntime()) return fallbackStatus;
   return invoke<AgentStatus>("agent_status");
+}
+
+/** Explicitly asks the backend to re-confirm the plan against the server
+ * right now (bounded by a 15s network timeout) - used by the "Sincronizar
+ * plano" button. Passive freshness otherwise comes from a background loop;
+ * see spawn_plan_sync_loop in lib.rs. */
+export async function syncAccountPlan() {
+  requireTauriRuntime("Sincronizacao de plano");
+  return invoke<AgentStatus>("sync_account_plan");
+}
+
+export async function listenToPlanSynced(onStatus: (status: AgentStatus) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<AgentStatus>("plan-synced", (event) => onStatus(event.payload));
 }
 
 export async function openAgentLogin() {

@@ -189,7 +189,14 @@ struct WeeklyAiTelemetryUsage {
 impl ApiClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            // Without an explicit timeout, a stalled TLS handshake (seen on
+            // some Windows 10 machines depending on the local cert store)
+            // hangs the underlying request forever instead of failing fast
+            // into the resilient fallback paths that call this client.
+            http: reqwest::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+                .unwrap_or_default(),
             base_url: base_url.into().trim_end_matches('/').to_string(),
         }
     }
