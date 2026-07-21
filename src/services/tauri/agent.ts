@@ -415,6 +415,49 @@ export type CleanupCategory = {
   skippedReason?: string | null;
 };
 
+export type DiskUsageCategoryKind =
+  | "games"
+  | "apps"
+  | "videos"
+  | "cache"
+  | "downloads"
+  | "large_files"
+  | "system";
+
+export type DiskUsageItem = {
+  path: string;
+  label: string;
+  sizeBytes: number;
+  protected: boolean;
+  actionable: boolean;
+  /** Cache-category items delete through applyCleanupCategory(path) instead
+   * of deleteDiskUsageItem - `path` holds the cleanup category id then. */
+  deletesViaCleanupCategory: boolean;
+};
+
+export type DiskUsageCategory = {
+  kind: DiskUsageCategoryKind;
+  label: string;
+  totalBytes: number;
+  itemCount: number;
+  items: DiskUsageItem[];
+  capped: boolean;
+  scannedPaths: string[];
+};
+
+export type DiskUsageSummary = {
+  categories: DiskUsageCategory[];
+  scannedAt: number;
+  durationMs: number;
+  canceled: boolean;
+};
+
+export type DiskUsageProgress = {
+  currentCategory: string;
+  scannedItems: number;
+  done: boolean;
+};
+
 export type StartupImpact = {
   name: string;
   location: string;
@@ -783,6 +826,26 @@ export async function scanCleanupCategories(): Promise<CleanupCategory[]> {
 export async function applyCleanupCategory(category: string, mode?: "safe" | "deep_confirmed" | string): Promise<OptimizationResult> {
   requireTauriRuntime("Limpeza por categoria");
   return invoke<OptimizationResult>("apply_cleanup_category", { category, mode });
+}
+
+export async function getDiskUsageSummary(forceRefresh = false): Promise<DiskUsageSummary> {
+  requireTauriRuntime("Analise de uso de disco");
+  return invoke<DiskUsageSummary>("disk_usage_summary", { forceRefresh });
+}
+
+export async function cancelDiskUsageScan(): Promise<boolean> {
+  requireTauriRuntime("Analise de uso de disco");
+  return invoke<boolean>("cancel_disk_usage_scan");
+}
+
+export async function deleteDiskUsageItem(path: string): Promise<OptimizationResult> {
+  requireTauriRuntime("Exclusao de item de disco");
+  return invoke<OptimizationResult>("delete_disk_usage_item", { path });
+}
+
+export async function listenToDiskUsageProgress(onProgress: (progress: DiskUsageProgress) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<DiskUsageProgress>("disk-usage-scan-progress", (event) => onProgress(event.payload));
 }
 
 export async function scanStartupImpact(): Promise<StartupImpact[]> {

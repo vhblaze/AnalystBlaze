@@ -1,4 +1,4 @@
-import { BatteryCharging, BookOpen, Briefcase, Gamepad2, Gauge, History, ListChecks, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench } from "lucide-react";
+import { BatteryCharging, BookOpen, Briefcase, Download, FileWarning, Film, Gamepad2, Gauge, HardDrive, History, ListChecks, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { canUseAutomaticGameMode, canUsePaidGameMode } from "@/hooks/useAuth";
@@ -6,9 +6,12 @@ import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
   addProtectedApp,
+  cancelDiskUsageScan,
+  deleteDiskUsageItem,
   getLocalAiPolicy,
   getAuditLog,
   getActiveFocusSession,
+  getDiskUsageSummary,
   getEnergyDiagnostics,
   getActiveGameModeSession,
   getNetworkDiagnostics,
@@ -19,6 +22,7 @@ import {
   installPrivilegedHelper,
   isTauriRuntime,
   listNetworkAdapters,
+  listenToDiskUsageProgress,
   restartPrivilegedHelper,
   runPerformanceScan,
   scanCleanupCategories,
@@ -28,6 +32,9 @@ import {
   type AuditEvent,
   type AgentStatus,
   type CleanupCategory,
+  type DiskUsageCategory,
+  type DiskUsageProgress,
+  type DiskUsageSummary,
   type EnergyDiagnostics,
   type FocusModeProfile,
   type FocusSession,
@@ -117,6 +124,11 @@ export function LocalControls({
   const [performanceReport, setPerformanceReport] = useState<PerformanceReport | null>(null);
   const [cleanupCategories, setCleanupCategories] = useState<CleanupCategory[]>([]);
   const [startupImpact, setStartupImpact] = useState<StartupImpact[]>([]);
+  const [diskUsageSummary, setDiskUsageSummary] = useState<DiskUsageSummary | null>(null);
+  const [diskUsageBusy, setDiskUsageBusy] = useState(false);
+  const [diskUsageError, setDiskUsageError] = useState<string | null>(null);
+  const [diskUsageProgress, setDiskUsageProgress] = useState<DiskUsageProgress | null>(null);
+  const [confirmingDeletePath, setConfirmingDeletePath] = useState<string | null>(null);
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [performanceBusy, setPerformanceBusy] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
@@ -163,6 +175,14 @@ export function LocalControls({
   useEffect(() => {
     setActiveFocusSession(status?.focus_session ?? null);
   }, [status?.focus_session]);
+
+  useEffect(() => {
+    let dispose: (() => void) | undefined;
+    listenToDiskUsageProgress((progress) => setDiskUsageProgress(progress)).then((next) => {
+      dispose = next;
+    });
+    return () => dispose?.();
+  }, []);
 
   const refreshWindowsInventory = async () => {
     setInventoryBusy(true);
@@ -257,6 +277,50 @@ export function LocalControls({
       setPerformanceError(errorMessage(error));
     } finally {
       setPerformanceBusy(false);
+    }
+  };
+
+  const scanDiskUsage = async (forceRefresh: boolean) => {
+    setDiskUsageBusy(true);
+    setDiskUsageError(null);
+    setDiskUsageProgress(null);
+    try {
+      const summary = await getDiskUsageSummary(forceRefresh);
+      setDiskUsageSummary(summary);
+      track("disk_usage_scanned", { forceRefresh, canceled: summary.canceled });
+    } catch (error) {
+      setDiskUsageError(errorMessage(error));
+    } finally {
+      setDiskUsageBusy(false);
+    }
+  };
+
+  const cancelDiskScan = async () => {
+    try {
+      await cancelDiskUsageScan();
+    } catch (error) {
+      setDiskUsageError(errorMessage(error));
+    }
+  };
+
+  const deleteDiskItem = async (category: DiskUsageCategory, item: DiskUsageCategory["items"][number]) => {
+    setConfirmingDeletePath(null);
+    setActionMessage(null);
+    try {
+      const result = item.deletesViaCleanupCategory
+        ? await onApplyCleanupCategory(item.path, item.path === "cleanup_quarantine" ? "purge" : "safe")
+        : await deleteDiskUsageItem(item.path);
+      const outcome = result as { success?: boolean; message?: string } | undefined;
+      setActionMessage(
+        outcome && outcome.success === false && outcome.message
+          ? outcome.message
+          : `${item.label} movido para a quarentena local.`,
+      );
+      track("disk_usage_item_deleted", { category: category.kind });
+      await scanDiskUsage(true);
+      await refreshOperationalHistory();
+    } catch (error) {
+      setActionMessage(errorMessage(error));
     }
   };
 
@@ -708,6 +772,73 @@ export function LocalControls({
             disabled={busy || performanceBusy}
           />
         </div>
+      </section>
+
+      <section className="glass-panel cyber-glow p-6">
+        <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <HardDrive className="h-3.5 w-3.5 text-cyan-300" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Uso de disco</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            {diskUsageBusy ? (
+              <button
+                onClick={() => void cancelDiskScan()}
+                className="inline-flex items-center gap-2 rounded-xl border border-rose-400/40 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition-all hover:border-rose-300/60"
+              >
+                <X className="h-3.5 w-3.5" />
+                Cancelar analise
+              </button>
+            ) : (
+              <button
+                disabled={!runtimeAvailable}
+                onClick={() => void scanDiskUsage(true)}
+                className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                {diskUsageSummary ? "Analisar novamente" : "Analisar disco"}
+              </button>
+            )}
+          </div>
+        </div>
+        {diskUsageError && <Notice tone="danger" message={diskUsageError} />}
+        {diskUsageBusy && (
+          <div className="mb-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>Analisando disco...</span>
+              <span>{diskUsageProgress?.scannedItems ?? 0} itens verificados</span>
+            </div>
+            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-cyan-400/70" />
+            </div>
+          </div>
+        )}
+        {!diskUsageSummary && !diskUsageBusy && (
+          <p className="text-sm text-slate-400">
+            Analise sob demanda: categoriza jogos, aplicativos, videos, cache, downloads, arquivos grandes e itens de
+            sistema. Nada e excluido sem sua acao explicita.
+          </p>
+        )}
+        {diskUsageSummary && !diskUsageBusy && (
+          <>
+            <p className="mb-3 text-xs text-slate-500">
+              Ultima analise ha {formatTimeAgo(diskUsageSummary.scannedAt)}
+              {diskUsageSummary.canceled ? " - cancelada, resultado parcial" : ""}.
+            </p>
+            <div className="grid gap-3 md:grid-cols-2">
+              {diskUsageSummary.categories.map((category) => (
+                <DiskUsageCategoryPanel
+                  key={category.kind}
+                  category={category}
+                  disabled={busy || diskUsageBusy}
+                  confirmingDeletePath={confirmingDeletePath}
+                  onRequestDelete={setConfirmingDeletePath}
+                  onConfirmDelete={(item) => void deleteDiskItem(category, item)}
+                />
+              ))}
+            </div>
+          </>
+        )}
       </section>
 
       <section className="glass-panel cyber-glow p-6">
@@ -1288,6 +1419,17 @@ function formatBytes(bytes?: number | null) {
   return `${(mb / 1024).toFixed(1)} GB`;
 }
 
+function formatTimeAgo(unixSeconds: number): string {
+  const deltaSeconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
+  if (deltaSeconds < 60) return "poucos segundos";
+  const minutes = Math.floor(deltaSeconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h`;
+  const days = Math.floor(hours / 24);
+  return `${days} d`;
+}
+
 function powerSourceLabel(value?: string | null) {
   if (value === "ac") return "tomada";
   if (value === "battery") return "bateria";
@@ -1358,6 +1500,109 @@ function ActionList({
         </div>
       )}
     </div>
+  );
+}
+
+function diskUsageCategoryIcon(kind: DiskUsageCategory["kind"]) {
+  switch (kind) {
+    case "games":
+      return <Gamepad2 className="h-4 w-4 text-cyan-300" />;
+    case "apps":
+      return <Briefcase className="h-4 w-4 text-cyan-300" />;
+    case "videos":
+      return <Film className="h-4 w-4 text-cyan-300" />;
+    case "cache":
+      return <ListChecks className="h-4 w-4 text-cyan-300" />;
+    case "downloads":
+      return <Download className="h-4 w-4 text-cyan-300" />;
+    case "large_files":
+      return <FileWarning className="h-4 w-4 text-cyan-300" />;
+    case "system":
+      return <Shield className="h-4 w-4 text-cyan-300" />;
+    default:
+      return <HardDrive className="h-4 w-4 text-cyan-300" />;
+  }
+}
+
+function DiskUsageCategoryPanel({
+  category,
+  disabled,
+  confirmingDeletePath,
+  onRequestDelete,
+  onConfirmDelete,
+}: {
+  category: DiskUsageCategory;
+  disabled: boolean;
+  confirmingDeletePath: string | null;
+  onRequestDelete: (path: string | null) => void;
+  onConfirmDelete: (item: DiskUsageCategory["items"][number]) => void;
+}) {
+  return (
+    <AdvancedSection
+      icon={diskUsageCategoryIcon(category.kind)}
+      title={`${category.label} - ${formatBytes(category.totalBytes)}`}
+      description={
+        category.itemCount === 0
+          ? "Nada encontrado nesta categoria."
+          : `${category.itemCount} item(ns)${category.capped ? " - varredura limitada, pode haver mais" : ""}.`
+      }
+    >
+      {category.items.length === 0 ? (
+        <p className="text-xs text-slate-500">Nada encontrado nesta categoria.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {category.items.map((item) => (
+            <div key={item.path} className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
+              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="truncate text-sm font-medium text-slate-100" title={item.path}>
+                      {item.label}
+                    </span>
+                    {item.protected && (
+                      <span className="shrink-0 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-amber-200">
+                        protegido
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 truncate text-xs text-slate-500">{formatBytes(item.sizeBytes)}</div>
+                </div>
+                {item.actionable && (
+                  <div className="flex shrink-0 gap-2">
+                    {confirmingDeletePath === item.path ? (
+                      <>
+                        <button
+                          disabled={disabled}
+                          onClick={() => onConfirmDelete(item)}
+                          className="rounded-lg border border-rose-400/40 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition-all hover:bg-rose-400/15 disabled:opacity-50"
+                        >
+                          Confirmar exclusao
+                        </button>
+                        <button
+                          disabled={disabled}
+                          onClick={() => onRequestDelete(null)}
+                          className="rounded-lg border border-cyan-500/20 bg-slate-950/60 px-3 py-2 text-xs font-medium text-slate-300 transition-all hover:border-cyan-300/40 disabled:opacity-50"
+                        >
+                          Cancelar
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        disabled={disabled}
+                        onClick={() => onRequestDelete(item.path)}
+                        className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
+                      >
+                        Excluir
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </AdvancedSection>
   );
 }
 
