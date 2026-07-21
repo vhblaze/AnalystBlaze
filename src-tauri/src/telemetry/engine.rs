@@ -1268,6 +1268,13 @@ fn backend_sample_context(sample: &TelemetrySample, privacy: TelemetryPrivacyPol
 }
 
 fn backend_sample_details(sample: &TelemetrySample, privacy: TelemetryPrivacyPolicy) -> Value {
+    // Per-sensor detail (which core, which label, every LibreHardwareMonitor/
+    // OpenHardwareMonitor row when the user has one running) stays local/
+    // on-demand only - the server gets counts and the single best reading,
+    // same shape compact_sample_context() already uses for context_state.
+    // Confirmed the backend never reads the full arrays this used to send
+    // (app/api/v1/dashboard.py only reads the scalar cpu_temperature/
+    // cpu_temp field), so this is a strict reduction, not a behavior change.
     let mut details = json!({
         "privacy": privacy_metadata(privacy),
         "gpu_name": sample.gpu_name,
@@ -1277,16 +1284,17 @@ fn backend_sample_details(sample: &TelemetrySample, privacy: TelemetryPrivacyPol
         "cpu_temperature": sample.cpu_temperature,
         "cpu_temperature_available": sample.cpu_temperature_available,
         "cpu_temperature_source": sample.cpu_temperature_source,
-        "cpu_temperature_methods": sample.cpu_temperature_methods,
+        "cpu_temperature_method_count": sample.cpu_temperature_methods.len(),
+        "throttle_distance_c": sample.throttle_distance_c,
         "ram_total_mb": sample.ram_total_mb,
         "ram_usage_percent": sample.ram_usage_percent,
         "gpu_temperature": sample.gpu_temperature,
         "gpu_temperature_available": sample.gpu_temperature_available,
         "gpu_temperature_source": sample.gpu_temperature_source,
-        "gpu_temperature_methods": sample.gpu_temperature_methods,
-        "thermal_sensors": sensor_backend_summary(&sample.thermal_sensors, 24),
-        "power_sensors": sensor_backend_summary(&sample.power_sensors, 18),
-        "fan_sensors": sensor_backend_summary(&sample.fan_sensors, 12),
+        "gpu_temperature_method_count": sample.gpu_temperature_methods.len(),
+        "thermal_sensor_count": sample.thermal_sensors.len(),
+        "power_sensor_count": sample.power_sensors.len(),
+        "fan_sensor_count": sample.fan_sensors.len(),
         "thermal_state": sample.thermal_state,
         "thermal_trend": sample.thermal_trend,
         "throttling_suspected": sample.throttling_suspected,
@@ -1346,26 +1354,6 @@ fn backend_advanced_summary(sample: &TelemetrySample) -> Value {
     })
 }
 
-fn sensor_backend_summary(
-    sensors: &[super::collector::HardwareSensorReading],
-    limit: usize,
-) -> Value {
-    json!(sensors
-        .iter()
-        .take(limit)
-        .map(|sensor| {
-            json!({
-                "source": &sensor.source,
-                "type": &sensor.sensor_type,
-                "hardware_type": &sensor.hardware_type,
-                "hardware_name": &sensor.hardware_name,
-                "label": &sensor.label,
-                "value": sensor.value,
-                "unit": &sensor.unit,
-            })
-        })
-        .collect::<Vec<_>>())
-}
 
 fn backend_network_summary(
     network: &super::network::NetworkDiagnostics,
@@ -2100,6 +2088,8 @@ mod tests {
             cpu_temperature_available: true,
             cpu_temperature_source: Some("test".to_string()),
             cpu_temperature_methods: Vec::new(),
+            throttle_distance_c: Some(39.0),
+            throttle_distance_assumed_tjmax_c: Some(100.0),
             gpu_usage: 31.0,
             gpu_usage_available: true,
             gpu_name: "Test GPU".to_string(),
@@ -2298,6 +2288,47 @@ mod tests {
                 .pointer("/privacy/active_window")
                 .and_then(Value::as_str),
             Some("local_only")
+        );
+    }
+
+    #[test]
+    fn backend_sample_details_send_sensor_counts_not_per_sensor_detail() {
+        let mut sample = sensitive_sample();
+        sample.cpu_temperature_methods = vec![super::super::collector::CpuTemperatureMethod {
+            source: "libre_hardware_monitor".to_string(),
+            label: Some("CPU Core #3".to_string()),
+            value_c: Some(71.5),
+            available: true,
+        }];
+        sample.thermal_sensors = vec![super::super::collector::HardwareSensorReading {
+            source: "libre_hardware_monitor".to_string(),
+            sensor_type: "temperature".to_string(),
+            hardware_type: Some("Cpu".to_string()),
+            hardware_name: Some("AMD Ryzen 9".to_string()),
+            identifier: Some("/amdcpu/0/temperature/3".to_string()),
+            label: Some("CPU Core #3".to_string()),
+            value: 71.5,
+            unit: "C".to_string(),
+        }];
+
+        let details = backend_sample_details(&sample, default_privacy());
+        let text = details.to_string();
+
+        // The per-core label/identifier must never reach the server - only
+        // how many sensors were read and the single best aggregate value
+        // (already present as cpu_temperature/gpu_temperature).
+        assert!(!text.contains("CPU Core #3"));
+        assert!(!text.contains("AMD Ryzen 9"));
+        assert!(!text.contains("amdcpu"));
+        assert_eq!(
+            details
+                .pointer("/cpu_temperature_method_count")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            details.pointer("/thermal_sensor_count").and_then(Value::as_u64),
+            Some(1)
         );
     }
 
