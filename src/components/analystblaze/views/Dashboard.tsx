@@ -36,6 +36,7 @@ export function Dashboard({
   onStartAgent,
   onActivateGameMode,
   onRestoreGameMode,
+  onApplyPcCleanFast,
   busy,
 }: {
   user: User | null;
@@ -44,6 +45,7 @@ export function Dashboard({
   onStartAgent: () => Promise<void>;
   onActivateGameMode: () => Promise<void>;
   onRestoreGameMode: () => Promise<void>;
+  onApplyPcCleanFast: () => Promise<void>;
   busy: boolean;
 }) {
   const { t } = useI18n();
@@ -99,6 +101,12 @@ export function Dashboard({
     await onRestoreGameMode();
     setActiveGameModeSession(null);
     await refreshGameModeSession();
+  };
+
+  const handlePcCleanFastClick = async () => {
+    track("pc_clean_fast_clicked");
+    if (!isReady) return;
+    await onApplyPcCleanFast();
   };
 
   const healthLabel = useMemo(() => healthLevelLabel(telemetry?.health_level, t), [telemetry?.health_level, t]);
@@ -182,39 +190,50 @@ export function Dashboard({
           </div>
 
           <div className="relative flex items-center justify-between gap-4">
-            <div className="flex flex-col items-start gap-1">
-              <button
-                disabled={busy || !isReady || !paidGameModeAllowed || gameModeActive}
-                onClick={() => {
-                  if (!isReady) {
-                    void onStartAgent();
-                    return;
-                  }
-                  void handleGameModeClick();
-                }}
-                className={`group inline-flex items-center gap-2.5 rounded-xl border px-6 py-3 text-sm font-semibold transition-all duration-300 disabled:opacity-70 ${
-                  gameModeActive
-                    ? "border-emerald-300/50 bg-emerald-400/15 text-emerald-50"
-                    : "border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 text-cyan-100 hover:border-cyan-300/60 hover:from-cyan-500/30 hover:shadow-[0_0_30px_-5px_hsl(187_100%_55%/0.7)]"
-                }`}
-              >
-                {gameModeActive ? (
-                  <ShieldCheck className="h-4 w-4" />
-                ) : (
-                  <Gamepad2 className="h-4 w-4 transition-transform group-hover:-rotate-12" />
-                )}
-                {isReady ? (gameModeActive ? "Modo Gamer Ativado" : paidGameModeAllowed ? t("dashboard.gameMode") : "Modo Gamer pago") : t("dashboard.startAgent")}
-                {!gameModeActive && <ArrowUpRight className="h-4 w-4 opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />}
-              </button>
-              {gameModeActive && (
+            <div className="flex flex-col items-start gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
-                  disabled={busy}
-                  onClick={() => void handleGameModeDeactivate()}
-                  className="text-xs font-medium text-amber-200 transition hover:text-amber-100 disabled:opacity-50"
+                  disabled={busy || !isReady || (!paidGameModeAllowed && !gameModeActive)}
+                  onClick={() => {
+                    if (!isReady) {
+                      void onStartAgent();
+                      return;
+                    }
+                    if (gameModeActive) {
+                      void handleGameModeDeactivate();
+                      return;
+                    }
+                    void handleGameModeClick();
+                  }}
+                  className={`group inline-flex items-center gap-2.5 rounded-xl border px-6 py-3 text-sm font-semibold transition-all duration-300 disabled:opacity-70 ${
+                    gameModeActive
+                      ? "border-emerald-300/50 bg-emerald-400/15 text-emerald-50 hover:border-amber-300/60 hover:bg-amber-400/15"
+                      : "border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 text-cyan-100 hover:border-cyan-300/60 hover:from-cyan-500/30 hover:shadow-[0_0_30px_-5px_hsl(187_100%_55%/0.7)]"
+                  }`}
                 >
-                  Desativar
+                  {gameModeActive ? (
+                    <ShieldCheck className="h-4 w-4" />
+                  ) : (
+                    <Gamepad2 className="h-4 w-4 transition-transform group-hover:-rotate-12" />
+                  )}
+                  {isReady
+                    ? gameModeActive
+                      ? "Desativar Modo Gamer"
+                      : paidGameModeAllowed
+                        ? t("dashboard.gameMode")
+                        : "Modo Gamer pago"
+                    : t("dashboard.startAgent")}
+                  {!gameModeActive && <ArrowUpRight className="h-4 w-4 opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />}
                 </button>
-              )}
+                <button
+                  disabled={busy || !isReady}
+                  onClick={() => void handlePcCleanFastClick()}
+                  className="group inline-flex items-center gap-2.5 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-5 py-3 text-sm font-semibold text-emerald-100 transition-all duration-300 hover:border-emerald-300/60 hover:bg-emerald-400/15 disabled:opacity-50"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  PC limpo/rapido
+                </button>
+              </div>
               {isReady && !paidGameModeAllowed && (
                 <span className="text-xs text-slate-500">Disponivel nos planos pagos</span>
               )}
