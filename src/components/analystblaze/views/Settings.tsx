@@ -1,4 +1,4 @@
-import { Brain, Check, DownloadCloud, ExternalLink, Eye, Globe, LogOut, Moon, RefreshCw, Shield, Sparkles, Sun, User as UserIcon, Zap } from "lucide-react";
+import { Battery, Brain, Check, DownloadCloud, ExternalLink, Eye, Globe, History, LogOut, Moon, RefreshCw, Shield, Sparkles, Sun, Trash2, User as UserIcon, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -33,6 +33,7 @@ export function Settings({
   onOpenBilling,
   onStartAgent,
   onCollectSample,
+  onOpenHistory,
 }: {
   user: User | null;
   status: AgentStatus | null;
@@ -44,6 +45,7 @@ export function Settings({
   onOpenBilling: () => Promise<void>;
   onStartAgent: () => Promise<void>;
   onCollectSample: () => Promise<AgentTelemetrySample>;
+  onOpenHistory?: () => void;
 }) {
   const { theme, setTheme } = useTheme();
   const { t, locale, setLocale } = useI18n();
@@ -357,6 +359,28 @@ export function Settings({
             <NumberRule label={t("settings.aiNetworkLatency")} value={aiPolicy.network_latency_threshold_ms} min={40} max={500} step={5} suffix="ms" onChange={(network_latency_threshold_ms) => updateAiPolicy({ network_latency_threshold_ms })} />
           </div>
         </div>
+
+        <div className="mt-4 flex flex-col gap-3">
+          <PolicyGroup
+            icon={<Trash2 className="h-4 w-4 text-cyan-300" />}
+            title={t("settings.aiCleanupGroup")}
+            description={t("settings.aiCleanupGroupDesc")}
+            onOpenHistory={onOpenHistory}
+          >
+            <NumberRule label={t("settings.aiCleanupTempAge")} value={aiPolicy.cleanup_temp_min_age_minutes} min={5} max={10080} step={5} suffix="min" onChange={(cleanup_temp_min_age_minutes) => updateAiPolicy({ cleanup_temp_min_age_minutes })} />
+            <NumberRule label={t("settings.aiCleanupCacheAge")} value={aiPolicy.cleanup_cache_min_age_minutes} min={10} max={10080} step={10} suffix="min" onChange={(cleanup_cache_min_age_minutes) => updateAiPolicy({ cleanup_cache_min_age_minutes })} />
+            <NumberRule label={t("settings.aiCleanupSystemAge")} value={aiPolicy.cleanup_system_min_age_minutes} min={60} max={43200} step={60} suffix="min" onChange={(cleanup_system_min_age_minutes) => updateAiPolicy({ cleanup_system_min_age_minutes })} />
+          </PolicyGroup>
+
+          <PolicyGroup
+            icon={<Battery className="h-4 w-4 text-cyan-300" />}
+            title={t("settings.aiEnergyGroup")}
+            description={t("settings.aiEnergyGroupDesc")}
+            onOpenHistory={onOpenHistory}
+          >
+            <NumberRule label={t("settings.aiIdleEcoThreshold")} value={aiPolicy.adaptive_idle_eco_threshold_seconds} min={60} max={10800} step={30} suffix="s" onChange={(adaptive_idle_eco_threshold_seconds) => updateAiPolicy({ adaptive_idle_eco_threshold_seconds })} />
+          </PolicyGroup>
+        </div>
       </section>
 
       <section className="glass-panel cyber-glow p-6">
@@ -577,7 +601,61 @@ const DEFAULT_LOCAL_AI_POLICY: LocalAiPolicy = {
   thermal_gpu_limit_c: 84,
   battery_saver_threshold_percent: 20,
   network_latency_threshold_ms: 100,
+  cleanup_cache_min_age_minutes: 360,
+  cleanup_temp_min_age_minutes: 60,
+  cleanup_system_min_age_minutes: 1440,
+  adaptive_idle_eco_threshold_seconds: 600,
 };
+
+function PolicyGroup({
+  icon,
+  title,
+  description,
+  onOpenHistory,
+  children,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  description: string;
+  onOpenHistory?: () => void;
+  children: React.ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <details className="group rounded-xl border border-cyan-500/10 bg-slate-950/40">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-3 transition hover:bg-cyan-400/5">
+        <span className="flex min-w-0 items-center gap-3">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-cyan-500/20 bg-cyan-400/10">
+            {icon}
+          </span>
+          <span className="min-w-0">
+            <span className="block text-sm font-semibold text-slate-100">{title}</span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-slate-500">{description}</span>
+          </span>
+        </span>
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-widest text-cyan-300 group-open:hidden">
+          abrir
+        </span>
+        <span className="hidden shrink-0 font-mono text-[10px] uppercase tracking-widest text-cyan-300 group-open:block">
+          recolher
+        </span>
+      </summary>
+      <div className="flex flex-col gap-3 border-t border-cyan-500/10 p-4">
+        {children}
+        {onOpenHistory && (
+          <button
+            type="button"
+            onClick={onOpenHistory}
+            className="inline-flex w-fit items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-cyan-300 transition hover:text-cyan-200"
+          >
+            <History className="h-3 w-3" />
+            {t("settings.aiViewRestoreHistory")}
+          </button>
+        )}
+      </div>
+    </details>
+  );
+}
 
 function NumberRule({
   label,

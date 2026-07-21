@@ -765,6 +765,7 @@ export function AppShell() {
                   onOpenBilling={auth.openBilling}
                   onStartAgent={auth.start}
                   onCollectSample={auth.collectSample}
+                  onOpenHistory={() => handleViewChange("controls")}
                 />
               </Suspense>
             )}
