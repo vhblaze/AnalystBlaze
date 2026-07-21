@@ -6,7 +6,7 @@ import { useAgentTelemetry } from "@/hooks/useAgentTelemetry";
 import { canUseAutomaticGameMode, useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
 import { useTelemetry } from "@/hooks/useTelemetry";
-import { useUpdater } from "@/hooks/useUpdater";
+import { isUpdateDismissedNow, useUpdater } from "@/hooks/useUpdater";
 import { useI18n } from "@/i18n";
 import {
   getPrivilegedHelperStatus,
@@ -125,14 +125,27 @@ export function AppShell() {
   );
 
   const notificationItems = useMemo<TopBarNotification[]>(
-    () =>
-      remoteConfirmationQueue.map((request) => ({
+    () => {
+      const items: TopBarNotification[] = remoteConfirmationQueue.map((request) => ({
         id: request.requestId,
         title: request.title || request.actionName,
         description: request.description,
         tone: "warning",
-      })),
-    [remoteConfirmationQueue],
+      }));
+      const update = updater.status;
+      if (update?.available && (update.mandatory || !isUpdateDismissedNow(update))) {
+        items.unshift({
+          id: "update-available",
+          title: update.mandatory
+            ? t("update.availableTitleMandatory", { version: update.version ?? "" })
+            : t("update.availableTitle", { version: update.version ?? "" }),
+          description: update.notes?.trim() || t("update.notesFallback"),
+          tone: update.mandatory ? "danger" : "info",
+        });
+      }
+      return items;
+    },
+    [remoteConfirmationQueue, updater.status, t],
   );
 
   const searchItems = useMemo<TopBarSearchItem[]>(
@@ -433,13 +446,17 @@ export function AppShell() {
           title={titles[view]}
           user={auth.user}
           status={auth.status}
-          pendingNotifications={remoteConfirmationQueue.length}
+          pendingNotifications={notificationItems.length}
           notifications={notificationItems}
           searchItems={searchItems}
           onNotificationsClick={() => {
-            track("notifications_clicked", { pending: remoteConfirmationQueue.length });
+            track("notifications_clicked", { pending: notificationItems.length });
           }}
-          onNotificationClick={() => {
+          onNotificationClick={(id) => {
+            if (id === "update-available") {
+              handleUpdateNow();
+              return;
+            }
             setView("dashboard");
           }}
         />
