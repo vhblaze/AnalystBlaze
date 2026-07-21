@@ -33,6 +33,19 @@ pub struct LocalAiPolicy {
     pub thermal_gpu_limit_c: f64,
     pub battery_saver_threshold_percent: f64,
     pub network_latency_threshold_ms: f64,
+    /// Minimum age before shader/thumbnail/browser cache files are eligible
+    /// for cleanup - low-risk, short-lived data, so this can default low.
+    pub cleanup_cache_min_age_minutes: u64,
+    /// Minimum age before %TEMP%/%WINDIR%\Temp files are eligible.
+    pub cleanup_temp_min_age_minutes: u64,
+    /// Minimum age before crash dumps, Windows Update cache, Delivery
+    /// Optimization cache and memory dumps are eligible - these are the
+    /// most consequential to delete too early, so the default stays high.
+    pub cleanup_system_min_age_minutes: u64,
+    /// Idle time before Adaptive Optimization enters eco/power-saver mode.
+    /// Distinct from cleanup_min_idle_seconds (that one gates automatic
+    /// cleanup, this one gates the energy-saving action).
+    pub adaptive_idle_eco_threshold_seconds: u64,
 }
 
 impl Default for LocalAiPolicy {
@@ -63,6 +76,10 @@ impl Default for LocalAiPolicy {
             thermal_gpu_limit_c: 84.0,
             battery_saver_threshold_percent: 20.0,
             network_latency_threshold_ms: 100.0,
+            cleanup_cache_min_age_minutes: 6 * 60,
+            cleanup_temp_min_age_minutes: 60,
+            cleanup_system_min_age_minutes: 24 * 60,
+            adaptive_idle_eco_threshold_seconds: 10 * 60,
         }
     }
 }
@@ -117,6 +134,10 @@ pub fn save_local_ai_policy(policy: LocalAiPolicy) -> Result<LocalAiPolicy, Stri
             "thermal_gpu_limit_c": policy.thermal_gpu_limit_c,
             "battery_saver_threshold_percent": policy.battery_saver_threshold_percent,
             "network_latency_threshold_ms": policy.network_latency_threshold_ms,
+            "cleanup_cache_min_age_minutes": policy.cleanup_cache_min_age_minutes,
+            "cleanup_temp_min_age_minutes": policy.cleanup_temp_min_age_minutes,
+            "cleanup_system_min_age_minutes": policy.cleanup_system_min_age_minutes,
+            "adaptive_idle_eco_threshold_seconds": policy.adaptive_idle_eco_threshold_seconds,
         }),
     );
     Ok(policy)
@@ -160,6 +181,13 @@ fn normalize_policy(mut policy: LocalAiPolicy) -> LocalAiPolicy {
     policy.battery_saver_threshold_percent =
         policy.battery_saver_threshold_percent.clamp(5.0, 50.0);
     policy.network_latency_threshold_ms = policy.network_latency_threshold_ms.clamp(40.0, 500.0);
+    policy.cleanup_cache_min_age_minutes = policy.cleanup_cache_min_age_minutes.clamp(10, 7 * 24 * 60);
+    policy.cleanup_temp_min_age_minutes = policy.cleanup_temp_min_age_minutes.clamp(5, 7 * 24 * 60);
+    policy.cleanup_system_min_age_minutes =
+        policy.cleanup_system_min_age_minutes.clamp(60, 30 * 24 * 60);
+    policy.adaptive_idle_eco_threshold_seconds = policy
+        .adaptive_idle_eco_threshold_seconds
+        .clamp(60, 3 * 60 * 60);
     policy
 }
 

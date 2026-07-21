@@ -2,10 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sysinfo::{ProcessesToUpdate, System};
 
-use super::{detection, energy, latency, processes, ExecutionResult};
+use super::{detection, energy, latency, local_ai_policy, processes, ExecutionResult};
 use crate::audit;
-
-const DEFAULT_IDLE_ECO_THRESHOLD_SECONDS: u64 = 10 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -67,7 +65,8 @@ pub async fn apply_adaptive_optimization(payload: Option<Value>) -> ExecutionRes
         "details": affinity.details,
     }));
 
-    if should_apply_eco_mode(&payload, before.idle_seconds) {
+    let policy = local_ai_policy::load_local_ai_policy();
+    if should_apply_eco_mode(&payload, before.idle_seconds, policy.adaptive_idle_eco_threshold_seconds) {
         let execution_state = release_thread_execution_state_for_eco();
         let eco = energy::set_power_saver(Some(json!({
             "source": "adaptive_optimization",
@@ -204,7 +203,10 @@ fn collect_observation_blocking(stage: &str) -> AdaptiveObservation {
     }
 }
 
-fn should_apply_eco_mode(payload: &Value, idle_seconds: u64) -> bool {
+/// `default_threshold_seconds` comes from LocalAiPolicy.
+/// adaptive_idle_eco_threshold_seconds - kept as a parameter (not read from
+/// disk in here) so this stays a pure, deterministically-testable function.
+fn should_apply_eco_mode(payload: &Value, idle_seconds: u64, default_threshold_seconds: u64) -> bool {
     if !payload_bool(payload, "ecoMode", true) {
         return false;
     }
@@ -212,7 +214,7 @@ fn should_apply_eco_mode(payload: &Value, idle_seconds: u64) -> bool {
         .get("idleEcoThresholdSeconds")
         .or_else(|| payload.get("idle_eco_threshold_seconds"))
         .and_then(Value::as_u64)
-        .unwrap_or(DEFAULT_IDLE_ECO_THRESHOLD_SECONDS)
+        .unwrap_or(default_threshold_seconds)
         .clamp(60, 3 * 60 * 60);
     idle_seconds >= threshold
 }
@@ -467,13 +469,21 @@ mod tests {
     fn gates_eco_mode_on_idle_threshold() {
         assert!(should_apply_eco_mode(
             &json!({ "idleEcoThresholdSeconds": 120 }),
-            180
+            180,
+            600,
         ));
         assert!(!should_apply_eco_mode(
             &json!({ "idleEcoThresholdSeconds": 120 }),
-            30
+            30,
+            600,
         ));
-        assert!(!should_apply_eco_mode(&json!({ "ecoMode": false }), 9999));
+        assert!(!should_apply_eco_mode(&json!({ "ecoMode": false }), 9999, 600));
+    }
+
+    #[test]
+    fn falls_back_to_the_policy_default_when_payload_omits_a_threshold() {
+        assert!(should_apply_eco_mode(&json!({}), 700, 600));
+        assert!(!should_apply_eco_mode(&json!({}), 500, 600));
     }
 
     #[test]

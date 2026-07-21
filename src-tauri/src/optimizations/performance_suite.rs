@@ -10,7 +10,9 @@ use sysinfo::System;
 use uuid::Uuid;
 
 use super::{
-    cleanup, detection, processes,
+    cleanup, detection,
+    local_ai_policy::{self, LocalAiPolicy},
+    processes,
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
     visual_effects, windows_actions, windows_inventory, ExecutionResult,
 };
@@ -996,8 +998,9 @@ fn maybe_bottleneck(
 }
 
 fn scan_cleanup_categories_blocking() -> Vec<CleanupCategory> {
+    let policy = local_ai_policy::load_local_ai_policy();
     let mut categories = Vec::new();
-    for spec in cleanup_category_specs() {
+    for spec in cleanup_category_specs(&policy) {
         let mut summary = CategoryScanSummary::default();
         let mut paths = Vec::new();
         for path in spec.targets.iter() {
@@ -1046,13 +1049,21 @@ struct CleanupCategorySpec {
     actions: &'static [&'static str],
 }
 
-fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
+/// Grouped by risk tier rather than one setting per category (9 individual
+/// sliders would be noise for most users) - each tier's minutes come from
+/// LocalAiPolicy, user-tunable in Settings, falling back to the same
+/// defaults this used to hardcode per-category.
+fn cleanup_category_specs(policy: &LocalAiPolicy) -> Vec<CleanupCategorySpec> {
+    let temp_min_age = Duration::from_secs(policy.cleanup_temp_min_age_minutes * 60);
+    let cache_min_age = Duration::from_secs(policy.cleanup_cache_min_age_minutes * 60);
+    let system_min_age = Duration::from_secs(policy.cleanup_system_min_age_minutes * 60);
+
     vec![
         CleanupCategorySpec {
             id: "user_temp",
             label: "%TEMP% do usuario",
             targets: user_temp_targets(),
-            min_age: Duration::from_secs(60 * 60),
+            min_age: temp_min_age,
             risk: "safe",
             requires_helper: false,
             reversible: true,
@@ -1062,7 +1073,7 @@ fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
             id: "windows_temp",
             label: "%WINDIR%\\Temp",
             targets: windows_temp_targets(),
-            min_age: Duration::from_secs(60 * 60),
+            min_age: temp_min_age,
             risk: "sensitive",
             requires_helper: true,
             reversible: true,
@@ -1072,7 +1083,7 @@ fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
             id: "directx_shader_cache",
             label: "DirectX/GPU shader cache",
             targets: shader_cache_targets(),
-            min_age: Duration::from_secs(60 * 60),
+            min_age: cache_min_age,
             risk: "safe",
             requires_helper: false,
             reversible: true,
@@ -1082,7 +1093,7 @@ fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
             id: "thumbnail_cache",
             label: "Cache de miniaturas do Explorer",
             targets: thumbnail_cache_targets(),
-            min_age: Duration::from_secs(6 * 60 * 60),
+            min_age: cache_min_age,
             risk: "safe",
             requires_helper: false,
             reversible: true,
@@ -1092,7 +1103,7 @@ fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
             id: "crash_dumps",
             label: "Crash dumps locais antigos",
             targets: crash_dump_targets(),
-            min_age: Duration::from_secs(24 * 60 * 60),
+            min_age: system_min_age,
             risk: "safe",
             requires_helper: false,
             reversible: true,
@@ -1102,7 +1113,7 @@ fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
             id: "browser_cache",
             label: "Cache de navegadores",
             targets: browser_cache_targets(),
-            min_age: Duration::from_secs(6 * 60 * 60),
+            min_age: cache_min_age,
             risk: "safe",
             requires_helper: false,
             reversible: true,
@@ -1112,7 +1123,7 @@ fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
             id: "windows_update_cache",
             label: "Cache de downloads do Windows Update",
             targets: windows_update_cache_targets(),
-            min_age: Duration::from_secs(24 * 60 * 60),
+            min_age: system_min_age,
             risk: "sensitive",
             requires_helper: true,
             reversible: true,
@@ -1122,7 +1133,7 @@ fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
             id: "delivery_optimization_cache",
             label: "Cache de Delivery Optimization",
             targets: delivery_optimization_cache_targets(),
-            min_age: Duration::from_secs(24 * 60 * 60),
+            min_age: system_min_age,
             risk: "sensitive",
             requires_helper: true,
             reversible: true,
@@ -1132,7 +1143,7 @@ fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
             id: "memory_dumps",
             label: "Dumps de memoria do Windows",
             targets: memory_dump_targets(),
-            min_age: Duration::from_secs(24 * 60 * 60),
+            min_age: system_min_age,
             risk: "sensitive",
             requires_helper: true,
             reversible: true,
@@ -1152,7 +1163,8 @@ fn cleanup_category_specs() -> Vec<CleanupCategorySpec> {
 }
 
 fn apply_cleanup_category_blocking(category: &str, mode: &str) -> ExecutionResult {
-    let Some(spec) = cleanup_category_specs()
+    let policy = local_ai_policy::load_local_ai_policy();
+    let Some(spec) = cleanup_category_specs(&policy)
         .into_iter()
         .find(|spec| spec.id == category)
     else {
@@ -1162,7 +1174,7 @@ fn apply_cleanup_category_blocking(category: &str, mode: &str) -> ExecutionResul
             details: json!({
                 "implemented": true,
                 "category": category,
-                "allowed": cleanup_category_specs()
+                "allowed": cleanup_category_specs(&policy)
                     .iter()
                     .map(|spec| spec.id)
                     .collect::<Vec<_>>(),

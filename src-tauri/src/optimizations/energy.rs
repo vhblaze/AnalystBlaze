@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::process::Command;
 
 use super::{
+    local_ai_policy,
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
     ExecutionResult,
 };
@@ -58,6 +59,11 @@ const POWER_SAVER: PowerPlanTarget = PowerPlanTarget {
 };
 
 pub fn collect_energy_diagnostics() -> EnergyDiagnostics {
+    // Same threshold the user already tunes in Settings for the automatic
+    // power-saver trigger (engine.rs) - these diagnostics/recommendations
+    // used to have their own disconnected 25%/20% literals that ignored it.
+    let battery_low_threshold_percent =
+        local_ai_policy::load_local_ai_policy().battery_saver_threshold_percent;
     let active_plan = snapshot::active_power_plan().ok();
     let battery = battery_info();
     let power_source = power_source();
@@ -71,6 +77,7 @@ pub fn collect_energy_diagnostics() -> EnergyDiagnostics {
         battery.percent,
         battery_saver_on,
         active_scheme_alias.as_deref(),
+        battery_low_threshold_percent,
     );
     let mut diagnostics = EnergyDiagnostics {
         active_scheme_guid: active_plan.as_ref().map(|plan| plan.scheme_guid.clone()),
@@ -86,7 +93,7 @@ pub fn collect_energy_diagnostics() -> EnergyDiagnostics {
         recommendations: Vec::new(),
         refreshed_at: chrono::Utc::now().timestamp(),
     };
-    diagnostics.recommendations = energy_recommendations(&diagnostics);
+    diagnostics.recommendations = energy_recommendations(&diagnostics, battery_low_threshold_percent);
     diagnostics
 }
 
@@ -290,8 +297,9 @@ fn recommended_plan(
     battery_percent: Option<f64>,
     battery_saver_on: Option<bool>,
     active_scheme_alias: Option<&str>,
+    battery_low_threshold_percent: f64,
 ) -> String {
-    if power_source == Some("battery") && battery_percent.unwrap_or(100.0) <= 25.0 {
+    if power_source == Some("battery") && battery_percent.unwrap_or(100.0) <= battery_low_threshold_percent {
         return "power_saver".to_string();
     }
     if battery_saver_on == Some(true) {
@@ -303,11 +311,14 @@ fn recommended_plan(
     "balanced".to_string()
 }
 
-fn energy_recommendations(diagnostics: &EnergyDiagnostics) -> Vec<String> {
+fn energy_recommendations(
+    diagnostics: &EnergyDiagnostics,
+    battery_low_threshold_percent: f64,
+) -> Vec<String> {
     let mut recommendations = Vec::new();
 
     if diagnostics.power_source.as_deref() == Some("battery")
-        && diagnostics.battery_percent.unwrap_or(100.0) <= 20.0
+        && diagnostics.battery_percent.unwrap_or(100.0) <= battery_low_threshold_percent
     {
         recommendations.push("battery_low_use_power_saver".to_string());
     }
