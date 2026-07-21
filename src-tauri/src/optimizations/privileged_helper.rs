@@ -31,6 +31,11 @@ const HELPER_PIPE_NAME: &str = r"\\.\pipe\AnalystBlazeHelperRpcV1";
 const MAX_PIPE_FRAME_BYTES: usize = 1024 * 1024;
 const REQUEST_PROTOCOL_VERSION: u32 = 1;
 const REQUEST_ORIGIN: &str = "analystblaze-desktop-app";
+// Reserved protocol health-check action. It never runs an optimization: the
+// service answers a signed pong so the UI can prove the HMAC named-pipe channel
+// works end to end ("Testar conexao"). Kept off the optimization allowlist on
+// purpose and short-circuited before any safety validation.
+const HELPER_PING_ACTION: &str = "HELPER_PING";
 const REQUEST_TTL_SECONDS: i64 = 60;
 const REQUEST_MAX_CLOCK_SKEW_SECONDS: i64 = 15;
 const MIN_SIGNING_KEY_LEN: usize = 32;
@@ -49,6 +54,15 @@ pub struct PrivilegedHelperStatus {
     pub requires_update: bool,
     pub can_request_uac: bool,
     pub supported_actions: Vec<String>,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrivilegedHelperHandshake {
+    pub ok: bool,
+    pub latency_ms: u64,
+    pub helper_version: Option<String>,
     pub message: String,
 }
 
@@ -299,6 +313,165 @@ sc.exe start '{service_name}' | Out-Null
         );
         Ok(status())
     }
+}
+
+pub fn start() -> Result<PrivilegedHelperStatus, String> {
+    #[cfg(not(windows))]
+    {
+        Err("Helper privilegiado esta disponivel apenas no Windows.".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        if !service_installed() {
+            return Err("Helper nao esta instalado. Use Reparar helper para reinstalar o servico.".to_string());
+        }
+        if !installed_service_source_is_trusted() {
+            return Err("Start bloqueado: o helper instalado aponta para caminho inseguro. Remova o servico como Administrador e reinstale pelo instalador per-machine/Program Files.".to_string());
+        }
+        run_service_control("start", "start")?;
+        audit_helper_event(
+            "info",
+            "optimization.helper.started",
+            "Helper privilegiado iniciado.",
+            json!({ "service_name": SERVICE_NAME }),
+        );
+        Ok(status())
+    }
+}
+
+pub fn stop() -> Result<PrivilegedHelperStatus, String> {
+    #[cfg(not(windows))]
+    {
+        Err("Helper privilegiado esta disponivel apenas no Windows.".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        if !service_installed() {
+            return Err("Helper nao esta instalado.".to_string());
+        }
+        run_service_control("stop", "stop")?;
+        audit_helper_event(
+            "info",
+            "optimization.helper.stopped",
+            "Helper privilegiado parado.",
+            json!({ "service_name": SERVICE_NAME }),
+        );
+        Ok(status())
+    }
+}
+
+/// Proves the HMAC named-pipe channel end to end by sending a signed
+/// `HELPER_PING` and verifying the signed pong. Never runs an optimization.
+/// Returns actionable diagnostics rather than opaque errors so the UI can guide
+/// the user to the right repair step.
+pub fn handshake() -> Result<PrivilegedHelperHandshake, String> {
+    #[cfg(not(windows))]
+    {
+        Ok(PrivilegedHelperHandshake {
+            ok: false,
+            latency_ms: 0,
+            helper_version: None,
+            message: "Helper privilegiado esta disponivel apenas no Windows.".to_string(),
+        })
+    }
+
+    #[cfg(windows)]
+    {
+        if !service_installed() {
+            return Ok(PrivilegedHelperHandshake {
+                ok: false,
+                latency_ms: 0,
+                helper_version: helper_version_file(),
+                message: "Servico do helper nao esta instalado. Clique em Reparar helper."
+                    .to_string(),
+            });
+        }
+        if !service_running() {
+            return Ok(PrivilegedHelperHandshake {
+                ok: false,
+                latency_ms: 0,
+                helper_version: helper_version_file(),
+                message: "Helper instalado mas parado. Clique em Iniciar helper e teste de novo."
+                    .to_string(),
+            });
+        }
+
+        match handshake_roundtrip() {
+            Ok(result) => Ok(result),
+            Err(error) => Ok(PrivilegedHelperHandshake {
+                ok: false,
+                latency_ms: 0,
+                helper_version: helper_version_file(),
+                message: format!(
+                    "Falha no handshake com o helper: {error}. Reinicie o helper e teste de novo."
+                ),
+            }),
+        }
+    }
+}
+
+#[cfg(windows)]
+fn handshake_roundtrip() -> Result<PrivilegedHelperHandshake, String> {
+    use std::time::Instant;
+
+    let signing_key = load_helper_signing_key()?;
+    let request =
+        build_signed_request(HELPER_PING_ACTION, None, safety::CommandSource::ManualUser, true, &signing_key)?;
+    let action_id = request.action_id.clone();
+
+    let started = Instant::now();
+    let mut pipe = open_helper_pipe()?;
+    let request_bytes = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
+    write_pipe_frame(&mut pipe, &request_bytes)?;
+    let response_bytes = read_pipe_frame(&mut pipe)?;
+    let latency_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
+
+    let response: HelperCommandResponse =
+        serde_json::from_slice(&response_bytes).map_err(|error| error.to_string())?;
+    if response.action_id != action_id || response.request_nonce != request.nonce {
+        return Err("resposta com identificadores inesperados".to_string());
+    }
+    verify_response_signature(&response, &signing_key)?;
+
+    let helper_version = response
+        .details
+        .get("helperVersion")
+        .and_then(|value| value.as_str())
+        .map(|value| value.to_string())
+        .or_else(helper_version_file);
+
+    let message = if response.success {
+        format!(
+            "Canal seguro do helper respondeu em {latency_ms} ms (versao {}).",
+            helper_version.clone().unwrap_or_else(|| "desconhecida".to_string())
+        )
+    } else {
+        response.message.clone()
+    };
+
+    Ok(PrivilegedHelperHandshake {
+        ok: response.success,
+        latency_ms,
+        helper_version,
+        message,
+    })
+}
+
+#[cfg(windows)]
+fn run_service_control(sc_verb: &str, script_tag: &str) -> Result<(), String> {
+    let script = elevated_script_path(script_tag);
+    let script_body = format!(
+        r#"
+$ErrorActionPreference = 'SilentlyContinue'
+sc.exe {sc_verb} '{service_name}' | Out-Null
+"#,
+        sc_verb = sc_verb,
+        service_name = SERVICE_NAME,
+    );
+    fs::write(&script, script_body).map_err(|error| error.to_string())?;
+    run_elevated_script(&script)
 }
 
 pub fn execute(
@@ -664,6 +837,28 @@ fn read_request_from_bytes(raw: &[u8], signing_key: &[u8]) -> Result<HelperComma
 fn execute_request(request: HelperCommandRequest, signing_key: &[u8]) -> HelperCommandResponse {
     let action_id = request.action_id.clone();
     let request_nonce = request.nonce.clone();
+
+    if request.action_name.eq_ignore_ascii_case(HELPER_PING_ACTION) {
+        return build_response(
+            action_id,
+            request_nonce,
+            true,
+            "pong".to_string(),
+            json!({ "pong": true, "helperVersion": HELPER_VERSION }),
+            signing_key,
+        )
+        .unwrap_or_else(|error| HelperCommandResponse {
+            action_id: "unknown".to_string(),
+            request_nonce: String::new(),
+            success: false,
+            message: format!("Falha ao assinar pong do helper: {error}"),
+            details: json!({ "pong": false }),
+            finished_at: now_ts(),
+            signature: String::new(),
+        });
+    }
+
+
     let action_name = request.action_name.clone();
     let source = request.source;
     let result = {
@@ -784,6 +979,12 @@ fn validate_request_envelope(
 }
 
 fn validate_request_execution_policy(request: &HelperCommandRequest) -> Result<(), String> {
+    if request.action_name.eq_ignore_ascii_case(HELPER_PING_ACTION) {
+        // Health-check only: it has no privileged side effects, so it bypasses
+        // the optimization allowlist and safety engine. The envelope signature,
+        // nonce, TTL and origin were already verified by the caller.
+        return Ok(());
+    }
     if !supported_actions()
         .iter()
         .any(|allowed| allowed.eq_ignore_ascii_case(&request.action_name))

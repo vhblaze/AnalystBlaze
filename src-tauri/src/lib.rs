@@ -232,6 +232,24 @@ fn restart_privileged_helper(
 }
 
 #[tauri::command]
+fn start_privileged_helper(
+) -> Result<optimizations::privileged_helper::PrivilegedHelperStatus, String> {
+    optimizations::privileged_helper::start()
+}
+
+#[tauri::command]
+fn stop_privileged_helper(
+) -> Result<optimizations::privileged_helper::PrivilegedHelperStatus, String> {
+    optimizations::privileged_helper::stop()
+}
+
+#[tauri::command]
+fn test_privileged_helper(
+) -> Result<optimizations::privileged_helper::PrivilegedHelperHandshake, String> {
+    optimizations::privileged_helper::handshake()
+}
+
+#[tauri::command]
 async fn deep_clean_temp() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command(
         "EMPTY_TEMP",
@@ -914,6 +932,9 @@ pub fn run() {
             install_privileged_helper,
             uninstall_privileged_helper,
             restart_privileged_helper,
+            start_privileged_helper,
+            stop_privileged_helper,
+            test_privileged_helper,
             deep_clean_temp,
             purge_cleanup_quarantine,
             restore_active_game_mode,
