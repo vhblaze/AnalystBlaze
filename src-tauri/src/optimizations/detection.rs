@@ -230,7 +230,7 @@ fn foreground_process_detection() -> Option<GameDetection> {
 }
 
 #[cfg(windows)]
-fn foreground_pid() -> Option<u32> {
+pub(crate) fn foreground_pid() -> Option<u32> {
     use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
     let window = unsafe { GetForegroundWindow() };
@@ -246,7 +246,7 @@ fn foreground_pid() -> Option<u32> {
 }
 
 #[cfg(not(windows))]
-fn foreground_pid() -> Option<u32> {
+pub(crate) fn foreground_pid() -> Option<u32> {
     None
 }
 
@@ -284,7 +284,7 @@ fn is_common_foreground_non_game(normalized: &str) -> bool {
     )
 }
 
-fn normalize_process_name(name: &str) -> String {
+pub(crate) fn normalize_process_name(name: &str) -> String {
     name.trim()
         .trim_matches('"')
         .rsplit(['\\', '/'])
