@@ -176,14 +176,19 @@ struct CommandListResponse {
     blocked_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+/// The server's weekly automation-command budget for the starter plan
+/// (3600s / 60min today - `limit_seconds` is `None` for paid plans, meaning
+/// unlimited). Enforced server-side regardless of what the desktop shows;
+/// this is purely for surfacing the real, already-applied limit to the user
+/// instead of leaving it silent (see api/mod.rs::next_commands).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct WeeklyAiTelemetryUsage {
-    used_seconds: i64,
-    limit_seconds: Option<i64>,
-    remaining_seconds: Option<i64>,
-    is_currently_tracking: bool,
-    limit_reached: bool,
+pub struct WeeklyAiTelemetryUsage {
+    pub used_seconds: i64,
+    pub limit_seconds: Option<i64>,
+    pub remaining_seconds: Option<i64>,
+    pub is_currently_tracking: bool,
+    pub limit_reached: bool,
 }
 
 impl ApiClient {
@@ -425,7 +430,7 @@ impl ApiClient {
         &self,
         access_token: &str,
         hw_id: Uuid,
-    ) -> Result<Vec<CommandResponse>, String> {
+    ) -> Result<(Vec<CommandResponse>, Option<WeeklyAiTelemetryUsage>), String> {
         let response = self
             .http
             .get(self.url("/api/v1/telemetry/commands/next"))
@@ -456,7 +461,7 @@ impl ApiClient {
             }
         }
 
-        Ok(response.pending)
+        Ok((response.pending, response.weekly_ai_usage))
     }
 
     pub async fn acknowledge_command(
