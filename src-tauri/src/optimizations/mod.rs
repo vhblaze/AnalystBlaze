@@ -7,6 +7,7 @@ pub mod latency;
 pub mod local_ai_policy;
 pub mod memory;
 pub mod network_admin;
+pub mod os_version;
 pub mod performance_suite;
 pub mod privileged_helper;
 pub mod processes;

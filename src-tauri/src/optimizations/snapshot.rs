@@ -26,6 +26,15 @@ pub enum SnapshotEntry {
         previous_scheme_name: Option<String>,
         target_scheme: String,
     },
+    /// Windows 11's Settings > Power "Power mode" slider, a separate
+    /// overlay layered on top of the classic scheme (see os_version.rs and
+    /// energy.rs for why this is tracked independently of PowerPlan).
+    /// `previous_overlay_scheme` is `None` when no overlay was active
+    /// before (classic scheme only).
+    PowerOverlayScheme {
+        previous_overlay_scheme: Option<String>,
+        target_overlay_scheme: String,
+    },
     QuarantinedPath {
         original_path: PathBuf,
         quarantine_path: PathBuf,
@@ -368,6 +377,31 @@ pub fn restore_snapshot_entries(snapshot: &OptimizationSnapshot) -> SnapshotRest
                         .push(format!("Falha ao restaurar plano de energia: {error}"));
                 }
             },
+            SnapshotEntry::PowerOverlayScheme {
+                previous_overlay_scheme,
+                ..
+            } => {
+                let target = previous_overlay_scheme
+                    .as_deref()
+                    .unwrap_or(OVERLAY_SCHEME_BALANCED_GUID);
+                match set_active_overlay_scheme(target) {
+                    Ok(()) => {
+                        summary.restored_entries += 1;
+                        summary
+                            .messages
+                            .push("Modo de energia (Windows 11) restaurado.".to_string());
+                    }
+                    Err(error) => {
+                        // Non-fatal by design: the classic power plan this
+                        // overlay was layered on top of is restored by its
+                        // own PowerPlan entry regardless of this outcome.
+                        summary.failed_entries += 1;
+                        summary.messages.push(format!(
+                            "Falha ao restaurar modo de energia (Windows 11): {error}"
+                        ));
+                    }
+                }
+            }
             SnapshotEntry::QuarantinedPath {
                 original_path,
                 quarantine_path,
@@ -666,6 +700,44 @@ pub fn set_active_power_plan(scheme_guid_or_alias: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(decode_console_bytes(&output.stderr).trim().to_string())
+    }
+}
+
+/// GUID powercfg uses to mean "no overlay is active, use the classic
+/// scheme as-is" - this is what Windows 11's "Balanced" power mode maps to.
+pub const OVERLAY_SCHEME_BALANCED_GUID: &str = "00000000-0000-0000-0000-000000000000";
+
+/// Windows 11's Settings > Power "Power mode" slider, layered on top of the
+/// classic scheme queried by active_power_plan(). Introduced in Win10
+/// 1709 but only user-facing starting Win11 - see os_version.rs. Returns
+/// `Ok(None)` (not an error) when the overlay command itself fails, since
+/// that's the expected outcome on hardware/OS combinations without overlay
+/// support rather than a real fault.
+pub fn active_overlay_scheme() -> Option<PowerPlanState> {
+    let output = Command::new("powercfg")
+        .arg("/getactualoverlayscheme")
+        .no_window()
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    parse_power_plan_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+pub fn set_active_overlay_scheme(scheme_guid: &str) -> Result<(), String> {
+    let output = Command::new("powercfg")
+        .args(["/setactiveoverlayscheme", scheme_guid])
+        .no_window()
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 }
 

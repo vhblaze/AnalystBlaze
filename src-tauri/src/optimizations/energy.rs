@@ -3,6 +3,7 @@ use serde_json::{json, Value};
 use std::process::Command;
 
 use super::{
+    os_version::WindowsGeneration,
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
     ExecutionResult,
 };
@@ -13,6 +14,10 @@ pub struct EnergyDiagnostics {
     pub active_scheme_guid: Option<String>,
     pub active_scheme_name: Option<String>,
     pub active_scheme_alias: Option<String>,
+    /// Windows 11's Settings > Power "Power mode" slider, layered on top
+    /// of the classic scheme above. `None` on Windows 10 or when the
+    /// overlay concept doesn't apply on this machine - see os_version.rs.
+    pub active_overlay_scheme_alias: Option<String>,
     pub power_source: Option<String>,
     pub battery_percent: Option<f64>,
     pub battery_status: Option<String>,
@@ -57,6 +62,38 @@ const POWER_SAVER: PowerPlanTarget = PowerPlanTarget {
     failure_message: "Nao foi possivel ativar o plano de economia de energia.",
 };
 
+// Windows 11's overlay scheme GUIDs (the "Power mode" slider in
+// Settings > Power). Public/documented values from powercfg; unlike the
+// classic scheme GUIDs above these can't be exercised on this machine, so
+// set_active_overlay_scheme() is always non-fatal on failure - powercfg
+// rejects an unrecognized GUID with an error rather than silently applying
+// something else, so a wrong value here degrades safely instead of
+// mis-setting the mode.
+const OVERLAY_BEST_PERFORMANCE_GUID: &str = "ded574b5-45a0-4f42-8737-46345c09c238";
+const OVERLAY_BEST_POWER_EFFICIENCY_GUID: &str = "961cc777-2547-4f9d-8174-7d86181b8a7a";
+
+fn overlay_guid_for_label(label: &str) -> Option<&'static str> {
+    match label {
+        "high_performance" => Some(OVERLAY_BEST_PERFORMANCE_GUID),
+        "balanced" => Some(snapshot::OVERLAY_SCHEME_BALANCED_GUID),
+        "power_saver" => Some(OVERLAY_BEST_POWER_EFFICIENCY_GUID),
+        _ => None,
+    }
+}
+
+fn overlay_scheme_alias(guid: &str) -> Option<String> {
+    let normalized = guid.trim().to_ascii_lowercase();
+    if normalized == OVERLAY_BEST_PERFORMANCE_GUID {
+        Some("high_performance".to_string())
+    } else if normalized == snapshot::OVERLAY_SCHEME_BALANCED_GUID {
+        Some("balanced".to_string())
+    } else if normalized == OVERLAY_BEST_POWER_EFFICIENCY_GUID {
+        Some("power_saver".to_string())
+    } else {
+        None
+    }
+}
+
 pub fn collect_energy_diagnostics() -> EnergyDiagnostics {
     let active_plan = snapshot::active_power_plan().ok();
     let battery = battery_info();
@@ -66,6 +103,13 @@ pub fn collect_energy_diagnostics() -> EnergyDiagnostics {
     let active_scheme_alias = active_plan
         .as_ref()
         .and_then(|plan| scheme_alias(&plan.scheme_guid, plan.scheme_name.as_deref()));
+    let active_overlay_scheme_alias =
+        if super::os_version::detected().generation == WindowsGeneration::Windows11 {
+            snapshot::active_overlay_scheme()
+                .and_then(|overlay| overlay_scheme_alias(&overlay.scheme_guid))
+        } else {
+            None
+        };
     let recommended_plan = recommended_plan(
         power_source.as_deref(),
         battery.percent,
@@ -76,6 +120,7 @@ pub fn collect_energy_diagnostics() -> EnergyDiagnostics {
         active_scheme_guid: active_plan.as_ref().map(|plan| plan.scheme_guid.clone()),
         active_scheme_name: active_plan.and_then(|plan| plan.scheme_name),
         active_scheme_alias,
+        active_overlay_scheme_alias,
         power_source,
         battery_percent: battery.percent,
         battery_status: battery.status,
@@ -127,6 +172,12 @@ fn set_power_plan_with_snapshot(
     payload: Option<Value>,
 ) -> ExecutionResult {
     let previous_plan = snapshot::active_power_plan();
+    let is_windows_11 = super::os_version::detected().generation == WindowsGeneration::Windows11;
+    let previous_overlay = if is_windows_11 {
+        snapshot::active_overlay_scheme()
+    } else {
+        None
+    };
 
     if let Err(error) = snapshot::set_active_power_plan(target.alias) {
         return ExecutionResult {
@@ -178,19 +229,55 @@ fn set_power_plan_with_snapshot(
         "snapshot": null,
     });
 
-    if let Ok(previous_plan) = previous_plan {
+    // Windows 11's Settings > Power "Power mode" slider is a separate
+    // overlay on top of the classic scheme just verified above - see
+    // os_version.rs. Best-effort and non-fatal: if this fails, the classic
+    // scheme change already applied and verified above still stands.
+    let overlay_target_guid = if is_windows_11 {
+        overlay_guid_for_label(target.label)
+    } else {
+        None
+    };
+    let mut overlay_applied = false;
+    let overlay_outcome = match overlay_target_guid {
+        Some(overlay_guid) => match snapshot::set_active_overlay_scheme(overlay_guid) {
+            Ok(()) => {
+                overlay_applied = true;
+                json!({ "applied": true, "target_overlay_scheme": overlay_guid })
+            }
+            Err(error) => json!({ "applied": false, "error": error }),
+        },
+        None => Value::Null,
+    };
+    details["power_mode_overlay"] = overlay_outcome.clone();
+
+    let mut entries = Vec::new();
+    if let Ok(previous_plan) = &previous_plan {
+        entries.push(SnapshotEntry::PowerPlan {
+            previous_scheme_guid: previous_plan.scheme_guid.clone(),
+            previous_scheme_name: previous_plan.scheme_name.clone(),
+            target_scheme: target.alias.to_string(),
+        });
+    }
+    if overlay_applied {
+        entries.push(SnapshotEntry::PowerOverlayScheme {
+            previous_overlay_scheme: previous_overlay.map(|plan| plan.scheme_guid),
+            target_overlay_scheme: overlay_target_guid
+                .expect("overlay_applied implies overlay_target_guid is Some")
+                .to_string(),
+        });
+    }
+
+    if !entries.is_empty() {
         let snapshot = OptimizationSnapshot::new(
             target.action_name,
-            vec![SnapshotEntry::PowerPlan {
-                previous_scheme_guid: previous_plan.scheme_guid.clone(),
-                previous_scheme_name: previous_plan.scheme_name.clone(),
-                target_scheme: target.alias.to_string(),
-            }],
+            entries,
             json!({
-                "previous_scheme_guid": previous_plan.scheme_guid,
-                "previous_scheme_name": previous_plan.scheme_name,
+                "previous_scheme_guid": previous_plan.as_ref().ok().map(|plan| plan.scheme_guid.clone()),
+                "previous_scheme_name": previous_plan.ok().and_then(|plan| plan.scheme_name),
                 "target_scheme": target.alias,
                 "target_label": target.label,
+                "power_mode_overlay": overlay_outcome,
             }),
         );
 
@@ -398,7 +485,7 @@ fn battery_status_label(status: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::scheme_alias;
+    use super::{overlay_guid_for_label, overlay_scheme_alias, scheme_alias};
 
     #[test]
     fn maps_windows_power_plan_aliases() {
@@ -414,5 +501,18 @@ mod tests {
             scheme_alias("a1841308-3541-4fab-bc81-f71556f20b4a", None).as_deref(),
             Some("power_saver")
         );
+    }
+
+    #[test]
+    fn overlay_guid_and_alias_round_trip_for_every_known_label() {
+        for label in ["high_performance", "balanced", "power_saver"] {
+            let guid = overlay_guid_for_label(label).expect("label should map to an overlay guid");
+            assert_eq!(overlay_scheme_alias(guid).as_deref(), Some(label));
+        }
+    }
+
+    #[test]
+    fn unknown_label_has_no_overlay_guid() {
+        assert_eq!(overlay_guid_for_label("turbo"), None);
     }
 }

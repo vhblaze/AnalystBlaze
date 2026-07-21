@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 
 use super::{
+    os_version::WindowsGeneration,
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
     ExecutionResult,
 };
@@ -12,6 +13,14 @@ struct VisualEffectSetting {
     subkey: &'static str,
     value_name: &'static str,
     target: RegistryTargetValue,
+    /// Restricts this setting to a single Windows generation. `None` means
+    /// it applies to both. Windows 11's taskbar was rewritten from the
+    /// ground up (Fluent design, centered icons, no thumbnail Aero Peek),
+    /// so a couple of classic Explorer/DWM taskbar keys are widely reported
+    /// as silent no-ops there - the registry write "succeeds" but nothing
+    /// visually changes. We skip writing (and reporting on) those instead
+    /// of claiming an effect that isn't real.
+    applies_to: Option<WindowsGeneration>,
 }
 
 #[derive(Clone)]
@@ -69,6 +78,13 @@ pub fn current_visual_effects_summary() -> Value {
 }
 
 fn performance_settings(payload: Option<&Value>) -> Vec<VisualEffectSetting> {
+    filter_settings_for_generation(
+        performance_settings_unfiltered(payload),
+        super::os_version::detected().generation,
+    )
+}
+
+fn performance_settings_unfiltered(payload: Option<&Value>) -> Vec<VisualEffectSetting> {
     let disable_drag_full_windows = payload_bool(payload, "disable_drag_full_windows", false);
     let mut settings = vec![
         VisualEffectSetting {
@@ -76,48 +92,56 @@ fn performance_settings(payload: Option<&Value>) -> Vec<VisualEffectSetting> {
             subkey: r"Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects",
             value_name: "VisualFXSetting",
             target: RegistryTargetValue::Dword(2),
+            applies_to: None,
         },
         VisualEffectSetting {
             label: "Animacao da barra de tarefas",
             subkey: r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
             value_name: "TaskbarAnimations",
             target: RegistryTargetValue::Dword(0),
+            applies_to: Some(WindowsGeneration::Windows10),
         },
         VisualEffectSetting {
             label: "Transparencia",
             subkey: r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
             value_name: "EnableTransparency",
             target: RegistryTargetValue::Dword(0),
+            applies_to: None,
         },
         VisualEffectSetting {
             label: "Aero Peek",
             subkey: r"Software\Microsoft\Windows\DWM",
             value_name: "EnableAeroPeek",
             target: RegistryTargetValue::Dword(0),
+            applies_to: Some(WindowsGeneration::Windows10),
         },
         VisualEffectSetting {
             label: "Selecao translucida no Explorer",
             subkey: r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
             value_name: "ListviewAlphaSelect",
             target: RegistryTargetValue::Dword(0),
+            applies_to: None,
         },
         VisualEffectSetting {
             label: "Sombra de nomes no Explorer",
             subkey: r"Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced",
             value_name: "ListviewShadow",
             target: RegistryTargetValue::Dword(0),
+            applies_to: None,
         },
         VisualEffectSetting {
             label: "Animacao de minimizar/maximizar",
             subkey: r"Control Panel\Desktop\WindowMetrics",
             value_name: "MinAnimate",
             target: RegistryTargetValue::Sz("0"),
+            applies_to: None,
         },
         VisualEffectSetting {
             label: "Atraso de menus",
             subkey: r"Control Panel\Desktop",
             value_name: "MenuShowDelay",
             target: RegistryTargetValue::Sz("0"),
+            applies_to: None,
         },
     ];
 
@@ -127,9 +151,18 @@ fn performance_settings(payload: Option<&Value>) -> Vec<VisualEffectSetting> {
             subkey: r"Control Panel\Desktop",
             value_name: "DragFullWindows",
             target: RegistryTargetValue::Sz("0"),
+            applies_to: None,
         });
     }
 
+    settings
+}
+
+fn filter_settings_for_generation(
+    mut settings: Vec<VisualEffectSetting>,
+    generation: WindowsGeneration,
+) -> Vec<VisualEffectSetting> {
+    settings.retain(|setting| setting.applies_to.is_none_or(|required| required == generation));
     settings
 }
 
@@ -473,6 +506,8 @@ fn decode_reg_sz(bytes: &[u8]) -> String {
 mod tests {
     #[cfg(windows)]
     use super::{decode_reg_sz, encode_reg_sz};
+    use super::{filter_settings_for_generation, performance_settings_unfiltered};
+    use crate::optimizations::os_version::WindowsGeneration;
 
     #[cfg(windows)]
     #[test]
@@ -480,5 +515,32 @@ mod tests {
         let encoded = encode_reg_sz("0");
         assert_eq!(decode_reg_sz(&encoded), "0");
         assert_eq!(encoded, vec![48, 0, 0, 0]);
+    }
+
+    #[test]
+    fn windows_11_drops_the_known_inert_taskbar_keys() {
+        let all = performance_settings_unfiltered(None);
+        let filtered = filter_settings_for_generation(all, WindowsGeneration::Windows11);
+        assert!(!filtered.iter().any(|setting| setting.value_name == "TaskbarAnimations"));
+        assert!(!filtered.iter().any(|setting| setting.value_name == "EnableAeroPeek"));
+        // Non-taskbar settings still apply on Windows 11.
+        assert!(filtered.iter().any(|setting| setting.value_name == "VisualFXSetting"));
+        assert!(filtered.iter().any(|setting| setting.value_name == "ListviewAlphaSelect"));
+    }
+
+    #[test]
+    fn windows_10_keeps_every_setting() {
+        let all = performance_settings_unfiltered(None);
+        let expected_count = all.len();
+        let filtered = filter_settings_for_generation(all, WindowsGeneration::Windows10);
+        assert_eq!(filtered.len(), expected_count);
+    }
+
+    #[test]
+    fn unknown_generation_only_keeps_generation_agnostic_settings() {
+        let all = performance_settings_unfiltered(None);
+        let filtered = filter_settings_for_generation(all, WindowsGeneration::Unknown);
+        assert!(filtered.iter().all(|setting| setting.applies_to.is_none()));
+        assert!(!filtered.iter().any(|setting| setting.value_name == "TaskbarAnimations"));
     }
 }
