@@ -203,14 +203,14 @@ icacls (Join-Path $helperRoot 'version.txt') /inheritance:r /grant:r '*S-1-5-18:
 icacls $keyPath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' ("*{{0}}:R" -f $appUserSid) | Out-Null
 $svc = Get-Service -Name '{service_name}' -ErrorAction SilentlyContinue
 if ($svc) {{
-  sc.exe stop '{service_name}' | Out-Null
+  Stop-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue
   Start-Sleep -Milliseconds 800
   sc.exe delete '{service_name}' | Out-Null
   Start-Sleep -Milliseconds 800
 }}
-sc.exe create '{service_name}' binPath= '"{exe}" --analystblaze-helper-service' start= auto DisplayName= '{display_name}' | Out-Null
-sc.exe description '{service_name}' 'Executes AnalystBlaze local privileged actions after app-side confirmation.' | Out-Null
-sc.exe start '{service_name}' | Out-Null
+$binPath = '"{exe}" --analystblaze-helper-service'
+New-Service -Name '{service_name}' -BinaryPathName $binPath -DisplayName '{display_name}' -Description 'Executes AnalystBlaze local privileged actions after app-side confirmation.' -StartupType Automatic | Out-Null
+Start-Service -Name '{service_name}'
 "#,
             helper_root = ps_escape(&helper_root.display().to_string()),
             user_sid = ps_escape(&user_sid),
@@ -1788,6 +1788,11 @@ fn service_running() -> bool {
 
 #[cfg(windows)]
 fn run_elevated_script(script: &Path) -> Result<(), String> {
+    // -PassThru + `exit $p.ExitCode` are required here: Start-Process -Wait
+    // alone waits for the elevated child but does not propagate its exit
+    // code, so without this the outer process (what Rust actually observes
+    // via .status()) always exits 0 regardless of whether the elevated
+    // script itself succeeded or failed.
     let status = Command::new("powershell")
         .args([
             "-NoProfile",
@@ -1795,7 +1800,7 @@ fn run_elevated_script(script: &Path) -> Result<(), String> {
             "Bypass",
             "-Command",
             &format!(
-                "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{}\"'",
+                "$p = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File \"{}\"'; exit $p.ExitCode",
                 script.display()
             ),
         ])

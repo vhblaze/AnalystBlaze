@@ -74,9 +74,13 @@ New-Item -ItemType Directory -Force -Path $HelperRoot | Out-Null
 
 Remove-HelperService
 
+# sc.exe create's binPath= value needs the exe path quoted (it contains
+# spaces, e.g. "C:\Program Files\..."), and PowerShell's own re-quoting of
+# native-command arguments mangles an already-quoted string like this one -
+# New-Service/Start-Service are real cmdlets, so the string is passed through
+# as-is with no native command-line re-tokenization to corrupt it.
 $binPath = '"{0}" --analystblaze-helper-service' -f $ExePath
-& sc.exe create $ServiceName binPath= $binPath start= auto DisplayName= $DisplayName | Out-Null
-& sc.exe description $ServiceName $Description | Out-Null
-& sc.exe start $ServiceName | Out-Null
+New-Service -Name $ServiceName -BinaryPathName $binPath -DisplayName $DisplayName -Description $Description -StartupType Automatic | Out-Null
+Start-Service -Name $ServiceName
 
 exit 0
