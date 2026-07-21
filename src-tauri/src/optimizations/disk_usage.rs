@@ -44,6 +44,9 @@ pub struct DiskUsageItem {
     pub path: String,
     pub label: String,
     pub size_bytes: u64,
+    /// Unix seconds of last modification, when readable - lets the UI
+    /// offer a "sort/filter by date" control alongside size.
+    pub modified_at: Option<i64>,
     /// True if this matches an entry in the user's protected-apps list -
     /// never actionable regardless of category.
     pub protected: bool,
@@ -221,6 +224,7 @@ fn cache_category_from_suite(
             path: category.id.clone(),
             label: category.label.clone(),
             size_bytes: category.reclaimable_bytes,
+            modified_at: None,
             protected: false,
             actionable: category.available_actions.iter().any(|action| action == "apply"),
             deletes_via_cleanup_category: true,
@@ -446,6 +450,7 @@ fn walk_for_large_files(
             path: path.display().to_string(),
             label,
             size_bytes: metadata.len(),
+            modified_at: metadata_modified_at(&metadata),
             protected: false,
             actionable: true,
             deletes_via_cleanup_category: false,
@@ -470,6 +475,7 @@ fn scan_system_informational(scanner: &mut Scanner) -> DiskUsageCategory {
                 path: path.display().to_string(),
                 label: label.to_string(),
                 size_bytes: metadata.len(),
+                modified_at: metadata_modified_at(&metadata),
                 protected: false,
                 actionable: false,
                 deletes_via_cleanup_category: false,
@@ -488,6 +494,7 @@ fn scan_system_informational(scanner: &mut Scanner) -> DiskUsageCategory {
             path: winsxs.display().to_string(),
             label: "Componentes do Windows (WinSxS, estimativa)".to_string(),
             size_bytes: size,
+            modified_at: file_modified_at(&winsxs),
             protected: false,
             actionable: false,
             deletes_via_cleanup_category: false,
@@ -502,6 +509,7 @@ fn scan_system_informational(scanner: &mut Scanner) -> DiskUsageCategory {
             path: recycle_bin.display().to_string(),
             label: "Lixeira".to_string(),
             size_bytes: size,
+            modified_at: file_modified_at(&recycle_bin),
             protected: false,
             actionable: false,
             deletes_via_cleanup_category: false,
@@ -534,10 +542,23 @@ fn describe_entry(scanner: &mut Scanner, category_key: &str, path: &Path) -> Res
         path: path.display().to_string(),
         label,
         size_bytes,
+        modified_at: file_modified_at(path),
         protected,
         actionable: !protected,
         deletes_via_cleanup_category: false,
     })
+}
+
+fn file_modified_at(path: &Path) -> Option<i64> {
+    fs::metadata(path).ok().and_then(|metadata| metadata_modified_at(&metadata))
+}
+
+fn metadata_modified_at(metadata: &fs::Metadata) -> Option<i64> {
+    metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|duration| duration.as_secs() as i64)
 }
 
 fn measure_dir(scanner: &mut Scanner, category_key: &str, path: &Path) -> u64 {
