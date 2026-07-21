@@ -28,6 +28,9 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "resources": {
+      "installer/helper-service.ps1": "helper-service.ps1"
+    },
     "windows": {
       "webviewInstallMode": {
         "type": "embedBootstrapper",

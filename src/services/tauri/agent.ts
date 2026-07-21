@@ -229,6 +229,13 @@ export type PrivilegedHelperStatus = {
   message: string;
 };
 
+export type PrivilegedHelperHandshake = {
+  ok: boolean;
+  latencyMs: number;
+  helperVersion?: string | null;
+  message: string;
+};
+
 export type WindowsInventory = {
   startup_apps: Array<{
     name: string;
@@ -717,6 +724,21 @@ export async function uninstallPrivilegedHelper(): Promise<PrivilegedHelperStatu
 export async function restartPrivilegedHelper(): Promise<PrivilegedHelperStatus> {
   requireTauriRuntime("Reinicio do helper privilegiado");
   return invoke<PrivilegedHelperStatus>("restart_privileged_helper");
+}
+
+export async function startPrivilegedHelper(): Promise<PrivilegedHelperStatus> {
+  requireTauriRuntime("Inicio do helper privilegiado");
+  return invoke<PrivilegedHelperStatus>("start_privileged_helper");
+}
+
+export async function stopPrivilegedHelper(): Promise<PrivilegedHelperStatus> {
+  requireTauriRuntime("Parada do helper privilegiado");
+  return invoke<PrivilegedHelperStatus>("stop_privileged_helper");
+}
+
+export async function testPrivilegedHelper(): Promise<PrivilegedHelperHandshake> {
+  requireTauriRuntime("Teste de conexao do helper privilegiado");
+  return invoke<PrivilegedHelperHandshake>("test_privileged_helper");
 }
 
 export async function deepCleanTemp(): Promise<OptimizationResult> {
