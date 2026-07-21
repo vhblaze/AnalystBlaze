@@ -1,6 +1,7 @@
 pub mod adaptive;
 pub mod cleanup;
 pub mod detection;
+pub mod disk_usage;
 pub mod energy;
 pub mod focus;
 pub mod latency;
@@ -203,6 +204,15 @@ async fn execute_command_checked_with_helper(
             performance_suite::apply_cleanup_category(category, mode).await
         }
         "SET_PROCESS_PRIORITY" => processes::set_process_priority(payload).await,
+        "DELETE_DISK_USAGE_ITEM" => {
+            let path = payload
+                .as_ref()
+                .and_then(|value| value.get("path"))
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            disk_usage::delete_item(path).await
+        }
         "EMPTY_TEMP" => cleanup::empty_temp(payload).await,
         "PURGE_CLEANUP_QUARANTINE" => cleanup::purge_cleanup_quarantine(payload).await,
         "CLEAR_STANDBY_LIST" => memory::clear_standby_list(payload).await,

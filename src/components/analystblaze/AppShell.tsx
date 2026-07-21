@@ -27,6 +27,7 @@ const Settings = lazy(() => import("./views/Settings").then((module) => ({ defau
 
 export function AppShell() {
   const [view, setView] = useState<ViewKey>("dashboard");
+  const [focusDiskUsage, setFocusDiskUsage] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [remoteConfirmationQueue, setRemoteConfirmationQueue] = useState<RemoteCommandConfirmationRequest[]>([]);
   const helperBootstrapStartedRef = useRef(false);
@@ -70,6 +71,11 @@ export function AppShell() {
     },
     [track],
   );
+
+  const openDiskUsageDetails = useCallback(() => {
+    setFocusDiskUsage(true);
+    handleViewChange("controls");
+  }, [handleViewChange]);
 
   const requestConfirmation = useCallback((request: Omit<ConfirmRequest, "resolve" | "id">) => {
     return new Promise<boolean>((resolve) => {
@@ -498,7 +504,7 @@ export function AppShell() {
               </Suspense>
             ) : view === "insights" ? (
               <Suspense fallback={<ViewFallback />}>
-                <Insights />
+                <Insights telemetry={telemetry} onOpenDiskUsage={openDiskUsageDetails} />
               </Suspense>
             ) : view === "controls" ? (
               <Suspense fallback={<ViewFallback />}>
@@ -750,6 +756,8 @@ export function AppShell() {
                       auth.resetWinsock,
                     )
                   }
+                  focusDiskUsage={focusDiskUsage}
+                  onDiskUsageFocused={() => setFocusDiskUsage(false)}
                 />
               </Suspense>
             ) : (

@@ -203,6 +203,12 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: true,
             requires_privileged_helper: true,
         }),
+        "DELETE_DISK_USAGE_ITEM" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: true,
+            requires_privileged_helper: false,
+        }),
         _ => None,
     }
 }
@@ -241,6 +247,7 @@ pub fn supported_actions() -> &'static [&'static str] {
         "RESTORE_STARTUP_APP",
         "STOP_SERVICE",
         "RESTORE_SERVICE",
+        "DELETE_DISK_USAGE_ITEM",
     ]
 }
 
@@ -400,6 +407,34 @@ fn validate_action_payload(
                 Some(profile),
                 json!({ "confirmation": "purge_cleanup_quarantine" }),
             ));
+        }
+        "DELETE_DISK_USAGE_ITEM" => {
+            let path = payload
+                .and_then(|value| value.get("path"))
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let Some(path) = path else {
+                return Err(safety_error(
+                    "disk_usage_item_path_required",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "required_fields": ["path"] }),
+                ));
+            };
+
+            if let Err(reason) = super::disk_usage::validate_deletable_path(path) {
+                return Err(safety_error(
+                    "disk_usage_item_not_deletable",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "path": path, "reason": reason }),
+                ));
+            }
         }
         "DISABLE_STARTUP_APP" => {
             let target = extract_target(payload).ok_or_else(|| {

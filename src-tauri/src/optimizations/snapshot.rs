@@ -749,7 +749,16 @@ pub fn cleanup_quarantine_dir(snapshot_id: &str) -> PathBuf {
     cleanup_quarantine_root().join(snapshot_id)
 }
 
+/// Moves a file OR a directory tree, tolerating cross-volume moves (e.g. a
+/// game library on D:\ while the quarantine root lives under
+/// %LOCALAPPDATA%\ on C:\, where plain `fs::rename` fails). Every quarantine
+/// path (single files today, whole app/game folders via disk_usage.rs) goes
+/// through this, so it's the one place that needs to know about both cases.
 pub fn move_file_across_volumes(source: &PathBuf, target: &PathBuf) -> Result<(), String> {
+    if let Ok(true) = fs::symlink_metadata(source).map(|meta| meta.is_dir()) {
+        return move_dir_across_volumes(source, target);
+    }
+
     match fs::rename(source, target) {
         Ok(()) => Ok(()),
         Err(rename_error) => {
@@ -762,6 +771,41 @@ pub fn move_file_across_volumes(source: &PathBuf, target: &PathBuf) -> Result<()
             })
         }
     }
+}
+
+fn move_dir_across_volumes(source: &PathBuf, target: &PathBuf) -> Result<(), String> {
+    match fs::rename(source, target) {
+        Ok(()) => Ok(()),
+        Err(rename_error) => {
+            if let Err(copy_error) = copy_dir_recursive(source, target) {
+                let _ = fs::remove_dir_all(target);
+                return Err(format!(
+                    "rename failed: {rename_error}; recursive copy failed: {copy_error}"
+                ));
+            }
+            fs::remove_dir_all(source).map_err(|remove_error| {
+                let _ = fs::remove_dir_all(target);
+                format!(
+                    "rename failed: {rename_error}; copied directory cleanup failed: {remove_error}"
+                )
+            })
+        }
+    }
+}
+
+fn copy_dir_recursive(source: &PathBuf, target: &PathBuf) -> Result<(), String> {
+    fs::create_dir_all(target).map_err(|error| error.to_string())?;
+    for entry in fs::read_dir(source).map_err(|error| error.to_string())? {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let entry_target = target.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|error| error.to_string())?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &entry_target)?;
+        } else {
+            fs::copy(entry.path(), &entry_target).map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 pub fn app_data_dir() -> PathBuf {

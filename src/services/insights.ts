@@ -12,6 +12,10 @@ export type Insight = {
   explanation: string;
   impact: string;
   category: InsightCategory;
+  /** Only set for insights computed locally (not from the backend) that
+   * link to more detail elsewhere in the app - e.g. the disk-usage card
+   * linking to Local Controls. */
+  action?: { label: string; onClick: () => void };
 };
 
 export type InsightResult = {
