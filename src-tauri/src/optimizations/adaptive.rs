@@ -399,7 +399,13 @@ fn release_thread_execution_state_for_eco() -> Value {
 
 fn windows_support_summary() -> WindowsSupportSummary {
     let os_label = System::long_os_version().or_else(System::name);
-    let supported = os_label.as_deref().is_some_and(windows_10_or_11_from_label);
+    // The OS label string is unreliable for telling Windows 10 and 11 apart
+    // (ProductName can still read "Windows 10" on some Win11 builds) - the
+    // actual gate is the detected build number, see os_version.rs.
+    let supported = !matches!(
+        super::os_version::detected().generation,
+        super::os_version::WindowsGeneration::Unknown
+    );
     WindowsSupportSummary {
         os_label,
         supported,
@@ -409,11 +415,6 @@ fn windows_support_summary() -> WindowsSupportSummary {
             Some("requires_windows_10_or_11".to_string())
         },
     }
-}
-
-fn windows_10_or_11_from_label(label: &str) -> bool {
-    let normalized = label.to_ascii_lowercase();
-    normalized.contains("windows 10") || normalized.contains("windows 11")
 }
 
 #[cfg(windows)]
@@ -453,15 +454,7 @@ mod tests {
 
     use super::{
         background_pressure_score, is_safe_dns_literal, network_admin_plan, should_apply_eco_mode,
-        windows_10_or_11_from_label,
     };
-
-    #[test]
-    fn detects_supported_windows_labels() {
-        assert!(windows_10_or_11_from_label("Microsoft Windows 11 Pro"));
-        assert!(windows_10_or_11_from_label("Windows 10 Enterprise"));
-        assert!(!windows_10_or_11_from_label("Windows 8.1"));
-    }
 
     #[test]
     fn gates_eco_mode_on_idle_threshold() {
