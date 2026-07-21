@@ -12,7 +12,7 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::process_ext::CommandExt;
+use crate::process_ext::{decode_console_bytes, CommandExt};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc, Mutex, OnceLock,
@@ -1348,7 +1348,7 @@ fn process_path_by_pid(pid: u32) -> Option<PathBuf> {
     if !output.status.success() {
         return None;
     }
-    let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let path = decode_console_bytes(&output.stdout).trim().to_string();
     if path.is_empty() {
         None
     } else {
@@ -1638,7 +1638,7 @@ fn current_user_sid() -> Result<String, String> {
     if !output.status.success() {
         return Err("Nao foi possivel descobrir o SID do usuario atual.".to_string());
     }
-    let sid = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let sid = decode_console_bytes(&output.stdout).trim().to_string();
     if !sid.starts_with("S-1-") {
         return Err("SID do usuario atual retornou formato inesperado.".to_string());
     }
@@ -1681,7 +1681,7 @@ fn service_binary_path() -> Option<PathBuf> {
     if !output.status.success() {
         return None;
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stdout = decode_console_bytes(&output.stdout);
     stdout.lines().find_map(|line| {
         if !line.contains("BINARY_PATH_NAME") {
             return None;
@@ -1776,7 +1776,7 @@ fn service_running() -> bool {
             .output()
             .ok()
             .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).contains("RUNNING"))
+            .map(|output| decode_console_bytes(&output.stdout).contains("RUNNING"))
             .unwrap_or(false)
     }
 

@@ -6,7 +6,7 @@ use std::process::Command;
 use uuid::Uuid;
 
 use crate::audit;
-use crate::process_ext::CommandExt;
+use crate::process_ext::{decode_console_bytes, CommandExt};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationSnapshot {
@@ -648,10 +648,10 @@ pub fn active_power_plan() -> Result<PowerPlanState, String> {
         .map_err(|error| error.to_string())?;
 
     if !output.status.success() {
-        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        return Err(decode_console_bytes(&output.stderr).trim().to_string());
     }
 
-    parse_power_plan_output(&String::from_utf8_lossy(&output.stdout))
+    parse_power_plan_output(&decode_console_bytes(&output.stdout))
         .ok_or_else(|| "Nao foi possivel identificar o plano de energia ativo.".to_string())
 }
 
@@ -665,7 +665,7 @@ pub fn set_active_power_plan(scheme_guid_or_alias: &str) -> Result<(), String> {
     if output.status.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(decode_console_bytes(&output.stderr).trim().to_string())
     }
 }
 
@@ -864,11 +864,11 @@ fn start_service(service_name: &str) -> Result<(), String> {
             .output()
             .map_err(|error| error.to_string())?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let stdout = decode_console_bytes(&output.stdout);
         if output.status.success() || stdout.to_ascii_lowercase().contains("already") {
             Ok(())
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr = decode_console_bytes(&output.stderr);
             Err(format!("{}{}", stdout.trim(), stderr.trim()))
         }
     }
@@ -919,7 +919,7 @@ fn restore_dns_configuration(
     if output.status.success() {
         Ok(())
     } else {
-        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+        Err(decode_console_bytes(&output.stderr).trim().to_string())
     }
 }
 

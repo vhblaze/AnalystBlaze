@@ -212,11 +212,11 @@ export function Dashboard({
                   onClick={() => void handleGameModeDeactivate()}
                   className="text-xs font-medium text-amber-200 transition hover:text-amber-100 disabled:opacity-50"
                 >
-                  Desativar
+                  {t("common.deactivate")}
                 </button>
               )}
               {isReady && !paidGameModeAllowed && (
-                <span className="text-xs text-slate-500">Disponivel nos planos pagos</span>
+                <span className="text-xs text-slate-500">{t("common.paidPlansOnly")}</span>
               )}
             </div>
             <Sparkline data={cpuHistory} />
