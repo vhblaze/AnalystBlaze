@@ -6,6 +6,7 @@ import {
   Gamepad2,
   Gauge,
   HardDrive,
+  Lock,
   MemoryStick,
   MonitorPlay,
   PlugZap,
@@ -36,6 +37,7 @@ export function Dashboard({
   onStartAgent,
   onActivateGameMode,
   onRestoreGameMode,
+  onOpenBilling,
   busy,
 }: {
   user: User | null;
@@ -44,6 +46,7 @@ export function Dashboard({
   onStartAgent: () => Promise<void>;
   onActivateGameMode: () => Promise<void>;
   onRestoreGameMode: () => Promise<void>;
+  onOpenBilling: () => Promise<void>;
   busy: boolean;
 }) {
   const { t } = useI18n();
@@ -99,6 +102,11 @@ export function Dashboard({
     await onRestoreGameMode();
     setActiveGameModeSession(null);
     await refreshGameModeSession();
+  };
+
+  const handleGameModeUpsellClick = async () => {
+    track("game_mode_upsell_clicked");
+    await onOpenBilling();
   };
 
   const healthLabel = useMemo(() => healthLevelLabel(telemetry?.health_level, t), [telemetry?.health_level, t]);
@@ -184,10 +192,14 @@ export function Dashboard({
           <div className="relative flex items-center justify-between gap-4">
             <div className="flex flex-col items-start gap-1">
               <button
-                disabled={busy || !isReady || !paidGameModeAllowed || gameModeActive}
+                disabled={busy || !isReady || gameModeActive}
                 onClick={() => {
                   if (!isReady) {
                     void onStartAgent();
+                    return;
+                  }
+                  if (!paidGameModeAllowed) {
+                    void handleGameModeUpsellClick();
                     return;
                   }
                   void handleGameModeClick();
@@ -200,10 +212,12 @@ export function Dashboard({
               >
                 {gameModeActive ? (
                   <ShieldCheck className="h-4 w-4" />
+                ) : isReady && !paidGameModeAllowed ? (
+                  <Lock className="h-4 w-4" />
                 ) : (
                   <Gamepad2 className="h-4 w-4 transition-transform group-hover:-rotate-12" />
                 )}
-                {isReady ? (gameModeActive ? "Modo Gamer Ativado" : paidGameModeAllowed ? t("dashboard.gameMode") : "Modo Gamer pago") : t("dashboard.startAgent")}
+                {isReady ? (gameModeActive ? "Modo Gamer Ativado" : paidGameModeAllowed ? t("dashboard.gameMode") : "Desbloquear Modo Gamer") : t("dashboard.startAgent")}
                 {!gameModeActive && <ArrowUpRight className="h-4 w-4 opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />}
               </button>
               {gameModeActive && (
@@ -216,7 +230,7 @@ export function Dashboard({
                 </button>
               )}
               {isReady && !paidGameModeAllowed && (
-                <span className="text-xs text-slate-500">Disponivel nos planos pagos</span>
+                <span className="text-xs text-slate-500">Abre a pagina de planos</span>
               )}
             </div>
             <Sparkline data={cpuHistory} />

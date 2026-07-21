@@ -482,6 +482,7 @@ export function AppShell() {
                       auth.restoreGameMode,
                     );
                   }}
+                  onOpenBilling={auth.openBilling}
                   busy={auth.busy}
                 />
               </Suspense>
@@ -750,6 +751,7 @@ export function AppShell() {
                       auth.resetWinsock,
                     )
                   }
+                  onOpenBilling={auth.openBilling}
                 />
               </Suspense>
             ) : (

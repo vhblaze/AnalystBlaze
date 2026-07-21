@@ -1,4 +1,4 @@
-import { BatteryCharging, BookOpen, Briefcase, Gamepad2, Gauge, History, ListChecks, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench } from "lucide-react";
+import { BatteryCharging, BookOpen, Briefcase, Gamepad2, Gauge, History, ListChecks, Lock, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { canUseAutomaticGameMode, canUsePaidGameMode } from "@/hooks/useAuth";
@@ -69,6 +69,7 @@ export function LocalControls({
   onFlushDnsCache,
   onSetDnsServers,
   onResetWinsockCatalog,
+  onOpenBilling,
 }: {
   status: AgentStatus | null;
   automaticGameModeAllowed?: boolean;
@@ -95,6 +96,7 @@ export function LocalControls({
   onFlushDnsCache: () => Promise<unknown>;
   onSetDnsServers: (adapterName: string, dnsServers: string[]) => Promise<unknown>;
   onResetWinsockCatalog: () => Promise<unknown>;
+  onOpenBilling: () => Promise<unknown>;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("local_controls");
@@ -384,6 +386,11 @@ export function LocalControls({
     );
   };
 
+  const handleGameModeUpsellClick = async () => {
+    track("game_mode_upsell_clicked");
+    await onOpenBilling();
+  };
+
   const deactivateGameMode = async () => {
     await runControlAction(
       async () => {
@@ -457,16 +464,20 @@ export function LocalControls({
           <div className="flex flex-wrap gap-2 lg:justify-end">
             <div className="flex flex-col items-stretch gap-1">
               <button
-                disabled={busy || performanceBusy || !runtimeAvailable || !paidGameModeAllowed || gameModeActive}
-                onClick={() => void runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.")}
+                disabled={busy || performanceBusy || !runtimeAvailable || gameModeActive}
+                onClick={() =>
+                  paidGameModeAllowed
+                    ? void runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.")
+                    : void handleGameModeUpsellClick()
+                }
                 className={`inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all disabled:opacity-70 ${
                   gameModeActive
                     ? "border-emerald-300/55 bg-emerald-400/15 text-emerald-50"
                     : "border-cyan-300/50 bg-cyan-400/15 text-cyan-50 hover:bg-cyan-400/20"
                 }`}
               >
-                {gameModeActive ? <ShieldCheck className="h-4 w-4" /> : <Gamepad2 className="h-4 w-4" />}
-                {gameModeActive ? "Modo Gamer Ativado" : paidGameModeAllowed ? "Ativar Modo Gamer" : "Modo Gamer pago"}
+                {gameModeActive ? <ShieldCheck className="h-4 w-4" /> : paidGameModeAllowed ? <Gamepad2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
+                {gameModeActive ? "Modo Gamer Ativado" : paidGameModeAllowed ? "Ativar Modo Gamer" : "Desbloquear Modo Gamer"}
               </button>
               {gameModeActive && (
                 <button
@@ -478,7 +489,7 @@ export function LocalControls({
                 </button>
               )}
               {!paidGameModeAllowed && (
-                <span className="text-xs text-slate-500">Disponivel nos planos pagos</span>
+                <span className="text-xs text-slate-500">Abre a pagina de planos</span>
               )}
             </div>
             <button
