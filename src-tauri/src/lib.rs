@@ -38,6 +38,12 @@ struct AgentState {
     store: SecureStore,
     telemetry: Mutex<Option<TelemetryEngineHandle>>,
     telemetry_state: SharedTelemetryState,
+    /// Last completed disk-usage scan, kept in memory only (cleared on
+    /// restart) so repeated UI visits don't force a rescan every time.
+    disk_usage_cache: Mutex<Option<optimizations::disk_usage::DiskUsageSummary>>,
+    /// Set while a scan is in flight so cancel_disk_usage_scan has
+    /// something to signal; cleared when the scan finishes either way.
+    disk_usage_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -370,6 +376,73 @@ async fn apply_cleanup_category(
     mode: Option<String>,
 ) -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::performance_suite::apply_cleanup_category(category, mode).await)
+}
+
+const DISK_USAGE_CACHE_TTL_SECONDS: i64 = 10 * 60;
+
+#[tauri::command]
+async fn disk_usage_summary(
+    force_refresh: bool,
+    state: State<'_, AgentState>,
+    app: AppHandle,
+) -> Result<optimizations::disk_usage::DiskUsageSummary, String> {
+    if !force_refresh {
+        let cached = state
+            .disk_usage_cache
+            .lock()
+            .map_err(|_| "Estado do agente bloqueado.".to_string())?
+            .clone();
+        if let Some(summary) = cached {
+            let age_seconds = chrono::Utc::now().timestamp() - summary.scanned_at;
+            if (0..DISK_USAGE_CACHE_TTL_SECONDS).contains(&age_seconds) {
+                return Ok(summary);
+            }
+        }
+    }
+
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut guard = state
+            .disk_usage_cancel
+            .lock()
+            .map_err(|_| "Estado do agente bloqueado.".to_string())?;
+        *guard = Some(cancel.clone());
+    }
+
+    let summary = optimizations::disk_usage::scan_disk_usage(app, cancel).await;
+
+    if let Ok(mut guard) = state.disk_usage_cancel.lock() {
+        *guard = None;
+    }
+    if let Ok(mut guard) = state.disk_usage_cache.lock() {
+        *guard = Some(summary.clone());
+    }
+
+    Ok(summary)
+}
+
+#[tauri::command]
+async fn cancel_disk_usage_scan(state: State<'_, AgentState>) -> Result<bool, String> {
+    let guard = state
+        .disk_usage_cancel
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?;
+    match guard.as_ref() {
+        Some(cancel) => {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
+}
+
+#[tauri::command]
+async fn delete_disk_usage_item(path: String) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "DELETE_DISK_USAGE_ITEM",
+        Some(serde_json::json!({ "path": path })),
+    )
+    .await)
 }
 
 #[tauri::command]
@@ -833,6 +906,8 @@ pub fn run() {
         store,
         telemetry: Mutex::new(None),
         telemetry_state: new_shared_telemetry_state(),
+        disk_usage_cache: Mutex::new(None),
+        disk_usage_cancel: Mutex::new(None),
     };
 
     let updater_api_base_url = state.config.api_base_url.clone();
@@ -928,6 +1003,9 @@ pub fn run() {
             restore_performance_session,
             scan_cleanup_categories,
             apply_cleanup_category,
+            disk_usage_summary,
+            cancel_disk_usage_scan,
+            delete_disk_usage_item,
             scan_startup_impact,
             delay_startup_app,
             restore_delayed_startup_app,
