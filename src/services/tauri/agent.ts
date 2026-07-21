@@ -290,6 +290,9 @@ export type EnergyDiagnostics = {
   active_scheme_guid?: string | null;
   active_scheme_name?: string | null;
   active_scheme_alias?: string | null;
+  /** Windows 11's Settings > Power "Power mode" slider overlay, when
+   * applicable - null on Windows 10. See os_version.rs/energy.rs. */
+  active_overlay_scheme_alias?: string | null;
   power_source?: string | null;
   battery_percent?: number | null;
   battery_status?: string | null;
