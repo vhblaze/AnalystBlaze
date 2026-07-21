@@ -571,26 +571,21 @@ export function LocalControls({
           <div className="flex flex-wrap gap-2 lg:justify-end">
             <div className="flex flex-col items-stretch gap-1">
               <button
-                disabled={busy || performanceBusy || !runtimeAvailable || !paidGameModeAllowed || gameModeActive}
-                onClick={() => void runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.")}
+                disabled={busy || performanceBusy || !runtimeAvailable || (!paidGameModeAllowed && !gameModeActive)}
+                onClick={() =>
+                  gameModeActive
+                    ? void deactivateGameMode()
+                    : void runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.")
+                }
                 className={`inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all disabled:opacity-70 ${
                   gameModeActive
-                    ? "border-emerald-300/55 bg-emerald-400/15 text-emerald-50"
+                    ? "border-emerald-300/55 bg-emerald-400/15 text-emerald-50 hover:border-amber-300/60 hover:bg-amber-400/15"
                     : "border-cyan-300/50 bg-cyan-400/15 text-cyan-50 hover:bg-cyan-400/20"
                 }`}
               >
                 {gameModeActive ? <ShieldCheck className="h-4 w-4" /> : <Gamepad2 className="h-4 w-4" />}
-                {gameModeActive ? "Modo Gamer Ativado" : paidGameModeAllowed ? "Ativar Modo Gamer" : "Modo Gamer pago"}
+                {gameModeActive ? "Desativar Modo Gamer" : paidGameModeAllowed ? "Ativar Modo Gamer" : "Modo Gamer pago"}
               </button>
-              {gameModeActive && (
-                <button
-                  disabled={busy || performanceBusy || !runtimeAvailable}
-                  onClick={() => void deactivateGameMode()}
-                  className="text-left text-xs font-medium text-amber-200 transition hover:text-amber-100 disabled:opacity-50"
-                >
-                  {t("common.deactivate")}
-                </button>
-              )}
               {!paidGameModeAllowed && (
                 <span className="text-xs text-slate-500">{t("common.paidPlansOnly")}</span>
               )}

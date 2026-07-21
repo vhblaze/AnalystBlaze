@@ -488,6 +488,17 @@ export function AppShell() {
                       auth.restoreGameMode,
                     );
                   }}
+                  onApplyPcCleanFast={async () => {
+                    await runConfirmed(
+                      {
+                        title: "Aplicar PC limpo/rapido",
+                        description: "Executa Performance Scan, limpeza segura, ajuste visual, priorizacao de apps de fundo e Modo Gamer se houver jogo detectado.",
+                        risk: "sensivel",
+                        snapshot: true,
+                      },
+                      auth.pcCleanFast,
+                    );
+                  }}
                   busy={auth.busy}
                 />
               </Suspense>
