@@ -395,7 +395,14 @@ async fn apply_game_mode(payload: Option<Value>) -> ExecutionResult {
             .unwrap_or_else(|| Value::Array(Vec::new())),
     });
 
-    let restore_session = if auto_restore && detected_game.detected && !snapshot_ids.is_empty() {
+    // A session is saved whenever there's something to restore, even without
+    // a detected game process - otherwise a manual activation (no game
+    // running) never becomes "active" and the UI toggle can't reflect or
+    // reverse it. Only spawn the exit-watching monitor when there's an
+    // actual process to watch, though: process_still_running(None, None)
+    // returns false immediately, which would auto-restore the session
+    // within seconds if the monitor ran with nothing to track.
+    let restore_session = if auto_restore && !snapshot_ids.is_empty() {
         save_active_game_mode_session(
             target_pid,
             detected_game.process_name.clone(),
@@ -407,12 +414,14 @@ async fn apply_game_mode(payload: Option<Value>) -> ExecutionResult {
     };
 
     if let Some(session) = restore_session.as_ref() {
-        spawn_game_restore_monitor(
-            session.id.clone(),
-            session.target_pid,
-            session.target_process_name.clone(),
-            snapshot_ids.clone(),
-        );
+        if session.target_pid.is_some() || session.target_process_name.is_some() {
+            spawn_game_restore_monitor(
+                session.id.clone(),
+                session.target_pid,
+                session.target_process_name.clone(),
+                snapshot_ids.clone(),
+            );
+        }
     }
 
     let success = power.success
@@ -450,9 +459,13 @@ async fn apply_game_mode(payload: Option<Value>) -> ExecutionResult {
                 .cloned()
                 .unwrap_or_else(|| Value::Array(Vec::new())),
             "restoreSession": restore_session,
-            "restoreStatus": if auto_restore && !snapshot_ids.is_empty() { "monitoring" } else { "not_started" },
+            "restoreStatus": if auto_restore && !snapshot_ids.is_empty() {
+                if detected_game.detected { "monitoring" } else { "manual_only" }
+            } else {
+                "not_started"
+            },
             "restore_monitor": {
-                "enabled": auto_restore && !snapshot_ids.is_empty(),
+                "enabled": auto_restore && !snapshot_ids.is_empty() && detected_game.detected,
                 "snapshot_ids": snapshot_ids,
             },
             "steps": {
