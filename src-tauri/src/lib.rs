@@ -56,6 +56,11 @@ struct AgentState {
     /// something to signal; None means the loop isn't active.
     live_mode_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     live_mode_last_incident: Mutex<Option<telemetry::live_mode::IncidentReport>>,
+    /// Latest starter-plan weekly automation budget reported by the server
+    /// on the last commands poll (see telemetry::engine::poll_commands).
+    /// `None` for paid plans (server sends no limit) or before the first
+    /// poll after startup.
+    weekly_ai_usage: Mutex<Option<api::WeeklyAiTelemetryUsage>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -573,6 +578,17 @@ async fn live_mode_status(state: State<'_, AgentState>) -> Result<LiveModeStatus
         bitrate_recommendation,
         last_incident,
     })
+}
+
+#[tauri::command]
+fn weekly_automation_usage(
+    state: State<'_, AgentState>,
+) -> Result<Option<api::WeeklyAiTelemetryUsage>, String> {
+    Ok(state
+        .weekly_ai_usage
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .clone())
 }
 
 #[tauri::command]
@@ -1198,6 +1214,7 @@ pub fn run() {
         live_mode_samples: Mutex::new(std::collections::VecDeque::new()),
         live_mode_cancel: Mutex::new(None),
         live_mode_last_incident: Mutex::new(None),
+        weekly_ai_usage: Mutex::new(None),
     };
 
     let updater_api_base_url = state.config.api_base_url.clone();
@@ -1306,6 +1323,7 @@ pub fn run() {
             stop_live_mode,
             live_mode_status,
             generate_live_mode_incident_report,
+            weekly_automation_usage,
             scan_startup_impact,
             delay_startup_app,
             restore_delayed_startup_app,

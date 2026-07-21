@@ -15,10 +15,13 @@ import { canUseAutomaticGameMode, type AgentMessage, type User } from "@/hooks/u
 import { localeLabels, type Locale, useI18n } from "@/i18n";
 import {
   getLocalAiPolicy,
+  getWeeklyAiUsage,
+  listenToWeeklyAiUsage,
   saveLocalAiPolicy,
   type AgentStatus,
   type AgentTelemetrySample,
   type LocalAiPolicy,
+  type WeeklyAiUsage,
 } from "@/services/tauri/agent";
 import { getTelemetryQueueSize, isTelemetryEnabled, setTelemetryEnabled } from "@/services/telemetry";
 
@@ -80,6 +83,16 @@ export function Settings({
     try { return localStorage.getItem("analystblaze.adaptive") === "1"; } catch { return false; }
   });
   const [aiPolicy, setAiPolicy] = useState<LocalAiPolicy>(DEFAULT_LOCAL_AI_POLICY);
+  const [weeklyAiUsage, setWeeklyAiUsage] = useState<WeeklyAiUsage | null>(null);
+
+  useEffect(() => {
+    getWeeklyAiUsage().then(setWeeklyAiUsage).catch(() => undefined);
+    let dispose: (() => void) | undefined;
+    listenToWeeklyAiUsage(setWeeklyAiUsage).then((unlisten) => {
+      dispose = unlisten;
+    });
+    return () => dispose?.();
+  }, []);
 
   useEffect(() => {
     getLocalAiPolicy()
@@ -270,6 +283,14 @@ export function Settings({
           <div className="mt-3 flex items-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-3 py-2 text-[11px] text-cyan-100/80">
             <Shield className="h-3 w-3" />
             {t("settings.aiAutomationPlanNotice")}
+          </div>
+        )}
+        {weeklyAiUsage && weeklyAiUsage.limitSeconds != null && (
+          <div className={`mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${weeklyAiUsage.limitReached ? "border-amber-400/20 bg-amber-400/5 text-amber-200/80" : "border-cyan-400/20 bg-cyan-400/5 text-cyan-100/80"}`}>
+            <Zap className="h-3 w-3" />
+            {weeklyAiUsage.limitReached
+              ? "Limite semanal de automacao atingido. Volta na proxima semana, ou assine um plano pago para automacao continua."
+              : `Automacao: ${formatMinutesLabel(weeklyAiUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito).`}
           </div>
         )}
 
@@ -580,6 +601,11 @@ function planLabel(plan: string) {
   const normalized = plan.trim().toLowerCase();
   if (!normalized || normalized === "free") return "Starter";
   return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
+}
+
+function formatMinutesLabel(seconds: number): string {
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  return `${minutes} min`;
 }
 
 function formatSyncedAgo(unixSeconds: number): string {

@@ -9,7 +9,9 @@ use tokio::sync::{oneshot, watch};
 use tokio::time::{interval, sleep, timeout, Duration, MissedTickBehavior};
 use uuid::Uuid;
 
-use crate::api::{AgentPolicyBundle, ApiClient, CommandAcknowledgement, CommandResponse};
+use crate::api::{
+    AgentPolicyBundle, ApiClient, CommandAcknowledgement, CommandResponse, WeeklyAiTelemetryUsage,
+};
 use crate::auth::{SecureStore, StoredCredentials};
 use crate::config::AgentConfig;
 use crate::optimizations::{self, safety::CommandSource};
@@ -17,7 +19,7 @@ use crate::optimizations::{self, safety::CommandSource};
 use super::collector::{TelemetryCollector, TelemetrySample};
 use super::state::{
     SharedTelemetryState, TelemetryDashboardSnapshot, AGENT_SESSION_INVALIDATED_EVENT,
-    TELEMETRY_UPDATE_EVENT,
+    TELEMETRY_UPDATE_EVENT, WEEKLY_AI_USAGE_EVENT,
 };
 
 pub const REMOTE_COMMAND_CONFIRMATION_EVENT: &str = "remote-command-confirmation-request";
@@ -602,8 +604,9 @@ impl TelemetryEngine {
             self.refresh_agent_policy().await;
         }
 
-        let commands = match self.api.next_commands(&access_token, hw_id).await {
-            Ok(commands) => commands,
+        let (commands, weekly_ai_usage) = match self.api.next_commands(&access_token, hw_id).await
+        {
+            Ok(result) => result,
             Err(error) => {
                 if self.clear_local_session_if_device_inactive(&error) {
                     return;
@@ -613,6 +616,7 @@ impl TelemetryEngine {
             }
         };
         self.record_backend_success();
+        self.publish_weekly_ai_usage(weekly_ai_usage);
 
         if commands.is_empty() {
             self.run_local_policy_fallback(&access_token, &hw_id, &hw_secret)
@@ -706,6 +710,17 @@ impl TelemetryEngine {
                 self.record_backend_failure(&format!("confirmar comando {}", command.id), &error);
             }
         }
+    }
+
+    /// Caches the server's latest starter-plan weekly automation budget and
+    /// notifies the UI (Settings screen) so a real, already-enforced limit
+    /// isn't left silent - previously this was only ever logged to stderr.
+    fn publish_weekly_ai_usage(&self, usage: Option<WeeklyAiTelemetryUsage>) {
+        let state = self.app_handle.state::<crate::AgentState>();
+        if let Ok(mut guard) = state.weekly_ai_usage.lock() {
+            *guard = usage.clone();
+        }
+        let _ = self.app_handle.emit(WEEKLY_AI_USAGE_EVENT, usage);
     }
 
     async fn run_local_policy_fallback(

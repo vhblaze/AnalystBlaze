@@ -138,6 +138,17 @@ export type LiveModeStatus = {
   lastIncident?: IncidentReport | null;
 };
 
+/** The server's weekly automation-command budget for the starter plan
+ * (already enforced server-side regardless of what the UI shows).
+ * `limitSeconds`/`remainingSeconds` are null for paid plans (unlimited). */
+export type WeeklyAiUsage = {
+  usedSeconds: number;
+  limitSeconds?: number | null;
+  remainingSeconds?: number | null;
+  isCurrentlyTracking: boolean;
+  limitReached: boolean;
+};
+
 export type RemoteCommandConfirmationRequest = {
   requestId: string;
   commandId: string;
@@ -1104,6 +1115,16 @@ export async function listenToLiveModeSample(onSample: (sample: LiveModeSample) 
 export async function listenToLiveModeIncident(onIncident: (report: IncidentReport) => void) {
   if (!isTauriRuntime()) return () => undefined;
   return listen<IncidentReport>("live-mode-incident", (event) => onIncident(event.payload));
+}
+
+export async function getWeeklyAiUsage(): Promise<WeeklyAiUsage | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<WeeklyAiUsage | null>("weekly_automation_usage");
+}
+
+export async function listenToWeeklyAiUsage(onUsage: (usage: WeeklyAiUsage | null) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<WeeklyAiUsage | null>("weekly-ai-usage", (event) => onUsage(event.payload));
 }
 
 export async function listenToAgentSessionInvalidated(onInvalidated: () => void) {
