@@ -191,6 +191,21 @@ pub struct WeeklyAiTelemetryUsage {
     pub limit_reached: bool,
 }
 
+/// An admin-authored broadcast message (see app/models/announcement.py on
+/// the server), shown in the desktop notification bell. Dismissal is
+/// tracked client-side only - see AppShell.tsx.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Announcement {
+    pub id: Uuid,
+    pub title: String,
+    pub body: String,
+    pub tone: String,
+    pub is_active: bool,
+    pub expires_at: Option<String>,
+    pub created_at: String,
+}
+
 impl ApiClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
@@ -462,6 +477,21 @@ impl ApiClient {
         }
 
         Ok((response.pending, response.weekly_ai_usage))
+    }
+
+    /// Admin-broadcast messages (see app/api/v1/announcements.py on the
+    /// server) - short notices like "overlay changes coming next week",
+    /// unrelated to a specific app release. Never mutates anything locally;
+    /// the caller decides how/whether to show them.
+    pub async fn active_announcements(&self, access_token: &str) -> Result<Vec<Announcement>, String> {
+        let response = self
+            .http
+            .get(self.url("/api/v1/announcements/active"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        ok_json::<Vec<Announcement>>(response).await
     }
 
     pub async fn acknowledge_command(

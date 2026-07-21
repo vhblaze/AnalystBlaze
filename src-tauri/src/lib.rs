@@ -61,6 +61,9 @@ struct AgentState {
     /// `None` for paid plans (server sends no limit) or before the first
     /// poll after startup.
     weekly_ai_usage: Mutex<Option<api::WeeklyAiTelemetryUsage>>,
+    /// Latest admin-broadcast announcements from the last commands poll
+    /// (see telemetry::engine::poll_commands). Empty before the first poll.
+    announcements: Mutex<Vec<api::Announcement>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -586,6 +589,15 @@ fn weekly_automation_usage(
 ) -> Result<Option<api::WeeklyAiTelemetryUsage>, String> {
     Ok(state
         .weekly_ai_usage
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .clone())
+}
+
+#[tauri::command]
+fn active_announcements(state: State<'_, AgentState>) -> Result<Vec<api::Announcement>, String> {
+    Ok(state
+        .announcements
         .lock()
         .map_err(|_| "Estado do agente bloqueado.".to_string())?
         .clone())
@@ -1215,6 +1227,7 @@ pub fn run() {
         live_mode_cancel: Mutex::new(None),
         live_mode_last_incident: Mutex::new(None),
         weekly_ai_usage: Mutex::new(None),
+        announcements: Mutex::new(Vec::new()),
     };
 
     let updater_api_base_url = state.config.api_base_url.clone();
@@ -1324,6 +1337,7 @@ pub fn run() {
             live_mode_status,
             generate_live_mode_incident_report,
             weekly_automation_usage,
+            active_announcements,
             scan_startup_impact,
             delay_startup_app,
             restore_delayed_startup_app,

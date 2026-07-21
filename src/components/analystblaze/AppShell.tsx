@@ -9,11 +9,14 @@ import { useTelemetry } from "@/hooks/useTelemetry";
 import { isUpdateDismissedNow, useUpdater } from "@/hooks/useUpdater";
 import { useI18n } from "@/i18n";
 import {
+  getActiveAnnouncements,
   getPrivilegedHelperStatus,
   installPrivilegedHelper,
   isTauriRuntime,
+  listenToAnnouncements,
   listenToRemoteCommandConfirmation,
   resolveRemoteCommandConfirmation,
+  type Announcement,
   type RemoteCommandConfirmationRequest,
 } from "@/services/tauri/agent";
 
@@ -30,6 +33,14 @@ export function AppShell() {
   const [focusDiskUsage, setFocusDiskUsage] = useState(false);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [remoteConfirmationQueue, setRemoteConfirmationQueue] = useState<RemoteCommandConfirmationRequest[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("analystblaze.dismissedAnnouncements") ?? "[]");
+    } catch {
+      return [];
+    }
+  });
   const helperBootstrapStartedRef = useRef(false);
   const auth = useAuth();
   const telemetry = useAgentTelemetry();
@@ -143,9 +154,20 @@ export function AppShell() {
           tone: update.mandatory ? "danger" : "info",
         });
       }
+      announcements
+        .filter((announcement) => !dismissedAnnouncementIds.includes(announcement.id))
+        .forEach((announcement) => {
+          items.push({
+            id: `announcement:${announcement.id}`,
+            title: announcement.title,
+            description: announcement.body,
+            tone: announcement.tone,
+            createdAt: announcement.createdAt,
+          });
+        });
       return items;
     },
-    [remoteConfirmationQueue, updater.status, t],
+    [remoteConfirmationQueue, updater.status, announcements, dismissedAnnouncementIds, t],
   );
 
   const searchItems = useMemo<TopBarSearchItem[]>(
@@ -372,6 +394,27 @@ export function AppShell() {
   }, [requestConfirmation]);
 
   useEffect(() => {
+    getActiveAnnouncements().then(setAnnouncements).catch(() => undefined);
+    let dispose: (() => void) | undefined;
+    listenToAnnouncements(setAnnouncements).then((unlisten) => {
+      dispose = unlisten;
+    });
+    return () => dispose?.();
+  }, []);
+
+  const dismissAnnouncement = useCallback((id: string) => {
+    setDismissedAnnouncementIds((current) => {
+      const next = current.includes(id) ? current : [...current, id];
+      try {
+        localStorage.setItem("analystblaze.dismissedAnnouncements", JSON.stringify(next));
+      } catch {
+        // Non-critical preference persistence.
+      }
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
     if (!auth.ready || helperBootstrapStartedRef.current || !isTauriRuntime()) return;
     helperBootstrapStartedRef.current = true;
 
@@ -455,6 +498,10 @@ export function AppShell() {
           onNotificationClick={(id) => {
             if (id === "update-available") {
               handleUpdateNow();
+              return;
+            }
+            if (id.startsWith("announcement:")) {
+              dismissAnnouncement(id.slice("announcement:".length));
               return;
             }
             setView("dashboard");

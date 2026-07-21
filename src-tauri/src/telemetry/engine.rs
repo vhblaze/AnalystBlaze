@@ -10,7 +10,8 @@ use tokio::time::{interval, sleep, timeout, Duration, MissedTickBehavior};
 use uuid::Uuid;
 
 use crate::api::{
-    AgentPolicyBundle, ApiClient, CommandAcknowledgement, CommandResponse, WeeklyAiTelemetryUsage,
+    AgentPolicyBundle, Announcement, ApiClient, CommandAcknowledgement, CommandResponse,
+    WeeklyAiTelemetryUsage,
 };
 use crate::auth::{SecureStore, StoredCredentials};
 use crate::config::AgentConfig;
@@ -19,7 +20,7 @@ use crate::optimizations::{self, safety::CommandSource};
 use super::collector::{TelemetryCollector, TelemetrySample};
 use super::state::{
     SharedTelemetryState, TelemetryDashboardSnapshot, AGENT_SESSION_INVALIDATED_EVENT,
-    TELEMETRY_UPDATE_EVENT, WEEKLY_AI_USAGE_EVENT,
+    ANNOUNCEMENTS_EVENT, TELEMETRY_UPDATE_EVENT, WEEKLY_AI_USAGE_EVENT,
 };
 
 pub const REMOTE_COMMAND_CONFIRMATION_EVENT: &str = "remote-command-confirmation-request";
@@ -618,6 +619,13 @@ impl TelemetryEngine {
         self.record_backend_success();
         self.publish_weekly_ai_usage(weekly_ai_usage);
 
+        // Best-effort and independent of the commands poll itself - a
+        // failure here (network hiccup, etc.) shouldn't affect command
+        // execution, so it's not routed through record_backend_failure.
+        if let Ok(announcements) = self.api.active_announcements(&access_token).await {
+            self.publish_announcements(announcements);
+        }
+
         if commands.is_empty() {
             self.run_local_policy_fallback(&access_token, &hw_id, &hw_secret)
                 .await;
@@ -721,6 +729,16 @@ impl TelemetryEngine {
             *guard = usage.clone();
         }
         let _ = self.app_handle.emit(WEEKLY_AI_USAGE_EVENT, usage);
+    }
+
+    /// Caches the latest admin-broadcast announcements and notifies the UI
+    /// (notification bell) - see api::ApiClient::active_announcements.
+    fn publish_announcements(&self, announcements: Vec<Announcement>) {
+        let state = self.app_handle.state::<crate::AgentState>();
+        if let Ok(mut guard) = state.announcements.lock() {
+            *guard = announcements.clone();
+        }
+        let _ = self.app_handle.emit(ANNOUNCEMENTS_EVENT, announcements);
     }
 
     async fn run_local_policy_fallback(
