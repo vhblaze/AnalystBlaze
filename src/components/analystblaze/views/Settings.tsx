@@ -21,6 +21,7 @@ import {
   type AgentStatus,
   type AgentTelemetrySample,
   type LocalAiPolicy,
+  type UpdateStatus,
   type WeeklyAiUsage,
 } from "@/services/tauri/agent";
 import { getTelemetryQueueSize, isTelemetryEnabled, setTelemetryEnabled } from "@/services/telemetry";
@@ -59,11 +60,15 @@ export function Settings({
   const track = useTelemetry("settings");
   const updater = useUpdater();
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateCheckPopup, setUpdateCheckPopup] = useState<"available" | "up_to_date" | null>(null);
   const checkForUpdatesNow = () => {
     setCheckingUpdate(true);
     updater
       .check()
-      .then((next) => track("update_check_requested", { available: next.available }))
+      .then((next) => {
+        track("update_check_requested", { available: next.available });
+        setUpdateCheckPopup(next.available ? "available" : "up_to_date");
+      })
       .catch(() => undefined)
       .finally(() => setCheckingUpdate(false));
   };
@@ -593,6 +598,18 @@ export function Settings({
         </div>
         <p className="mt-4 text-sm text-slate-400">{t(message.key, message.params)}</p>
       </section>
+      {updateCheckPopup && (
+        <UpdateCheckPopup
+          result={updateCheckPopup}
+          status={updater.status}
+          busy={Boolean(updater.status?.installing)}
+          onUpdateNow={() => {
+            void updater.apply();
+            setUpdateCheckPopup(null);
+          }}
+          onClose={() => setUpdateCheckPopup(null)}
+        />
+      )}
     </div>
   );
 }
@@ -718,6 +735,85 @@ function PolicyGroup({
         )}
       </div>
     </details>
+  );
+}
+
+function UpdateCheckPopup({
+  result,
+  status,
+  busy,
+  onUpdateNow,
+  onClose,
+}: {
+  result: "available" | "up_to_date";
+  status: UpdateStatus | null;
+  busy: boolean;
+  onUpdateNow: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const mandatory = Boolean(status?.mandatory);
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("update.title")}
+        className="w-full max-w-md rounded-2xl border border-cyan-400/20 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)]"
+      >
+        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-cyan-300/80">
+          {t("update.eyebrow")}
+        </div>
+        {result === "available" ? (
+          <>
+            <h2 className="mt-2 text-xl font-semibold text-slate-50">
+              {mandatory
+                ? t("update.availableTitleMandatory", { version: status?.version ?? "" })
+                : t("update.availableTitle", { version: status?.version ?? "" })}
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-slate-400">
+              {status?.notes?.trim() || t("update.notesFallback")}
+            </p>
+            {mandatory && (
+              <p className="mt-2 text-xs font-medium text-rose-200">{t("update.mandatoryNotice")}</p>
+            )}
+            <div className="mt-6 flex justify-end gap-2">
+              {!mandatory && (
+                <button
+                  onClick={onClose}
+                  className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70"
+                >
+                  {t("update.later")}
+                </button>
+              )}
+              <button
+                disabled={busy}
+                onClick={onUpdateNow}
+                className="rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+              >
+                {busy ? t("update.installing") : t("update.updateNow")}
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 className="mt-2 text-xl font-semibold text-slate-50">{t("update.upToDate")}</h2>
+            <p className="mt-2 text-sm leading-relaxed text-slate-400">
+              {t("update.currentVersion")}: {status?.currentVersion ?? "-"}
+            </p>
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={onClose}
+                className="rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15"
+              >
+                {t("common.close")}
+              </button>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
   );
 }
 
