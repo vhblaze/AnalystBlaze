@@ -1165,6 +1165,19 @@ export async function getWeeklyGameModeUsage(): Promise<GameModeUsage | null> {
   return invoke<GameModeUsage | null>("weekly_game_mode_usage");
 }
 
+/** Enqueues an insight's recommended action for the agent to apply on its
+ * own (see app/api/v1/dashboard.py::apply_insight_action on the server) -
+ * picked up by the background command poll, with local confirmation until
+ * the server's approval-count reaches auto_allowed. */
+export async function applyInsightAction(
+  actionName: string,
+  title?: string | null,
+  reason?: string | null,
+): Promise<void> {
+  requireTauriRuntime("Aplicar insight");
+  return invoke<void>("apply_insight_action", { actionName, title, reason });
+}
+
 export async function listenToGameModeUsage(onUsage: (usage: GameModeUsage) => void) {
   if (!isTauriRuntime()) return () => undefined;
   return listen<GameModeUsage>("game-mode-usage-updated", (event) => onUsage(event.payload));

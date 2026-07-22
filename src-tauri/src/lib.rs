@@ -656,6 +656,24 @@ async fn weekly_game_mode_usage(
 }
 
 #[tauri::command]
+async fn apply_insight_action(
+    action_name: String,
+    title: Option<String>,
+    reason: Option<String>,
+    state: State<'_, AgentState>,
+) -> Result<(), String> {
+    ensure_registered(&state)?;
+    let credentials = state.store.load()?;
+    let (Some(access_token), Some(hw_id)) = (credentials.access_token, credentials.hw_id) else {
+        return Err("Faca login pela Web antes de aplicar um insight.".to_string());
+    };
+    state
+        .api
+        .apply_insight_action(&access_token, hw_id, &action_name, title.as_deref(), reason.as_deref())
+        .await
+}
+
+#[tauri::command]
 async fn generate_live_mode_incident_report(
     state: State<'_, AgentState>,
 ) -> Result<telemetry::live_mode::IncidentReport, String> {
@@ -1522,6 +1540,7 @@ pub fn run() {
             weekly_automation_usage,
             active_announcements,
             weekly_game_mode_usage,
+            apply_insight_action,
             scan_startup_impact,
             delay_startup_app,
             restore_delayed_startup_app,
