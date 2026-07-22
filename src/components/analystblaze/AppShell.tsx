@@ -146,6 +146,39 @@ export function AppShell() {
     }
   }, [auth]);
 
+  // "I'll do it myself" from an Insights card - runs the same action right
+  // now with the same confirmation dialog its own dedicated button uses,
+  // rather than a separate/different flow just because it started from a
+  // recommendation instead of a button.
+  const applyInsightActionLocally = useCallback(
+    (actionName: string) => {
+      if (actionName === "APPLY_GAME_MODE") {
+        return runConfirmed(
+          {
+            title: "Ativar Modo Gamer",
+            description: "O agente aplica jogo em alta prioridade, reduz fundo, ajusta energia/visual, faz limpeza segura reversivel e mede rede. A restauracao fica pronta para quando voce sair do jogo.",
+            risk: "sensivel",
+            snapshot: true,
+          },
+          activateGameModeWithUpsell,
+        );
+      }
+      if (actionName === "EMPTY_TEMP") {
+        return runConfirmed(
+          {
+            title: "Limpeza profunda TEMP",
+            description: "Move arquivos temporarios destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
+            risk: "sensivel",
+            snapshot: true,
+          },
+          auth.cleanTempDeep,
+        );
+      }
+      return Promise.reject(new Error(`Acao nao suportada localmente: ${actionName}`));
+    },
+    [runConfirmed, activateGameModeWithUpsell, auth],
+  );
+
   const notificationItems = useMemo<TopBarNotification[]>(
     () => {
       const items: TopBarNotification[] = remoteConfirmationQueue.map((request) => ({
@@ -590,7 +623,12 @@ export function AppShell() {
               </Suspense>
             ) : view === "insights" ? (
               <Suspense fallback={<ViewFallback />}>
-                <Insights telemetry={telemetry} onOpenDiskUsage={openDiskUsageDetails} />
+                <Insights
+                  telemetry={telemetry}
+                  onOpenDiskUsage={openDiskUsageDetails}
+                  onApplyInsightActionLocally={applyInsightActionLocally}
+                  onRequestAgentApplyInsight={auth.requestAgentApplyInsight}
+                />
               </Suspense>
             ) : view === "controls" ? (
               <Suspense fallback={<ViewFallback />}>

@@ -3,6 +3,7 @@ import {
   activateAgentGameMode,
   activateFocusMode,
   applyCleanupCategory as applyAgentCleanupCategory,
+  applyInsightAction,
   applyPcCleanFastProfile,
   applyVisualPerformanceMode,
   collectAgentTelemetrySample,
@@ -283,6 +284,19 @@ export function useAuth() {
     if (result && !result.success) throw new Error(result.message);
     return result;
   }, [runAction, status]);
+
+  const requestAgentApplyInsight = useCallback(
+    async (actionName: string, title?: string | null, reason?: string | null) => {
+      return runAction(
+        async () => {
+          await applyInsightAction(actionName, title, reason);
+          captureTelemetry({ name: "insight_action_requested", category: "agent", properties: { actionName } });
+        },
+        { rethrow: true },
+      );
+    },
+    [runAction],
+  );
 
   const restoreOptimizations = useCallback(async () => {
     const result = await runAction(async () => {
@@ -800,6 +814,7 @@ export function useAuth() {
     start,
     activateGameMode,
     activateGamePerformanceMode,
+    requestAgentApplyInsight,
     activateFocus,
     restoreOptimizations,
     restoreGameMode,

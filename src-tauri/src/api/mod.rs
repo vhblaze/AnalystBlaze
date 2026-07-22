@@ -572,6 +572,37 @@ impl ApiClient {
         ok_json::<GameModeUsage>(response).await
     }
 
+    /// Enqueues an insight's recommended action for the agent to apply on
+    /// its own (see app/api/v1/dashboard.py::apply_insight_action) - it's
+    /// picked up and executed the next time the background command poll
+    /// runs, with the same local-confirmation rules as any other
+    /// server-issued command until the server's approval-count reaches
+    /// auto_allowed. Returns 403 (surfaced as an error string here) for
+    /// plans without automatic-agent entitlement.
+    pub async fn apply_insight_action(
+        &self,
+        access_token: &str,
+        hw_id: Uuid,
+        action_name: &str,
+        title: Option<&str>,
+        reason: Option<&str>,
+    ) -> Result<(), String> {
+        let response = self
+            .http
+            .post(self.url("/api/v1/insights/actions"))
+            .bearer_auth(access_token)
+            .json(&serde_json::json!({
+                "deviceId": hw_id.to_string(),
+                "actionName": action_name,
+                "title": title,
+                "reason": reason,
+            }))
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        ok_empty(response).await
+    }
+
     pub async fn acknowledge_command(
         &self,
         access_token: &str,

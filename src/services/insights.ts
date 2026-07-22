@@ -16,6 +16,11 @@ export type Insight = {
    * link to more detail elsewhere in the app - e.g. the disk-usage card
    * linking to Local Controls. */
   action?: { label: string; onClick: () => void };
+  /** Present only when the server paired this card with a recommended
+   * action from its small validated allowlist (APPLY_GAME_MODE, EMPTY_TEMP,
+   * ...) - lets the UI offer "let the agent do it" / "I'll do it myself"
+   * instead of a purely informational card. */
+  actionName?: string;
 };
 
 export type InsightResult = {
@@ -74,6 +79,7 @@ function normalizeServerInsights(payload: unknown): Insight[] {
       explanation: [card.message, card.recommendation].filter(Boolean).join(" ") || pairedAction?.reason || "",
       impact: impactFrom(card.metrics, pairedAction),
       category: categoryFrom(card, pairedAction),
+      actionName: pairedAction?.actionName,
     };
   });
 
@@ -84,6 +90,7 @@ function normalizeServerInsights(payload: unknown): Insight[] {
       explanation: action.reason || "",
       impact: action.expectedImpact || confidenceImpact(action.confidence),
       category: categoryFrom(undefined, action),
+      actionName: action.actionName,
     }));
 
   return [...cardInsights, ...actionOnlyInsights].filter(
