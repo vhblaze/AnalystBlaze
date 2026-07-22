@@ -198,6 +198,16 @@ async fn build_status(_app: &AppHandle, runtime: &UpdaterRuntimeState) -> Update
             None => (false, None, None, None, None, false),
         };
 
+    // A dismissal only applies to the specific version the user dismissed -
+    // otherwise dismissing "0.1.3 available" would also silently hide a
+    // later, different "0.1.4 available" notice for the rest of the 24h
+    // cooldown, even though the user never saw or dismissed that one.
+    let dismissed_until = if runtime.persisted.dismissed_version.as_deref() == version.as_deref() {
+        runtime.persisted.dismissed_until
+    } else {
+        None
+    };
+
     UpdateStatus {
         current_version,
         checking: runtime.checking,
@@ -211,7 +221,7 @@ async fn build_status(_app: &AppHandle, runtime: &UpdaterRuntimeState) -> Update
         downloaded: runtime.downloaded_bytes.is_some(),
         last_checked_at: runtime.last_checked_at,
         last_error: runtime.last_error.clone(),
-        dismissed_until: runtime.persisted.dismissed_until,
+        dismissed_until,
     }
 }
 
