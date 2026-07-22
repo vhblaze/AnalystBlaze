@@ -1582,6 +1582,15 @@ fn current_exe_has_trusted_signature() -> bool {
         .is_some_and(exe_signature_is_trusted)
 }
 
+/// The app doesn't ship with an Authenticode certificate yet (a deliberate
+/// cost decision for the beta phase - see RELEASING.md's "Authenticode
+/// (future)" section), so `NotSigned` is accepted alongside `Valid` here -
+/// otherwise this check always fails and the privileged helper can never
+/// be installed/used by anyone. A real signature check still runs: any
+/// status other than those two (HashMismatch, NotTrusted, etc. - i.e. a
+/// signature that exists but doesn't verify) is rejected, since that's a
+/// tampering signal rather than "we haven't bought a cert yet". Once a
+/// certificate is in place, tighten this back to `-eq 'Valid'` only.
 fn exe_signature_is_trusted(path: &Path) -> bool {
     #[cfg(not(windows))]
     {
@@ -1592,7 +1601,7 @@ fn exe_signature_is_trusted(path: &Path) -> bool {
     #[cfg(windows)]
     {
         let command = format!(
-            "$sig = Get-AuthenticodeSignature -LiteralPath '{}'; if ($sig.Status -eq 'Valid') {{ exit 0 }} else {{ exit 1 }}",
+            "$sig = Get-AuthenticodeSignature -LiteralPath '{}'; if ($sig.Status -eq 'Valid' -or $sig.Status -eq 'NotSigned') {{ exit 0 }} else {{ exit 1 }}",
             ps_escape(&path.display().to_string())
         );
         Command::new("powershell")
