@@ -206,6 +206,20 @@ pub struct Announcement {
     pub created_at: String,
 }
 
+/// The starter plan's weekly manual-Game-Mode budget for THIS machine (see
+/// app/models/weekly_game_mode_usage.py - keyed by hw_id, not user_id, since
+/// Game Mode runs on one PC at a time). `limit_seconds` is `None` for paid
+/// plans (unlimited, and the desktop never calls these endpoints for them).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GameModeUsage {
+    pub used_seconds: i64,
+    pub limit_seconds: Option<i64>,
+    pub remaining_seconds: Option<i64>,
+    pub is_currently_tracking: bool,
+    pub limit_reached: bool,
+}
+
 impl ApiClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
@@ -492,6 +506,70 @@ impl ApiClient {
             .await
             .map_err(|error| error.to_string())?;
         ok_json::<Vec<Announcement>>(response).await
+    }
+
+    pub async fn weekly_game_mode_usage(
+        &self,
+        access_token: &str,
+        hw_id: Uuid,
+    ) -> Result<GameModeUsage, String> {
+        let response = self
+            .http
+            .get(self.url("/api/v1/game-mode-usage/weekly"))
+            .bearer_auth(access_token)
+            .header("X-AnalystBlaze-Hardware-Id", hw_id.to_string())
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        ok_json::<GameModeUsage>(response).await
+    }
+
+    pub async fn start_game_mode_usage(
+        &self,
+        access_token: &str,
+        hw_id: Uuid,
+    ) -> Result<GameModeUsage, String> {
+        let response = self
+            .http
+            .post(self.url("/api/v1/game-mode-usage/start"))
+            .bearer_auth(access_token)
+            .header("X-AnalystBlaze-Hardware-Id", hw_id.to_string())
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        ok_json::<GameModeUsage>(response).await
+    }
+
+    pub async fn checkpoint_game_mode_usage(
+        &self,
+        access_token: &str,
+        hw_id: Uuid,
+    ) -> Result<GameModeUsage, String> {
+        let response = self
+            .http
+            .post(self.url("/api/v1/game-mode-usage/checkpoint"))
+            .bearer_auth(access_token)
+            .header("X-AnalystBlaze-Hardware-Id", hw_id.to_string())
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        ok_json::<GameModeUsage>(response).await
+    }
+
+    pub async fn stop_game_mode_usage(
+        &self,
+        access_token: &str,
+        hw_id: Uuid,
+    ) -> Result<GameModeUsage, String> {
+        let response = self
+            .http
+            .post(self.url("/api/v1/game-mode-usage/stop"))
+            .bearer_auth(access_token)
+            .header("X-AnalystBlaze-Hardware-Id", hw_id.to_string())
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        ok_json::<GameModeUsage>(response).await
     }
 
     pub async fn acknowledge_command(

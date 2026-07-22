@@ -161,6 +161,17 @@ export type Announcement = {
   createdAt: string;
 };
 
+/** The starter plan's weekly manual-Game-Mode budget for THIS machine
+ * (per hw_id, not per account - see app/models/weekly_game_mode_usage.py).
+ * `null` for paid plans (unlimited, no server calls made). */
+export type GameModeUsage = {
+  usedSeconds: number;
+  limitSeconds?: number | null;
+  remainingSeconds?: number | null;
+  isCurrentlyTracking: boolean;
+  limitReached: boolean;
+};
+
 export type RemoteCommandConfirmationRequest = {
   requestId: string;
   commandId: string;
@@ -1147,6 +1158,16 @@ export async function getActiveAnnouncements(): Promise<Announcement[]> {
 export async function listenToAnnouncements(onAnnouncements: (announcements: Announcement[]) => void) {
   if (!isTauriRuntime()) return () => undefined;
   return listen<Announcement[]>("announcements-updated", (event) => onAnnouncements(event.payload));
+}
+
+export async function getWeeklyGameModeUsage(): Promise<GameModeUsage | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<GameModeUsage | null>("weekly_game_mode_usage");
+}
+
+export async function listenToGameModeUsage(onUsage: (usage: GameModeUsage) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<GameModeUsage>("game-mode-usage-updated", (event) => onUsage(event.payload));
 }
 
 export async function listenToAgentSessionInvalidated(onInvalidated: () => void) {

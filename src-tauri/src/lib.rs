@@ -12,6 +12,7 @@ mod updater;
 use std::sync::Mutex;
 
 use serde::Serialize;
+use serde_json::json;
 use tauri::{
     menu::{MenuBuilder, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
@@ -64,6 +65,10 @@ struct AgentState {
     /// Latest admin-broadcast announcements from the last commands poll
     /// (see telemetry::engine::poll_commands). Empty before the first poll.
     announcements: Mutex<Vec<api::Announcement>>,
+    /// Set while the free-plan Game Mode usage checkpoint loop is running,
+    /// so a manual restore can signal it to stop immediately instead of
+    /// waiting for its own ~60s self-check. See spawn_game_mode_usage_checkpoint_loop.
+    game_mode_usage_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -308,8 +313,32 @@ async fn purge_cleanup_quarantine() -> Result<optimizations::ExecutionResult, St
 }
 
 #[tauri::command]
-async fn restore_active_game_mode() -> Result<optimizations::snapshot::RestoreReport, String> {
-    Ok(optimizations::restore_active_game_mode_session())
+async fn restore_active_game_mode(
+    state: State<'_, AgentState>,
+) -> Result<optimizations::snapshot::RestoreReport, String> {
+    let report = optimizations::restore_active_game_mode_session();
+
+    // Best-effort: signal the checkpoint loop (if any) to stop immediately
+    // instead of waiting up to ~60s for its own self-check to notice the
+    // session is gone, and tell the server right away so the remaining-time
+    // display updates promptly. Never lets a network hiccup block the
+    // (already-local) restore itself.
+    if let Ok(mut guard) = state.game_mode_usage_cancel.lock() {
+        if let Some(cancel) = guard.take() {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    if let Ok(current_status) = status(&state) {
+        if !current_status.has_paid_plan {
+            if let Ok(credentials) = state.store.load() {
+                if let (Some(access_token), Some(hw_id)) = (credentials.access_token, credentials.hw_id) {
+                    let _ = state.api.stop_game_mode_usage(&access_token, hw_id).await;
+                }
+            }
+        }
+    }
+
+    Ok(report)
 }
 
 #[tauri::command]
@@ -496,6 +525,10 @@ const LIVE_MODE_MAX_SAMPLES: usize = 300;
 const LIVE_MODE_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 const LIVE_MODE_INCIDENT_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(120);
 
+const GAME_MODE_USAGE_EVENT: &str = "game-mode-usage-updated";
+const GAME_MODE_CHECKPOINT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+const GAME_MODE_CHECKPOINT_MAX_MISSES: u8 = 2;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LiveModeStatus {
@@ -601,6 +634,25 @@ fn active_announcements(state: State<'_, AgentState>) -> Result<Vec<api::Announc
         .lock()
         .map_err(|_| "Estado do agente bloqueado.".to_string())?
         .clone())
+}
+
+#[tauri::command]
+async fn weekly_game_mode_usage(
+    state: State<'_, AgentState>,
+) -> Result<Option<api::GameModeUsage>, String> {
+    let current_status = status(&state)?;
+    if current_status.has_paid_plan {
+        return Ok(None);
+    }
+    let credentials = state.store.load()?;
+    let (Some(access_token), Some(hw_id)) = (credentials.access_token, credentials.hw_id) else {
+        return Ok(None);
+    };
+    Ok(state
+        .api
+        .weekly_game_mode_usage(&access_token, hw_id)
+        .await
+        .ok())
 }
 
 #[tauri::command]
@@ -1094,15 +1146,145 @@ async fn activate_game_mode(
     ensure_registered(&state)?;
     ensure_agent_running(&state, &app)?;
 
+    let current_status = status(&state)?;
+
+    if !current_status.has_paid_plan {
+        let credentials = state.store.load()?;
+        let (Some(access_token), Some(hw_id)) = (credentials.access_token, credentials.hw_id) else {
+            return Err("Faca login pela Web antes de ativar o Modo Gamer.".to_string());
+        };
+
+        // Fail closed: without the server confirming remaining weekly
+        // budget, the free plan can't prove it has time left, so Game Mode
+        // simply doesn't activate rather than silently allowing unlimited
+        // use whenever the server/network is unreachable.
+        let usage = match state.api.start_game_mode_usage(&access_token, hw_id).await {
+            Ok(usage) => usage,
+            Err(error) => {
+                return Ok(GameModeResult {
+                    success: false,
+                    message: "Nao foi possivel confirmar o saldo semanal de Modo Gamer com o servidor."
+                        .to_string(),
+                    details: json!({
+                        "implemented": true,
+                        "blocked_reason": "server_unreachable",
+                        "error": error,
+                    }),
+                    status: current_status,
+                });
+            }
+        };
+
+        if usage.limit_reached {
+            return Ok(GameModeResult {
+                success: false,
+                message: "Limite semanal de Modo Gamer do plano gratuito atingido.".to_string(),
+                details: json!({
+                    "implemented": true,
+                    "blocked_reason": "weekly_limit_reached",
+                    "usage": usage,
+                }),
+                status: current_status,
+            });
+        }
+
+        let result = optimizations::execute_command("APPLY_GAME_MODE", None).await;
+        let status_after = status(&state)?;
+
+        if result.success {
+            spawn_game_mode_usage_checkpoint_loop(app, access_token, hw_id);
+        } else {
+            let _ = state.api.stop_game_mode_usage(&access_token, hw_id).await;
+        }
+
+        return Ok(GameModeResult {
+            success: result.success,
+            message: result.message,
+            details: result.details,
+            status: status_after,
+        });
+    }
+
     let result = optimizations::execute_command("APPLY_GAME_MODE", None).await;
-    let status = status(&state)?;
+    let status_after = status(&state)?;
 
     Ok(GameModeResult {
         success: result.success,
         message: result.message,
         details: result.details,
-        status,
+        status: status_after,
     })
+}
+
+/// Runs only while a free-plan Game Mode session is active. Every tick
+/// either checkpoints elapsed usage with the server or, if the session was
+/// already restored through some other path (manual button, the game-exit
+/// auto-restore monitor in optimizations::mod), reports the final stop and
+/// exits quietly. Two consecutive unreachable checkpoints, or the server
+/// reporting the weekly budget exhausted mid-session, force a local restore
+/// - see the "fail closed" discussion in RELEASING.md-adjacent design notes.
+fn spawn_game_mode_usage_checkpoint_loop(app: AppHandle, access_token: String, hw_id: Uuid) {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let state = app.state::<AgentState>();
+        if let Ok(mut guard) = state.game_mode_usage_cancel.lock() {
+            *guard = Some(cancel.clone());
+        };
+    }
+
+    tauri::async_runtime::spawn(async move {
+        let mut misses: u8 = 0;
+        loop {
+            tokio::time::sleep(GAME_MODE_CHECKPOINT_INTERVAL).await;
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+
+            if optimizations::active_game_mode_session().is_none() {
+                let _ = app
+                    .state::<AgentState>()
+                    .api
+                    .stop_game_mode_usage(&access_token, hw_id)
+                    .await;
+                break;
+            }
+
+            match app
+                .state::<AgentState>()
+                .api
+                .checkpoint_game_mode_usage(&access_token, hw_id)
+                .await
+            {
+                Ok(usage) => {
+                    misses = 0;
+                    let _ = app.emit(GAME_MODE_USAGE_EVENT, &usage);
+                    if usage.limit_reached {
+                        let _ = audit::record_event(
+                            "warn",
+                            "game_mode.weekly_limit_reached",
+                            "Limite semanal de Modo Gamer do plano gratuito atingido; restaurando automaticamente.",
+                            json!({}),
+                        );
+                        optimizations::restore_active_game_mode_session();
+                        break;
+                    }
+                }
+                Err(_) => {
+                    misses += 1;
+                    if misses >= GAME_MODE_CHECKPOINT_MAX_MISSES {
+                        let _ = audit::record_event(
+                            "warn",
+                            "game_mode.checkpoint_unreachable",
+                            "Nao foi possivel confirmar o saldo semanal de Modo Gamer com o servidor; restaurando por seguranca.",
+                            json!({}),
+                        );
+                        optimizations::restore_active_game_mode_session();
+                        break;
+                    }
+                }
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -1228,6 +1410,7 @@ pub fn run() {
         live_mode_last_incident: Mutex::new(None),
         weekly_ai_usage: Mutex::new(None),
         announcements: Mutex::new(Vec::new()),
+        game_mode_usage_cancel: Mutex::new(None),
     };
 
     let updater_api_base_url = state.config.api_base_url.clone();
@@ -1338,6 +1521,7 @@ pub fn run() {
             generate_live_mode_incident_report,
             weekly_automation_usage,
             active_announcements,
+            weekly_game_mode_usage,
             scan_startup_impact,
             delay_startup_app,
             restore_delayed_startup_app,

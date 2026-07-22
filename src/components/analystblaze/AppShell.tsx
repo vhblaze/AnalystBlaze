@@ -135,6 +135,17 @@ export function AppShell() {
     [requestConfirmation],
   );
 
+  // Starter plan gets a real 1h/week Game Mode budget now (enforced
+  // server-side, see activate_game_mode in lib.rs) instead of an outright
+  // block - only redirect to billing once that budget is actually
+  // exhausted, not pre-emptively.
+  const activateGameModeWithUpsell = useCallback(async () => {
+    const result = await auth.activateGameMode();
+    if (result?.blockedReason === "weekly_limit_reached") {
+      await auth.openBilling();
+    }
+  }, [auth]);
+
   const notificationItems = useMemo<TopBarNotification[]>(
     () => {
       const items: TopBarNotification[] = remoteConfirmationQueue.map((request) => ({
@@ -538,7 +549,7 @@ export function AppShell() {
                         risk: "sensivel",
                         snapshot: true,
                       },
-                      auth.activateGamePerformanceMode,
+                      activateGameModeWithUpsell,
                     );
                   }}
                   onRestoreGameMode={async () => {
@@ -563,7 +574,6 @@ export function AppShell() {
                       auth.pcCleanFast,
                     );
                   }}
-                  onOpenBilling={auth.openBilling}
                   busy={auth.busy}
                 />
               </Suspense>
@@ -596,7 +606,7 @@ export function AppShell() {
                         risk: "sensivel",
                         snapshot: true,
                       },
-                      auth.activateGamePerformanceMode,
+                      activateGameModeWithUpsell,
                     )
                   }
                   onActivateFocusMode={(profile) =>
@@ -834,7 +844,6 @@ export function AppShell() {
                   }
                   focusDiskUsage={focusDiskUsage}
                   onDiskUsageFocused={() => setFocusDiskUsage(false)}
-                  onOpenBilling={auth.openBilling}
                 />
               </Suspense>
             ) : (

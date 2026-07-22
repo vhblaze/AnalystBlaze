@@ -1,4 +1,4 @@
-import { BatteryCharging, BookOpen, Briefcase, Download, FileWarning, Film, Gamepad2, Gauge, HardDrive, History, ListChecks, Lock, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench, X } from "lucide-react";
+import { BatteryCharging, BookOpen, Briefcase, Download, FileWarning, Film, Gamepad2, Gauge, HardDrive, History, ListChecks, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { canUseAutomaticGameMode, canUsePaidGameMode } from "@/hooks/useAuth";
@@ -18,11 +18,13 @@ import {
   getOptimizationSnapshots,
   getPrivilegedHelperStatus,
   getProtectedApps,
+  getWeeklyGameModeUsage,
   getWindowsInventory,
   installPrivilegedHelper,
   isTauriRuntime,
   listNetworkAdapters,
   listenToDiskUsageProgress,
+  listenToGameModeUsage,
   restartPrivilegedHelper,
   runPerformanceScan,
   scanCleanupCategories,
@@ -42,6 +44,7 @@ import {
   type FocusModeProfile,
   type FocusSession,
   type GameModeSession,
+  type GameModeUsage,
   type LocalAiPolicy,
   type NetworkAdapterSummary,
   type NetworkDiagnostics,
@@ -81,7 +84,6 @@ export function LocalControls({
   onResetWinsockCatalog,
   focusDiskUsage,
   onDiskUsageFocused,
-  onOpenBilling,
 }: {
   status: AgentStatus | null;
   automaticGameModeAllowed?: boolean;
@@ -112,7 +114,6 @@ export function LocalControls({
    * asking to see disk-usage details - triggers a scan/scroll on arrival. */
   focusDiskUsage?: boolean;
   onDiskUsageFocused?: () => void;
-  onOpenBilling: () => Promise<unknown>;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("local_controls");
@@ -124,6 +125,7 @@ export function LocalControls({
   const [protectedInput, setProtectedInput] = useState("");
   const [helperStatus, setHelperStatus] = useState<PrivilegedHelperStatus | null>(null);
   const [activeGameModeSession, setActiveGameModeSession] = useState<GameModeSession | null>(null);
+  const [gameModeUsage, setGameModeUsage] = useState<GameModeUsage | null>(null);
   const [activeFocusSession, setActiveFocusSession] = useState<FocusSession | null>(status?.focus_session ?? null);
   const [localAiPolicy, setLocalAiPolicy] = useState<LocalAiPolicy | null>(null);
   const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(null);
@@ -154,7 +156,7 @@ export function LocalControls({
   const paidGameModeAllowed = canUsePaidGameMode(status);
   const autoGameModePlanAllowed = automaticGameModeAllowed ?? canUseAutomaticGameMode(status);
   const autoGameModeLabel = automaticGameModeStatusLabel(status, localAiPolicy, autoGameModePlanAllowed);
-  const gameModeActive = paidGameModeAllowed && Boolean(activeGameModeSession);
+  const gameModeActive = Boolean(activeGameModeSession);
   const focusModeActive = Boolean(activeFocusSession);
   const hasPendingRestore =
     snapshots.some((snapshot) => !snapshot.restored_at) ||
@@ -213,6 +215,19 @@ export function LocalControls({
     });
     return () => dispose?.();
   }, []);
+
+  useEffect(() => {
+    if (paidGameModeAllowed) {
+      setGameModeUsage(null);
+      return;
+    }
+    getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
+    let dispose: (() => void) | undefined;
+    listenToGameModeUsage(setGameModeUsage).then((unlisten) => {
+      dispose = unlisten;
+    });
+    return () => dispose?.();
+  }, [paidGameModeAllowed]);
 
   const refreshWindowsInventory = async () => {
     setInventoryBusy(true);
@@ -500,9 +515,11 @@ export function LocalControls({
     );
   };
 
-  const handleGameModeUpsellClick = async () => {
-    track("game_mode_upsell_clicked");
-    await onOpenBilling();
+  const activateGameMode = async () => {
+    await runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.");
+    if (!paidGameModeAllowed) {
+      getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
+    }
   };
 
   const deactivateGameMode = async () => {
@@ -584,11 +601,7 @@ export function LocalControls({
                     void deactivateGameMode();
                     return;
                   }
-                  if (!paidGameModeAllowed) {
-                    void handleGameModeUpsellClick();
-                    return;
-                  }
-                  void runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.");
+                  void activateGameMode();
                 }}
                 className={`inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all disabled:opacity-70 ${
                   gameModeActive
@@ -596,11 +609,15 @@ export function LocalControls({
                     : "border-cyan-300/50 bg-cyan-400/15 text-cyan-50 hover:bg-cyan-400/20"
                 }`}
               >
-                {gameModeActive ? <ShieldCheck className="h-4 w-4" /> : paidGameModeAllowed ? <Gamepad2 className="h-4 w-4" /> : <Lock className="h-4 w-4" />}
-                {gameModeActive ? "Desativar Modo Gamer" : paidGameModeAllowed ? "Ativar Modo Gamer" : "Desbloquear Modo Gamer"}
+                {gameModeActive ? <ShieldCheck className="h-4 w-4" /> : <Gamepad2 className="h-4 w-4" />}
+                {gameModeActive ? "Desativar Modo Gamer" : "Ativar Modo Gamer"}
               </button>
-              {!paidGameModeAllowed && (
-                <span className="text-xs text-slate-500">Abre a pagina de planos</span>
+              {!paidGameModeAllowed && gameModeUsage && (
+                <span className={`text-xs ${gameModeUsage.limitReached ? "text-amber-300" : "text-slate-500"}`}>
+                  {gameModeUsage.limitReached
+                    ? "Limite semanal atingido. Volta na proxima semana."
+                    : `${formatMinutesLabel(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
+                </span>
               )}
             </div>
             <button
@@ -1489,6 +1506,11 @@ function automaticGameModeStatusLabel(
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function formatMinutesLabel(seconds: number) {
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  return `${minutes} min`;
 }
 
 function formatMs(value?: number | null) {

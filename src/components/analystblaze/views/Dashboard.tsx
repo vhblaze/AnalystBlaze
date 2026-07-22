@@ -6,7 +6,6 @@ import {
   Gamepad2,
   Gauge,
   HardDrive,
-  Lock,
   MemoryStick,
   MonitorPlay,
   PlugZap,
@@ -20,10 +19,13 @@ import { TiltCard } from "../TiltCard";
 import type { User } from "@/hooks/useAuth";
 import {
   getActiveGameModeSession,
+  getWeeklyGameModeUsage,
   isTauriRuntime,
+  listenToGameModeUsage,
   type AgentStatus,
   type AgentTelemetrySnapshot,
   type GameModeSession,
+  type GameModeUsage,
 } from "@/services/tauri/agent";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useI18n } from "@/i18n";
@@ -38,7 +40,6 @@ export function Dashboard({
   onActivateGameMode,
   onRestoreGameMode,
   onApplyPcCleanFast,
-  onOpenBilling,
   busy,
 }: {
   user: User | null;
@@ -48,17 +49,17 @@ export function Dashboard({
   onActivateGameMode: () => Promise<void>;
   onRestoreGameMode: () => Promise<void>;
   onApplyPcCleanFast: () => Promise<void>;
-  onOpenBilling: () => Promise<void>;
   busy: boolean;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("dashboard");
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
   const [activeGameModeSession, setActiveGameModeSession] = useState<GameModeSession | null>(null);
+  const [gameModeUsage, setGameModeUsage] = useState<GameModeUsage | null>(null);
   const isAuthenticated = Boolean(status?.authenticated);
   const isReady = Boolean(status?.authenticated && status.registered);
   const paidGameModeAllowed = Boolean(status?.authenticated && status.registered && status.has_paid_plan);
-  const gameModeActive = paidGameModeAllowed && Boolean(activeGameModeSession);
+  const gameModeActive = Boolean(activeGameModeSession);
   const isLive = Boolean(isReady && telemetry);
   const lastCheckSeconds = telemetry
     ? Math.max(0, Math.round(Date.now() / 1000 - telemetry.event_timestamp))
@@ -77,7 +78,7 @@ export function Dashboard({
   }, [telemetry]);
 
   const refreshGameModeSession = useCallback(async () => {
-    if (!paidGameModeAllowed || !isTauriRuntime()) {
+    if (!isTauriRuntime()) {
       setActiveGameModeSession(null);
       return;
     }
@@ -86,17 +87,33 @@ export function Dashboard({
     } catch {
       setActiveGameModeSession(null);
     }
-  }, [paidGameModeAllowed]);
+  }, []);
 
   useEffect(() => {
     void refreshGameModeSession();
   }, [refreshGameModeSession]);
 
+  useEffect(() => {
+    if (paidGameModeAllowed) {
+      setGameModeUsage(null);
+      return;
+    }
+    getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
+    let dispose: (() => void) | undefined;
+    listenToGameModeUsage(setGameModeUsage).then((unlisten) => {
+      dispose = unlisten;
+    });
+    return () => dispose?.();
+  }, [paidGameModeAllowed]);
+
   const handleGameModeClick = async () => {
     track("game_mode_clicked");
-    if (!isReady || !paidGameModeAllowed || gameModeActive) return;
+    if (!isReady || gameModeActive) return;
     await onActivateGameMode();
     await refreshGameModeSession();
+    if (!paidGameModeAllowed) {
+      getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
+    }
   };
 
   const handleGameModeDeactivate = async () => {
@@ -110,11 +127,6 @@ export function Dashboard({
     track("pc_clean_fast_clicked");
     if (!isReady) return;
     await onApplyPcCleanFast();
-  };
-
-  const handleGameModeUpsellClick = async () => {
-    track("game_mode_upsell_clicked");
-    await onOpenBilling();
   };
 
   const healthLabel = useMemo(() => healthLevelLabel(telemetry?.health_level, t), [telemetry?.health_level, t]);
@@ -211,10 +223,6 @@ export function Dashboard({
                       void handleGameModeDeactivate();
                       return;
                     }
-                    if (!paidGameModeAllowed) {
-                      void handleGameModeUpsellClick();
-                      return;
-                    }
                     void handleGameModeClick();
                   }}
                   className={`group inline-flex items-center gap-2.5 rounded-xl border px-6 py-3 text-sm font-semibold transition-all duration-300 disabled:opacity-70 ${
@@ -225,18 +233,10 @@ export function Dashboard({
                 >
                   {gameModeActive ? (
                     <ShieldCheck className="h-4 w-4" />
-                  ) : isReady && !paidGameModeAllowed ? (
-                    <Lock className="h-4 w-4" />
                   ) : (
                     <Gamepad2 className="h-4 w-4 transition-transform group-hover:-rotate-12" />
                   )}
-                  {isReady
-                    ? gameModeActive
-                      ? "Desativar Modo Gamer"
-                      : paidGameModeAllowed
-                        ? t("dashboard.gameMode")
-                        : "Desbloquear Modo Gamer"
-                    : t("dashboard.startAgent")}
+                  {isReady ? (gameModeActive ? "Desativar Modo Gamer" : t("dashboard.gameMode")) : t("dashboard.startAgent")}
                   {!gameModeActive && <ArrowUpRight className="h-4 w-4 opacity-60 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />}
                 </button>
                 <button
@@ -248,8 +248,12 @@ export function Dashboard({
                   PC limpo/rapido
                 </button>
               </div>
-              {isReady && !paidGameModeAllowed && (
-                <span className="text-xs text-slate-500">Abre a pagina de planos</span>
+              {isReady && !paidGameModeAllowed && gameModeUsage && (
+                <span className={`text-xs ${gameModeUsage.limitReached ? "text-amber-300" : "text-slate-500"}`}>
+                  {gameModeUsage.limitReached
+                    ? "Limite semanal de Modo Gamer atingido. Volta na proxima semana."
+                    : `Modo Gamer: ${formatGameModeMinutes(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
+                </span>
               )}
             </div>
             <Sparkline data={cpuHistory} />
@@ -440,6 +444,11 @@ function temperatureSourceLabel(source: string) {
   if (source === "sysinfo_component_max") return "sysinfo max";
   if (source === "hardware_monitor") return "monitor";
   return source;
+}
+
+function formatGameModeMinutes(seconds: number) {
+  const minutes = Math.max(0, Math.round(seconds / 60));
+  return `${minutes} min`;
 }
 
 function formatDuration(seconds: number) {

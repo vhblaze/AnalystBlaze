@@ -320,7 +320,7 @@ export const translations = {
       highContrast: "Alto contraste",
       highContrastDesc: "Aumenta contraste visual e reduz efeitos decorativos.",
       reduceMotion: "Reduzir movimento",
-      reduceMotionDesc: "Desativa animacoes longas e transicoes visuais.",
+      reduceMotionDesc: "Desativa animacões longas e transicoes visuais.",
       deviceRule: "A conta pode manter ate 2 dispositivos registrados. Apenas o ultimo dispositivo autenticado fica ativo com o servidor para telemetria e comandos.",
     },
     update: {
@@ -329,7 +329,7 @@ export const translations = {
       currentVersion: "Versao atual",
       checkButton: "Verificar atualizacoes",
       checking: "Verificando...",
-      upToDate: "Voce esta na versao mais recente.",
+      upToDate: "Voce esta na versão mais recente.",
       neverChecked: "Ainda nao verificado nesta sessao.",
       lastChecked: "Ultima verificacao: {{when}}",
       availableTitle: "Nova versao {{version}} disponivel",

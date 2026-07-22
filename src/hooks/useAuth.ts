@@ -233,22 +233,30 @@ export function useAuth() {
   }, [runAction]);
 
   const activateGameMode = useCallback(async () => {
-    await runAction(async () => {
-      if (!canUsePaidGameMode(status)) {
-        throw new Error("Modo Gamer esta disponivel apenas para planos pagos.");
-      }
+    // No client-side plan gate here anymore: the starter plan gets a real
+    // 1h/week budget enforced server-side (see activate_game_mode in
+    // lib.rs), not an outright block - the result's blockedReason tells the
+    // caller whether to show an upsell (weekly_limit_reached) or a plain
+    // error (server_unreachable).
+    return runAction(async () => {
       const result = await activateAgentGameMode();
       setStatus(result.status);
       setMessage({
         key: result.success ? "agent.messages.gameModeApplied" : "agent.messages.gameModeFailed",
         params: { message: result.message },
       });
+      const blockedReason =
+        result.details && typeof result.details === "object" && "blocked_reason" in result.details
+          ? String((result.details as { blocked_reason?: unknown }).blocked_reason ?? "")
+          : undefined;
       captureTelemetry({
         name: result.success ? "game_mode_applied" : "game_mode_failed",
         category: "agent",
+        properties: blockedReason ? { blockedReason } : undefined,
       });
+      return { ...result, blockedReason };
     });
-  }, [runAction, status]);
+  }, [runAction]);
 
   const activateGamePerformanceMode = useCallback(async () => {
     const result = await runAction(async () => {
