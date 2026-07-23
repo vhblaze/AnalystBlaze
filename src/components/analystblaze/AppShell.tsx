@@ -559,12 +559,6 @@ export function AppShell() {
                 count={remoteConfirmationQueue.length}
               />
             )}
-            <UpdateNotice
-              status={updater.status}
-              busy={auth.busy}
-              onUpdateNow={handleUpdateNow}
-              onLater={handleUpdateLater}
-            />
             {!auth.ready ? (
               <div className="text-sm text-slate-500">{t("app.loading")}</div>
             ) : view === "dashboard" ? (
@@ -913,6 +907,12 @@ export function AppShell() {
           onConfirm={() => closeConfirmation(true)}
         />
       )}
+      <UpdateNotice
+        status={updater.status}
+        busy={auth.busy}
+        onUpdateNow={handleUpdateNow}
+        onLater={handleUpdateLater}
+      />
     </div>
   );
 }

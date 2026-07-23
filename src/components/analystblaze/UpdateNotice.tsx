@@ -17,49 +17,54 @@ export function UpdateNotice({
   if (!status?.available) return null;
   if (!status.mandatory && isUpdateDismissedNow(status)) return null;
 
-  const tone = status.mandatory
-    ? "border-rose-300/30 bg-rose-400/10 text-rose-50"
-    : "border-cyan-300/30 bg-cyan-400/10 text-cyan-50";
-  const title = status.mandatory
+  const mandatory = status.mandatory;
+  const title = mandatory
     ? t("update.availableTitleMandatory", { version: status.version ?? "" })
     : t("update.availableTitle", { version: status.version ?? "" });
 
   return (
-    <div className={`mb-4 rounded-xl border px-4 py-3 text-sm shadow-[0_18px_50px_-32px_hsl(187_100%_55%/0.5)] ${tone}`}>
-      <div className="font-mono text-[10px] uppercase tracking-[0.24em] opacity-80">
-        {t("update.eyebrow")}
-      </div>
-      <div className="mt-1 font-semibold">{title}</div>
-      <p className="mt-1 max-w-3xl text-xs leading-relaxed opacity-80">
-        {status.notes?.trim() || t("update.notesFallback")}
-      </p>
-      {status.mandatory && (
-        <p className="mt-1 text-xs font-medium">{t("update.mandatoryNotice")}</p>
-      )}
-      {!status.downloaded && !status.installing && (
-        <p className="mt-1 text-xs opacity-70">{t("update.downloading")}</p>
-      )}
-      {status.lastError && (
-        <p className="mt-1 text-xs font-medium text-rose-100">{status.lastError}</p>
-      )}
-      <div className="mt-3 flex gap-2">
-        <button
-          disabled={busy || status.installing}
-          onClick={onUpdateNow}
-          className="rounded-lg border border-current/40 bg-white/10 px-3 py-1.5 text-xs font-semibold transition hover:bg-white/15 disabled:opacity-50"
-        >
-          {status.installing ? t("update.installing") : t("update.updateNow")}
-        </button>
-        {!status.mandatory && (
-          <button
-            disabled={busy}
-            onClick={onLater}
-            className="rounded-lg border border-current/20 px-3 py-1.5 text-xs font-medium opacity-80 transition hover:opacity-100 disabled:opacity-40"
-          >
-            {t("update.later")}
-          </button>
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        className="w-full max-w-md rounded-2xl border border-cyan-400/20 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)]"
+      >
+        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-cyan-300/80">
+          {t("update.eyebrow")}
+        </div>
+        <h2 className="mt-2 text-xl font-semibold text-slate-50">{title}</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-400">
+          {status.notes?.trim() || t("update.notesFallback")}
+        </p>
+        {mandatory && (
+          <p className="mt-2 text-xs font-medium text-rose-200">{t("update.mandatoryNotice")}</p>
         )}
-      </div>
+        {!status.downloaded && !status.installing && (
+          <p className="mt-2 text-xs text-slate-500">{t("update.downloading")}</p>
+        )}
+        {status.lastError && (
+          <p className="mt-2 text-xs font-medium text-rose-300">{status.lastError}</p>
+        )}
+        <div className="mt-6 flex justify-end gap-2">
+          {!mandatory && (
+            <button
+              disabled={busy}
+              onClick={onLater}
+              className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70 disabled:opacity-40"
+            >
+              {t("update.later")}
+            </button>
+          )}
+          <button
+            disabled={busy || status.installing}
+            onClick={onUpdateNow}
+            className="rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+          >
+            {status.installing ? t("update.installing") : t("update.updateNow")}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
