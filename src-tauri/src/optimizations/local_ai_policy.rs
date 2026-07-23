@@ -46,6 +46,11 @@ pub struct LocalAiPolicy {
     /// Distinct from cleanup_min_idle_seconds (that one gates automatic
     /// cleanup, this one gates the energy-saving action).
     pub adaptive_idle_eco_threshold_seconds: u64,
+    /// Whether the app registers itself in the per-user Run key (see
+    /// optimizations::autostart). Synced to the actual registry state on
+    /// every startup, so this field is the source of truth even if the
+    /// registry entry was removed some other way.
+    pub autostart_enabled: bool,
 }
 
 impl Default for LocalAiPolicy {
@@ -80,6 +85,7 @@ impl Default for LocalAiPolicy {
             cleanup_temp_min_age_minutes: 60,
             cleanup_system_min_age_minutes: 24 * 60,
             adaptive_idle_eco_threshold_seconds: 10 * 60,
+            autostart_enabled: true,
         }
     }
 }
@@ -104,6 +110,10 @@ pub fn save_local_ai_policy(policy: LocalAiPolicy) -> Result<LocalAiPolicy, Stri
 
     let raw = serde_json::to_string_pretty(&policy).map_err(|error| error.to_string())?;
     fs::write(path, raw).map_err(|error| error.to_string())?;
+    // Best-effort: the saved preference is still the source of truth even
+    // if this particular write fails (e.g. transient registry access
+    // issue) - the next startup sync (see lib.rs) will retry it.
+    let _ = super::autostart::set_autostart_enabled(policy.autostart_enabled);
     let _ = audit::record_event(
         "info",
         "local_ai.policy_saved",
@@ -138,6 +148,7 @@ pub fn save_local_ai_policy(policy: LocalAiPolicy) -> Result<LocalAiPolicy, Stri
             "cleanup_temp_min_age_minutes": policy.cleanup_temp_min_age_minutes,
             "cleanup_system_min_age_minutes": policy.cleanup_system_min_age_minutes,
             "adaptive_idle_eco_threshold_seconds": policy.adaptive_idle_eco_threshold_seconds,
+            "autostart_enabled": policy.autostart_enabled,
         }),
     );
     Ok(policy)

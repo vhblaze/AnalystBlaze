@@ -1472,6 +1472,14 @@ pub fn run() {
             spawn_plan_sync_loop(app.handle().clone());
             optimizations::performance_suite::spawn_delayed_startup_runner();
 
+            // Syncs the Run-key entry to match the saved preference (default
+            // enabled for new installs) on every launch, so it self-heals if
+            // the registry entry was ever removed some other way.
+            std::thread::spawn(|| {
+                let policy = optimizations::local_ai_policy::load_local_ai_policy();
+                let _ = optimizations::autostart::set_autostart_enabled(policy.autostart_enabled);
+            });
+
             updater::reconcile_startup_outcome();
             updater::spawn_background_checks(app.handle().clone(), updater_api_base_url.clone());
 

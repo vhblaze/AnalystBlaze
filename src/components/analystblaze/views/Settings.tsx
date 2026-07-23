@@ -241,6 +241,11 @@ export function Settings({
               </Select>
             }
           />
+          <Row
+            label={t("settings.autostart")}
+            description={t("settings.autostartDesc")}
+            control={<Switch checked={aiPolicy.autostart_enabled} onCheckedChange={(autostart_enabled) => updateAiPolicy({ autostart_enabled })} />}
+          />
         </div>
       </section>
 
@@ -686,6 +691,7 @@ const DEFAULT_LOCAL_AI_POLICY: LocalAiPolicy = {
   cleanup_temp_min_age_minutes: 60,
   cleanup_system_min_age_minutes: 1440,
   adaptive_idle_eco_threshold_seconds: 600,
+  autostart_enabled: true,
 };
 
 function PolicyGroup({
