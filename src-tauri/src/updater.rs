@@ -11,7 +11,10 @@ use crate::audit;
 use crate::optimizations::snapshot::app_data_dir;
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(4 * 60);
+// Short enough that the update banner/bell can show up right after launch
+// (giving the window a few seconds to finish rendering first) instead of
+// waiting minutes, while still not racing app startup itself.
+const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(10);
 const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 const DISMISS_COOLDOWN_SECONDS: i64 = 24 * 60 * 60;
 const MANIFEST_PATH_AND_QUERY: &str =

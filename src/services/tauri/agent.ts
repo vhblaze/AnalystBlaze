@@ -417,6 +417,7 @@ export type LocalAiPolicy = {
   cleanup_temp_min_age_minutes: number;
   cleanup_system_min_age_minutes: number;
   adaptive_idle_eco_threshold_seconds: number;
+  autostart_enabled: boolean;
 };
 
 export type PerformanceReport = {
@@ -1017,6 +1018,7 @@ export async function getLocalAiPolicy(): Promise<LocalAiPolicy> {
       cleanup_temp_min_age_minutes: 60,
       cleanup_system_min_age_minutes: 1440,
       adaptive_idle_eco_threshold_seconds: 600,
+      autostart_enabled: true,
     };
   }
   return invoke<LocalAiPolicy>("local_ai_policy");
