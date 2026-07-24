@@ -909,7 +909,10 @@ fn delete_item_permanently(validated: &Path, size_bytes: u64) -> ExecutionResult
         ),
         Err(error) => ExecutionResult {
             success: false,
-            message: "Falha ao apagar o item permanentemente.".to_string(),
+            message: format!(
+                "Falha ao apagar o item permanentemente: {}",
+                describe_io_error(&error)
+            ),
             details: serde_json::json!({
                 "implemented": true,
                 "path": validated.display().to_string(),
@@ -917,6 +920,28 @@ fn delete_item_permanently(validated: &Path, size_bytes: u64) -> ExecutionResult
                 "error": error.to_string(),
             }),
         },
+    }
+}
+
+/// A short, user-facing reason for the most common ways a delete fails -
+/// falls back to the raw OS error text for anything less common, so the
+/// user always sees *why*, not just "falhou".
+fn describe_io_error(error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::PermissionDenied => {
+            "sem permissao para excluir este item (pode exigir privilegios de administrador)."
+                .to_string()
+        }
+        std::io::ErrorKind::NotFound => "o item ja nao existe mais nesse caminho.".to_string(),
+        _ => {
+            let raw = error.to_string();
+            let lower = raw.to_ascii_lowercase();
+            if lower.contains("being used by another process") || lower.contains("em uso por outro processo") {
+                "o item esta em uso por outro programa - feche-o e tente novamente.".to_string()
+            } else {
+                raw
+            }
+        }
     }
 }
 

@@ -93,6 +93,7 @@ export function DiskExplorer({
   const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(null);
   const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!runtimeAvailable) return;
@@ -171,6 +172,7 @@ export function DiskExplorer({
   const deleteItem = async (item: DiskTreeNodeSummary) => {
     setConfirmingDeletePath(null);
     setActionMessage(null);
+    setActionError(null);
     // A large folder's permanent delete (fs::remove_dir_all over tens of
     // GB / hundreds of thousands of small files, e.g. a cargo target dir)
     // can take real time - show the row as actively deleting right away
@@ -180,7 +182,10 @@ export function DiskExplorer({
       const result = await deleteDiskUsageItem(item.path);
       const outcome = result as { success?: boolean; message?: string } | undefined;
       if (outcome && outcome.success === false && outcome.message) {
-        setActionMessage(outcome.message);
+        // Errors get a modal, not an inline banner - "it failed" is only
+        // useful if it also says why, and that deserves the user's full
+        // attention rather than scrolling past a small strip of text.
+        setActionError(outcome.message);
         return;
       }
       // Backend message already says accurately whether this went to
@@ -201,7 +206,7 @@ export function DiskExplorer({
         });
       }, DELETE_ANIMATION_MS);
     } catch (error) {
-      setActionMessage(errorMessage(error));
+      setActionError(errorMessage(error));
     } finally {
       setPendingDeletePath((current) => (current === item.path ? null : current));
     }
@@ -461,6 +466,37 @@ export function DiskExplorer({
           )}
         </section>
       )}
+
+      {actionError && (
+        <ErrorDialog message={actionError} onClose={() => setActionError(null)} t={t} />
+      )}
+    </div>
+  );
+}
+
+function ErrorDialog({ message, onClose, t }: { message: string; onClose: () => void; t: (key: string) => string }) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+      <section
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={t("diskExplorer.errorDialogTitle")}
+        className="w-full max-w-md rounded-2xl border border-rose-400/30 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(350_90%_55%/0.6)]"
+      >
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-rose-300">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {t("diskExplorer.errorDialogTitle")}
+        </div>
+        <p className="mt-3 text-sm leading-relaxed text-slate-200">{message}</p>
+        <div className="mt-6 flex justify-end">
+          <button
+            onClick={onClose}
+            className="rounded-xl border border-rose-400/40 bg-rose-400/10 px-4 py-2 text-sm font-semibold text-rose-100 transition hover:bg-rose-400/15"
+          >
+            {t("common.close")}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
