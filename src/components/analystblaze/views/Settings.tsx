@@ -11,7 +11,7 @@ import {
 import { isUpdateDismissedNow, useUpdater } from "@/hooks/useUpdater";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useTheme } from "@/hooks/useTheme";
-import { canUseAutomaticGameMode, type AgentMessage, type User } from "@/hooks/useAuth";
+import { canUseAutomaticGameMode, type User } from "@/hooks/useAuth";
 import { localeLabels, type Locale, useI18n } from "@/i18n";
 import {
   getLocalAiPolicy,
@@ -19,7 +19,6 @@ import {
   listenToWeeklyAiUsage,
   saveLocalAiPolicy,
   type AgentStatus,
-  type AgentTelemetrySample,
   type LocalAiPolicy,
   type UpdateStatus,
   type WeeklyAiUsage,
@@ -29,29 +28,21 @@ import { getTelemetryQueueSize, isTelemetryEnabled, setTelemetryEnabled } from "
 export function Settings({
   user,
   status,
-  message,
-  busy,
   syncingPlan,
   onLogin,
   onLogout,
   onOpenAccountSettings,
   onOpenBilling,
-  onStartAgent,
-  onCollectSample,
   onSyncPlan,
   onOpenHistory,
 }: {
   user: User | null;
   status: AgentStatus | null;
-  message: AgentMessage;
-  busy: boolean;
   syncingPlan: boolean;
   onLogin: () => Promise<void>;
   onLogout: () => Promise<void>;
   onOpenAccountSettings: () => Promise<void>;
   onOpenBilling: () => Promise<void>;
-  onStartAgent: () => Promise<void>;
-  onCollectSample: () => Promise<AgentTelemetrySample>;
   onSyncPlan: () => Promise<unknown>;
   onOpenHistory?: () => void;
 }) {
@@ -577,32 +568,9 @@ export function Settings({
         )}
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
-        <div className="flex items-center gap-2 pb-4">
-          <Zap className="h-3.5 w-3.5 text-cyan-300" />
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.agentPanel")}</h2>
-        </div>
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-          <MiniMetric label={t("agent.status.auth")} value={status?.authenticated ? "OK" : t("common.pending")} />
-          <MiniMetric label={t("agent.status.hardware")} value={status?.registered ? t("common.registered") : t("common.pending")} />
-          <MiniMetric label={t("agent.status.telemetry")} value={status?.mode ?? t("common.stopped")} />
-          <MiniMetric label={t("agent.status.api")} value={status?.api_base_url ?? t("common.unavailable")} compact />
-        </div>
-        {status?.hw_id && (
-          <div className="mt-3 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4 text-xs text-slate-400">
-            <span className="mb-1 block font-mono text-[10px] uppercase tracking-widest text-slate-500">{t("agent.status.hwId")}</span>
-            <span className="break-all">{status.hw_id}</span>
-          </div>
-        )}
-        <p className="mt-3 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4 text-xs text-slate-400">
-          {t("settings.deviceRule")}
-        </p>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <ActionButton disabled={busy || !isReady} onClick={onStartAgent}>{t("settings.startAgent")}</ActionButton>
-          <ActionButton disabled={busy} onClick={onCollectSample}>{t("settings.collectSample")}</ActionButton>
-        </div>
-        <p className="mt-4 text-sm text-slate-400">{t(message.key, message.params)}</p>
-      </section>
+      {/* D3: "Agente Desktop" debug panel removed from Settings (status tiles, raw HW ID,
+          device-rule note, "Iniciar agente" / "Coletar amostra" buttons). auth.start and
+          auth.collectSample are untouched and still wired into Dashboard/Telemetry. */}
       {updateCheckPopup && (
         <UpdateCheckPopup
           result={updateCheckPopup}
@@ -862,31 +830,3 @@ function NumberRule({
   );
 }
 
-function MiniMetric({ label, value, compact = false }: { label: string; value: string; compact?: boolean }) {
-  return (
-    <article className="min-h-24 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-      <span className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">{label}</span>
-      <strong className={`mt-2 block break-words text-slate-100 ${compact ? "text-xs" : "text-lg"}`}>{value}</strong>
-    </article>
-  );
-}
-
-function ActionButton({
-  disabled,
-  onClick,
-  children,
-}: {
-  disabled: boolean;
-  onClick: () => Promise<unknown>;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      disabled={disabled}
-      onClick={() => void onClick().catch(() => undefined)}
-      className="rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
-    >
-      {children}
-    </button>
-  );
-}
