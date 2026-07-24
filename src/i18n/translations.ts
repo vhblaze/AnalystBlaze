@@ -191,7 +191,6 @@ export const translations = {
     diskExplorer: {
       eyebrow: "espaco em disco",
       title: "Explorador de Disco",
-      description: "Veja o que esta ocupando espaco no seu disco, arquivo por arquivo, do maior para o menor - estilo WizTree.",
       desktopOnly: "O explorador de disco funciona apenas no aplicativo instalado.",
       scan: "Analisar disco",
       rescan: "Analisar novamente",
@@ -594,7 +593,6 @@ export const translations = {
     diskExplorer: {
       eyebrow: "disk space",
       title: "Disk Explorer",
-      description: "See what's taking up space on your disk, file by file, biggest first - WizTree style.",
       desktopOnly: "The disk explorer only works in the installed app.",
       scan: "Scan disk",
       rescan: "Scan again",

@@ -211,7 +211,6 @@ export function DiskExplorer({
           {t("diskExplorer.eyebrow")}
         </div>
         <h1 className="text-[36px] font-semibold tracking-tight text-slate-50">{t("diskExplorer.title")}</h1>
-        <p className="max-w-2xl text-sm text-slate-400">{t("diskExplorer.description")}</p>
       </header>
 
       <section className="glass-panel cyber-glow p-6">
