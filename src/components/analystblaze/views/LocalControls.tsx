@@ -1,4 +1,4 @@
-import { BatteryCharging, BookOpen, Briefcase, Download, FileWarning, Film, Gamepad2, Gauge, HardDrive, History, ListChecks, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench, X } from "lucide-react";
+import { BatteryCharging, Briefcase, Download, FileWarning, Film, Gamepad2, Gauge, HardDrive, History, ListChecks, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench, X } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { canUseAutomaticGameMode, canUsePaidGameMode } from "@/hooks/useAuth";
@@ -41,7 +41,6 @@ import {
   type DiskUsageProgress,
   type DiskUsageSummary,
   type EnergyDiagnostics,
-  type FocusModeProfile,
   type FocusSession,
   type GameModeSession,
   type GameModeUsage,
@@ -61,7 +60,6 @@ export function LocalControls({
   automaticGameModeAllowed,
   busy,
   onActivateGameMode,
-  onActivateFocusMode,
   onRestoreOptimizations,
   onDisableStartup,
   onRestoreStartup,
@@ -73,7 +71,6 @@ export function LocalControls({
   onDeepCleanTemp,
   onPurgeCleanup,
   onRestoreGameMode,
-  onRestoreFocusMode,
   onApplyPcCleanFast,
   onRestorePerformanceSession,
   onApplyCleanupCategory,
@@ -89,7 +86,6 @@ export function LocalControls({
   automaticGameModeAllowed?: boolean;
   busy: boolean;
   onActivateGameMode: () => Promise<unknown>;
-  onActivateFocusMode: (profile: FocusModeProfile) => Promise<unknown>;
   onRestoreOptimizations: () => Promise<unknown>;
   onDisableStartup: (name: string, location?: string | null) => Promise<unknown>;
   onRestoreStartup: (name?: string | null) => Promise<unknown>;
@@ -101,7 +97,6 @@ export function LocalControls({
   onDeepCleanTemp: () => Promise<unknown>;
   onPurgeCleanup: () => Promise<unknown>;
   onRestoreGameMode: () => Promise<unknown>;
-  onRestoreFocusMode: () => Promise<unknown>;
   onApplyPcCleanFast: () => Promise<unknown>;
   onRestorePerformanceSession: (sessionId?: string | null) => Promise<unknown>;
   onApplyCleanupCategory: (category: string, mode?: string | null) => Promise<unknown>;
@@ -186,7 +181,6 @@ export function LocalControls({
       ? "PC limpo/rapido"
       : "Monitorando";
   const gameModeTargetLabel = activeGameModeSession?.targetProcessName ?? performanceReport?.metrics.gameProcess ?? "Sem jogo detectado";
-  const activeFocusLabel = activeFocusSession?.label ?? "Sem foco ativo";
 
   const visibleStartupApps = useMemo(
     () => inventory.startup_apps.filter((app) => app.risk === "safe").slice(0, 8),
@@ -536,31 +530,6 @@ export function LocalControls({
     );
   };
 
-  const activateFocus = async (profile: FocusModeProfile) => {
-    await runControlAction(
-      async () => {
-        const result = await onActivateFocusMode(profile);
-        if (result === false) return false;
-        const nextFocusSession = await getActiveFocusSession();
-        setActiveFocusSession(nextFocusSession);
-        await refreshOperationalHistory();
-      },
-      "Modo Foco ativado.",
-    );
-  };
-
-  const deactivateFocus = async () => {
-    await runControlAction(
-      async () => {
-        const result = await onRestoreFocusMode();
-        if (result === false) return false;
-        setActiveFocusSession(null);
-        await refreshOperationalHistory();
-      },
-      "Modo Foco restaurado.",
-    );
-  };
-
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
@@ -665,13 +634,15 @@ export function LocalControls({
           <SummaryTile label="Restauracao" value={hasPendingRestore ? "Disponivel" : "Limpa"} detail={helperStatus?.running ? "Helper rodando" : "Sem helper ativo"} />
         </div>
 
-        {/* D4: "Modo Foco" card removed from the surface. optimizations/focus.rs and the
-            enter/restore Tauri commands are untouched - the adaptive policy engine
+        {/* D4/D5: "Modo Foco" card removed from the surface. optimizations/focus.rs and
+            the enter/restore Tauri commands are untouched - the adaptive policy engine
             (telemetry/engine.rs -> ENTER_FOCUS_MODE -> optimizations/mod.rs) can still
             trigger focus mode automatically on gaming+latency, independent of this UI.
             activeFocusSession/focusModeActive stay live (feed the "Restauracao" tile
-            above); activateFocus/deactivateFocus/activeFocusLabel are now unused here -
-            left in place for D5 to evaluate. */}
+            above). The card's local wrapper functions (activateFocus/deactivateFocus),
+            activeFocusLabel, and the onActivateFocusMode/onRestoreFocusMode props they
+            called were dead after the removal and were cleaned up in D5 - auth.activateFocus
+            / auth.restoreFocus (useAuth.ts) are untouched and just no longer wired here. */}
       </section>
 
       <AdvancedSection

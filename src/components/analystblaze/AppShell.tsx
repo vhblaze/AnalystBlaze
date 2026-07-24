@@ -641,17 +641,6 @@ export function AppShell() {
                       activateGameModeWithUpsell,
                     )
                   }
-                  onActivateFocusMode={(profile) =>
-                    runConfirmed(
-                      {
-                        title: "Ativar Modo Foco",
-                        description: "Cria uma sessao local com quiet mode, uploads nao criticos atrasados, scans pesados pausados e restauracao automatica.",
-                        risk: "sensivel",
-                        snapshot: true,
-                      },
-                      () => auth.activateFocus(profile),
-                    )
-                  }
                   onRestoreOptimizations={() =>
                     runConfirmed(
                       {
@@ -771,17 +760,6 @@ export function AppShell() {
                         snapshot: false,
                       },
                       auth.restoreGameMode,
-                    )
-                  }
-                  onRestoreFocusMode={() =>
-                    runConfirmed(
-                      {
-                        title: "Restaurar Modo Foco",
-                        description: "Encerra a sessao de foco ativa e restaura snapshots locais de prioridades e eficiencia de processos quando existirem.",
-                        risk: "seguro",
-                        snapshot: false,
-                      },
-                      auth.restoreFocus,
                     )
                   }
                   onApplyPcCleanFast={() =>
