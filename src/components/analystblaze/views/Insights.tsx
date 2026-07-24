@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, Bot, Brain, Cpu, Droplets, ExternalLink, RefreshCw, Sparkles, User, Wind, X, Zap } from "lucide-react";
+import { AlertCircle, ArrowRight, Bot, Brain, Cpu, Droplets, ExternalLink, RefreshCw, Sparkles, User, Wind, X, Zap } from "lucide-react";
 import { fetchInsights, type Insight } from "@/services/insights";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
@@ -228,7 +228,7 @@ export function Insights({
         </div>
       </header>
 
-      {error && (
+      {error && visibleInsights.length > 0 && (
         <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
           {error}
         </div>
@@ -250,6 +250,25 @@ export function Insights({
               <div className="mt-2 h-3 w-5/6 rounded bg-slate-800/40" />
             </div>
           ))}
+        </div>
+      ) : error && visibleInsights.length === 0 ? (
+        <div className="glass-panel flex flex-col items-center gap-3 rounded-2xl border border-rose-500/20 p-10 text-center">
+          <AlertCircle className="h-8 w-8 text-rose-300" />
+          <h3 className="text-lg font-semibold text-slate-100">{t("insights.errorTitle")}</h3>
+          <p className="max-w-sm text-sm text-slate-400">{error}</p>
+          <button
+            onClick={generate}
+            className="mt-1 inline-flex items-center gap-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-4 py-2 text-sm font-semibold text-rose-100 transition-all hover:border-rose-300/50 hover:bg-rose-400/15"
+          >
+            <RefreshCw className="h-4 w-4" />
+            {t("insights.errorRetry")}
+          </button>
+        </div>
+      ) : visibleInsights.length === 0 ? (
+        <div className="glass-panel flex flex-col items-center gap-2 rounded-2xl border border-cyan-500/10 p-10 text-center">
+          <Sparkles className="h-8 w-8 text-cyan-300/60" />
+          <h3 className="text-lg font-semibold text-slate-100">{t("insights.emptyTitle")}</h3>
+          <p className="max-w-sm text-sm text-slate-400">{t("insights.emptyDescription")}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">

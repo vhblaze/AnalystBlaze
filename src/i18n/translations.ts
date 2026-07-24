@@ -162,6 +162,10 @@ export const translations = {
       description: "A IA explica em linguagem simples o que foi feito no seu computador e o impacto real.",
       localMode: "Insights sao gerados apenas pelo backend. Abra o painel web para revisar a analise completa.",
       errorFallback: "Falha ao buscar insights no backend",
+      errorTitle: "Nao foi possivel carregar os insights",
+      errorRetry: "Tentar novamente",
+      emptyTitle: "Nenhum insight no momento",
+      emptyDescription: "Os insights aparecem conforme o uso do computador. Volte daqui a pouco.",
       openInWeb: "Abrir no site",
       impact: "impacto",
       categories: {
@@ -541,6 +545,10 @@ export const translations = {
       description: "AI explains in simple language what changed on your computer and the real impact.",
       localMode: "Insights are generated only by the backend. Open the web dashboard to review the complete analysis.",
       errorFallback: "Failed to fetch insights from the backend",
+      errorTitle: "Couldn't load insights",
+      errorRetry: "Try again",
+      emptyTitle: "No insights right now",
+      emptyDescription: "Insights show up as you use your computer. Check back shortly.",
       openInWeb: "Open on web",
       impact: "impact",
       categories: {
