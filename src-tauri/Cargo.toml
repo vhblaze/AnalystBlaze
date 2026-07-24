@@ -1,6 +1,6 @@
 [package]
 name = "analystblaze-desktop"
-version = "0.1.46"
+version = "0.1.47"
 description = "AnalystBlaze desktop agent"
 authors = ["you"]
 edition = "2021"
