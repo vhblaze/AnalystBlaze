@@ -214,7 +214,10 @@ export const translations = {
       systemHint: "Arquivo ou pasta do sistema - apenas informativo, nao pode ser excluido por aqui.",
       locked: "protegido",
       deleteHint: "Excluir (vai para a quarentena local, reversivel)",
+      deleteHintPermanent: "Excluir permanentemente (item muito grande, sem quarentena, nao pode ser desfeito)",
       confirmDelete: "Confirmar exclusao",
+      confirmDeletePermanent: "Apagar permanentemente",
+      permanentWarning: "Item muito grande ({{size}}) - sera apagado direto, sem passar pela quarentena. Nao da pra desfazer.",
       deleteSuccess: "{{name}} movido para a quarentena local.",
     },
     controls: {
@@ -616,7 +619,10 @@ export const translations = {
       systemHint: "System file or folder - informational only, can't be deleted from here.",
       locked: "protected",
       deleteHint: "Delete (goes to local quarantine, reversible)",
+      deleteHintPermanent: "Delete permanently (item too large for quarantine, can't be undone)",
       confirmDelete: "Confirm delete",
+      confirmDeletePermanent: "Delete permanently",
+      permanentWarning: "Item too large ({{size}}) - it will be deleted directly, skipping quarantine. This can't be undone.",
       deleteSuccess: "{{name}} moved to local quarantine.",
     },
     controls: {

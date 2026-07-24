@@ -18,6 +18,11 @@ import {
 } from "@/services/tauri/agent";
 import { DiskTreemap, DiskTreemapLegend } from "@/components/analystblaze/DiskTreemap";
 
+/** Mirrors disk_usage.rs's DIRECT_DELETE_THRESHOLD_BYTES - only used here
+ * to warn before the click; the backend enforces the real behavior
+ * regardless of what this shows. */
+const DIRECT_DELETE_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024;
+
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
@@ -188,8 +193,11 @@ export function DiskExplorer({
       // from the current view immediately; ancestor totals stay as they
       // were at scan time until the next "Analisar novamente".
       setChildren((current) => current.filter((child) => child.path !== item.path));
-      setActionMessage(t("diskExplorer.deleteSuccess", { name: item.name }));
-      track("disk_tree_item_deleted", { isDir: item.isDir });
+      // Backend message already says accurately whether this went to
+      // quarantine or was deleted permanently (see DIRECT_DELETE_THRESHOLD)
+      // - never paper over that with a hardcoded "quarantine" string.
+      setActionMessage(outcome?.message ?? t("diskExplorer.deleteSuccess", { name: item.name }));
+      track("disk_tree_item_deleted", { isDir: item.isDir, permanent: item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES });
     } catch (error) {
       setActionMessage(errorMessage(error));
     }
@@ -369,8 +377,11 @@ export function DiskExplorer({
               </div>
 
               <div className="mt-2 flex flex-col divide-y divide-cyan-500/5 overflow-hidden rounded-xl border border-cyan-500/10">
-                {sortedChildren.map((item) => (
-                  <div key={item.path} className="flex items-center gap-3 bg-slate-950/30 px-3 py-2.5 text-sm">
+                {sortedChildren.map((item) => {
+                  const permanent = item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES;
+                  return (
+                  <div key={item.path} className="flex flex-col gap-2 bg-slate-950/30 px-3 py-2.5 text-sm">
+                  <div className="flex items-center gap-3">
                     {item.isDir ? (
                       <Folder className="h-4 w-4 shrink-0 text-cyan-300" />
                     ) : (
@@ -403,7 +414,7 @@ export function DiskExplorer({
                             onClick={() => void deleteItem(item)}
                             className="rounded-md border border-rose-400/40 bg-rose-400/15 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-rose-100 hover:bg-rose-400/25"
                           >
-                            {t("diskExplorer.confirmDelete")}
+                            {permanent ? t("diskExplorer.confirmDeletePermanent") : t("diskExplorer.confirmDelete")}
                           </button>
                           <button
                             onClick={() => setConfirmingDeletePath(null)}
@@ -415,14 +426,22 @@ export function DiskExplorer({
                       ) : (
                         <button
                           onClick={() => setConfirmingDeletePath(item.path)}
-                          title={t("diskExplorer.deleteHint")}
+                          title={permanent ? t("diskExplorer.deleteHintPermanent") : t("diskExplorer.deleteHint")}
                           className="shrink-0 rounded-md border border-white/10 bg-slate-950/60 p-1.5 text-slate-500 transition hover:border-rose-400/40 hover:text-rose-200"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       ))}
                   </div>
-                ))}
+                  {confirmingDeletePath === item.path && permanent && (
+                    <div className="flex items-center gap-2 rounded-md border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs text-rose-200">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                      {t("diskExplorer.permanentWarning", { size: formatBytes(item.sizeBytes) })}
+                    </div>
+                  )}
+                  </div>
+                  );
+                })}
               </div>
             </>
           )}

@@ -785,6 +785,15 @@ pub async fn delete_item(path: String) -> ExecutionResult {
         })
 }
 
+/// Above this size, an item skips quarantine and is deleted permanently
+/// right away. Per user decision (2026-07-24): someone who opens the Disk
+/// Explorer and clicks delete on something huge really means it, and
+/// routing multi-GB/game-folder deletes through quarantine is exactly what
+/// let ~150GB of already-unwanted data (whole game installs) sit
+/// unreclaimed for months - see the AnalystBlaze-desktop audit session.
+/// Small/ordinary deletes still get the reversible quarantine safety net.
+const DIRECT_DELETE_THRESHOLD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
 fn delete_item_blocking(path: String) -> ExecutionResult {
     let validated = match validate_deletable_path(&path) {
         Ok(path) => path,
@@ -802,6 +811,10 @@ fn delete_item_blocking(path: String) -> ExecutionResult {
     } else {
         fs::metadata(&validated).map(|metadata| metadata.len()).unwrap_or(0)
     };
+
+    if size_bytes >= DIRECT_DELETE_THRESHOLD_BYTES {
+        return delete_item_permanently(&validated, size_bytes);
+    }
 
     let snapshot_id = snapshot::new_snapshot_id();
     let quarantine_target = snapshot::cleanup_quarantine_dir(&snapshot_id).join(
@@ -869,6 +882,42 @@ fn delete_item_blocking(path: String) -> ExecutionResult {
             "snapshot": { "id": snapshot.id, "reversible": true },
         }),
     )
+}
+
+/// No quarantine, no snapshot - see DIRECT_DELETE_THRESHOLD_BYTES. Still
+/// goes through the same validate_deletable_path checks as the quarantined
+/// path (protected apps, system-critical paths, bare drive roots all still
+/// blocked), and still gets audit-logged by execute_command_checked's
+/// blanket "optimization.command_executed" event same as any other action.
+fn delete_item_permanently(validated: &Path, size_bytes: u64) -> ExecutionResult {
+    let result = if validated.is_dir() {
+        fs::remove_dir_all(validated)
+    } else {
+        fs::remove_file(validated)
+    };
+
+    match result {
+        Ok(()) => ExecutionResult::ok(
+            "Item muito grande para quarentena - apagado permanentemente e nao pode ser restaurado.",
+            serde_json::json!({
+                "implemented": true,
+                "path": validated.display().to_string(),
+                "size_bytes": size_bytes,
+                "direct_delete_threshold_bytes": DIRECT_DELETE_THRESHOLD_BYTES,
+                "reversible": false,
+            }),
+        ),
+        Err(error) => ExecutionResult {
+            success: false,
+            message: "Falha ao apagar o item permanentemente.".to_string(),
+            details: serde_json::json!({
+                "implemented": true,
+                "path": validated.display().to_string(),
+                "size_bytes": size_bytes,
+                "error": error.to_string(),
+            }),
+        },
+    }
 }
 
 fn dir_size_uncapped(path: &Path) -> u64 {
