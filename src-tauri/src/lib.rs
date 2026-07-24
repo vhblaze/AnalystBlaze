@@ -50,12 +50,10 @@ struct AgentState {
     /// Set while a scan is in flight so cancel_disk_usage_scan has
     /// something to signal; cleared when the scan finishes either way.
     disk_usage_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
-    /// Last completed all-files disk-tree scan (D6 "Explorador de Disco"),
-    /// kept in memory only - never serialized wholesale, only browsed via
-    /// get_disk_tree_children/get_disk_tree_node.
-    disk_tree_cache: Mutex<Option<optimizations::disk_tree::DiskTree>>,
-    /// Set while a disk-tree scan is in flight so cancel_disk_tree_scan has
-    /// something to signal; cleared when the scan finishes either way.
+    /// Set while a disk-tree directory listing is in flight (D6 "Explorador
+    /// de Disco") so cancel_disk_tree_scan has something to signal; cleared
+    /// when the listing finishes either way. Nothing about the listing
+    /// itself is cached here - see disk_tree::list_directory's docs on why.
     disk_tree_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     /// Rolling ~10 minute window of network samples collected only while
     /// Modo Live is active - see spawn_live_mode_loop.
@@ -531,16 +529,17 @@ fn list_disk_volumes() -> Vec<optimizations::disk_tree::DiskVolumeInfo> {
     optimizations::disk_tree::list_volumes()
 }
 
-/// Full all-files scan of `root` (D6 "Explorador de Disco"). Unlike
-/// disk_usage_summary this has no TTL cache reuse - a fresh scan is a
-/// deliberate user action (picking/re-scanning a drive), not something
-/// that happens incidentally on every screen visit.
+/// Lists `path`'s immediate children with sizes computed on the spot (D6
+/// "Explorador de Disco"). Deliberately not cached in AgentState - a
+/// whole-drive tree held in memory for the app's lifetime is what made the
+/// feature keep eating RAM after the scan finished and even after leaving
+/// the screen. Every navigation re-asks the filesystem instead.
 #[tauri::command]
-async fn scan_disk_tree(
-    root: String,
+async fn list_disk_directory(
+    path: String,
     state: State<'_, AgentState>,
     app: AppHandle,
-) -> Result<optimizations::disk_tree::DiskTreeScanSummary, String> {
+) -> Result<Vec<optimizations::disk_tree::DiskTreeNodeSummary>, String> {
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     {
         let mut guard = state
@@ -550,16 +549,13 @@ async fn scan_disk_tree(
         *guard = Some(cancel.clone());
     }
 
-    let (tree, summary) = optimizations::disk_tree::scan_disk_tree(app, cancel, root).await?;
+    let result = optimizations::disk_tree::list_directory(app, cancel, path).await;
 
     if let Ok(mut guard) = state.disk_tree_cancel.lock() {
         *guard = None;
     }
-    if let Ok(mut guard) = state.disk_tree_cache.lock() {
-        *guard = Some(tree);
-    }
 
-    Ok(summary)
+    result
 }
 
 #[tauri::command]
@@ -575,32 +571,6 @@ async fn cancel_disk_tree_scan(state: State<'_, AgentState>) -> Result<bool, Str
         }
         None => Ok(false),
     }
-}
-
-#[tauri::command]
-fn get_disk_tree_node(
-    path: String,
-    state: State<'_, AgentState>,
-) -> Result<optimizations::disk_tree::DiskTreeNodeSummary, String> {
-    let guard = state
-        .disk_tree_cache
-        .lock()
-        .map_err(|_| "Estado do agente bloqueado.".to_string())?;
-    let tree = guard.as_ref().ok_or_else(|| "no_scan_cached".to_string())?;
-    optimizations::disk_tree::node_summary(tree, &path)
-}
-
-#[tauri::command]
-fn get_disk_tree_children(
-    path: String,
-    state: State<'_, AgentState>,
-) -> Result<Vec<optimizations::disk_tree::DiskTreeNodeSummary>, String> {
-    let guard = state
-        .disk_tree_cache
-        .lock()
-        .map_err(|_| "Estado do agente bloqueado.".to_string())?;
-    let tree = guard.as_ref().ok_or_else(|| "no_scan_cached".to_string())?;
-    optimizations::disk_tree::children_of(tree, &path)
 }
 
 const LIVE_MODE_SAMPLE_EVENT: &str = "live-mode-sample";
@@ -1507,7 +1477,6 @@ pub fn run() {
         plan_sync_error: Mutex::new(None),
         disk_usage_cache: Mutex::new(None),
         disk_usage_cancel: Mutex::new(None),
-        disk_tree_cache: Mutex::new(None),
         disk_tree_cancel: Mutex::new(None),
         live_mode_samples: Mutex::new(std::collections::VecDeque::new()),
         live_mode_cancel: Mutex::new(None),
@@ -1627,10 +1596,8 @@ pub fn run() {
             cancel_disk_usage_scan,
             delete_disk_usage_item,
             list_disk_volumes,
-            scan_disk_tree,
+            list_disk_directory,
             cancel_disk_tree_scan,
-            get_disk_tree_node,
-            get_disk_tree_children,
             detect_live_mode_streaming_app,
             start_live_mode,
             stop_live_mode,

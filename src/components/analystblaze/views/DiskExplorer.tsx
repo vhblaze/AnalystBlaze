@@ -5,15 +5,12 @@ import { useTelemetry } from "@/hooks/useTelemetry";
 import {
   cancelDiskTreeScan,
   deleteDiskUsageItem,
-  getDiskTreeChildren,
-  getDiskTreeNode,
   isTauriRuntime,
+  listDiskDirectory,
   listDiskVolumes,
   listenToDiskTreeProgress,
-  scanDiskTree,
   type DiskTreeNodeSummary,
   type DiskTreeProgress,
-  type DiskTreeScanSummary,
   type DiskVolumeInfo,
 } from "@/services/tauri/agent";
 import { DiskTreemap, DiskTreemapLegend } from "@/components/analystblaze/DiskTreemap";
@@ -22,6 +19,9 @@ import { DiskTreemap, DiskTreemapLegend } from "@/components/analystblaze/DiskTr
  * to warn before the click; the backend enforces the real behavior
  * regardless of what this shows. */
 const DIRECT_DELETE_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024;
+/** How long the fade/collapse plays before the row actually leaves the
+ * list - keep in sync with the CSS transition duration below. */
+const DELETE_ANIMATION_MS = 260;
 
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
@@ -38,17 +38,6 @@ function formatBytes(bytes: number): string {
     unitIndex += 1;
   }
   return `${value >= 100 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
-}
-
-function formatTimeAgo(unixSeconds: number): string {
-  const deltaSeconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
-  if (deltaSeconds < 60) return "poucos segundos";
-  const minutes = Math.floor(deltaSeconds / 60);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h`;
-  const days = Math.floor(hours / 24);
-  return `${days} d`;
 }
 
 function parentPath(path: string): string | null {
@@ -76,8 +65,8 @@ export function DiskExplorer({
   onAutoScanHandled,
 }: {
   /** Set (transiently) when the user navigated here from an Insights card
-   * asking to see disk-usage details - triggers a scan of the first
-   * detected volume on arrival. */
+   * asking to see disk-usage details - triggers loading the first detected
+   * volume's root on arrival. */
   autoScan?: boolean;
   onAutoScanHandled?: () => void;
 }) {
@@ -89,19 +78,19 @@ export function DiskExplorer({
   const [selectedVolume, setSelectedVolume] = useState<string>("");
   const [volumesError, setVolumesError] = useState<string | null>(null);
 
-  const [scanSummary, setScanSummary] = useState<DiskTreeScanSummary | null>(null);
-  const [scanBusy, setScanBusy] = useState(false);
-  const [scanError, setScanError] = useState<string | null>(null);
-  const [scanProgress, setScanProgress] = useState<DiskTreeProgress | null>(null);
-
+  const [rootPath, setRootPath] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState<string>("");
-  const [currentNode, setCurrentNode] = useState<DiskTreeNodeSummary | null>(null);
+  // Nothing here is cached on the backend - every navigation re-asks the
+  // filesystem for just this folder's immediate children, so there's no
+  // whole-drive tree sitting in memory to leak once you leave the screen.
   const [children, setChildren] = useState<DiskTreeNodeSummary[]>([]);
   const [browseBusy, setBrowseBusy] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
+  const [browseProgress, setBrowseProgress] = useState<DiskTreeProgress | null>(null);
 
   const [sortBy, setSortBy] = useState<"size" | "name">("size");
   const [confirmingDeletePath, setConfirmingDeletePath] = useState<string | null>(null);
+  const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -117,26 +106,35 @@ export function DiskExplorer({
   useEffect(() => {
     if (!runtimeAvailable) return;
     let dispose: (() => void) | undefined;
-    listenToDiskTreeProgress((progress) => setScanProgress(progress)).then((next) => {
+    listenToDiskTreeProgress((progress) => setBrowseProgress(progress)).then((next) => {
       dispose = next;
     });
     return () => dispose?.();
   }, [runtimeAvailable]);
 
   useEffect(() => {
-    if (!autoScan || volumes.length === 0 || scanSummary || scanBusy) return;
-    void startScan(selectedVolume || volumes[0].mountPoint);
+    if (!autoScan || volumes.length === 0 || rootPath || browseBusy) return;
+    void loadRoot(selectedVolume || volumes[0].mountPoint);
     onAutoScanHandled?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoScan, volumes]);
 
+  // Cancel whatever listing is in flight the moment this screen unmounts -
+  // otherwise a slow folder (e.g. a huge node_modules) keeps a worker pool
+  // busy on a screen the user already left.
+  useEffect(() => {
+    return () => {
+      void cancelDiskTreeScan().catch(() => undefined);
+    };
+  }, []);
+
   const openPath = async (path: string) => {
     setBrowseBusy(true);
     setBrowseError(null);
+    setBrowseProgress(null);
     try {
-      const [node, kids] = await Promise.all([getDiskTreeNode(path), getDiskTreeChildren(path)]);
+      const kids = await listDiskDirectory(path);
       setCurrentPath(path);
-      setCurrentNode(node);
       setChildren(kids);
     } catch (error) {
       setBrowseError(errorMessage(error));
@@ -145,37 +143,27 @@ export function DiskExplorer({
     }
   };
 
-  const startScan = async (volumeOverride?: string) => {
+  const loadRoot = async (volumeOverride?: string) => {
     const volume = volumeOverride ?? selectedVolume;
     if (!volume) return;
-    setScanBusy(true);
-    setScanError(null);
-    setScanProgress(null);
     setActionMessage(null);
-    try {
-      const summary = await scanDiskTree(volume);
-      setScanSummary(summary);
-      track("disk_tree_scanned", { canceled: summary.canceled, capped: summary.capped, fileCount: summary.fileCount });
-      await openPath(summary.root);
-    } catch (error) {
-      setScanError(errorMessage(error));
-    } finally {
-      setScanBusy(false);
-    }
+    setRootPath(volume);
+    track("disk_tree_root_opened", { volume });
+    await openPath(volume);
   };
 
-  const cancelScan = async () => {
+  const cancelBrowse = async () => {
     try {
       await cancelDiskTreeScan();
     } catch (error) {
-      setScanError(errorMessage(error));
+      setBrowseError(errorMessage(error));
     }
   };
 
   const goUp = () => {
-    if (!scanSummary) return;
+    if (!rootPath) return;
     const parent = parentPath(currentPath);
-    if (!parent || parent.length < scanSummary.root.length) return;
+    if (!parent || parent.length < rootPath.length) return;
     void openPath(parent);
   };
 
@@ -189,15 +177,23 @@ export function DiskExplorer({
         setActionMessage(outcome.message);
         return;
       }
-      // The scanned tree cache isn't rewritten by a delete - drop the item
-      // from the current view immediately; ancestor totals stay as they
-      // were at scan time until the next "Analisar novamente".
-      setChildren((current) => current.filter((child) => child.path !== item.path));
       // Backend message already says accurately whether this went to
       // quarantine or was deleted permanently (see DIRECT_DELETE_THRESHOLD)
       // - never paper over that with a hardcoded "quarantine" string.
       setActionMessage(outcome?.message ?? t("diskExplorer.deleteSuccess", { name: item.name }));
       track("disk_tree_item_deleted", { isDir: item.isDir, permanent: item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES });
+      // Play the fade/collapse first, then actually drop it from the list -
+      // an instant jump-cut read as "it's still there" even though the
+      // state was already updated.
+      setDeletingPaths((current) => new Set(current).add(item.path));
+      window.setTimeout(() => {
+        setChildren((current) => current.filter((child) => child.path !== item.path));
+        setDeletingPaths((current) => {
+          const next = new Set(current);
+          next.delete(item.path);
+          return next;
+        });
+      }, DELETE_ANIMATION_MS);
     } catch (error) {
       setActionMessage(errorMessage(error));
     }
@@ -206,6 +202,8 @@ export function DiskExplorer({
   const sortedChildren = [...children].sort((a, b) =>
     sortBy === "size" ? b.sizeBytes - a.sizeBytes : a.name.localeCompare(b.name),
   );
+  const treemapItems = sortedChildren.filter((item) => !deletingPaths.has(item.path));
+  const folderTotalBytes = children.reduce((sum, item) => sum + item.sizeBytes, 0);
 
   if (!runtimeAvailable) {
     return <Notice tone="info" message={t("diskExplorer.desktopOnly")} />;
@@ -232,7 +230,7 @@ export function DiskExplorer({
                 <button
                   key={volume.mountPoint}
                   onClick={() => setSelectedVolume(volume.mountPoint)}
-                  disabled={scanBusy}
+                  disabled={browseBusy}
                   className={`flex min-w-[180px] flex-col gap-1.5 rounded-xl border px-3.5 py-2.5 text-left text-xs transition-all disabled:opacity-50 ${
                     selected
                       ? "border-cyan-300/50 bg-cyan-400/10 text-cyan-100"
@@ -258,9 +256,9 @@ export function DiskExplorer({
           </div>
 
           <div className="flex items-center gap-2">
-            {scanBusy && (
+            {browseBusy && (
               <button
-                onClick={() => void cancelScan()}
+                onClick={() => void cancelBrowse()}
                 className="inline-flex items-center gap-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2.5 text-xs font-semibold text-rose-100 transition-all hover:border-rose-300/50"
               >
                 <X className="h-3.5 w-3.5" />
@@ -268,38 +266,30 @@ export function DiskExplorer({
               </button>
             )}
             <button
-              disabled={scanBusy || !selectedVolume}
-              onClick={() => void startScan()}
+              disabled={browseBusy || !selectedVolume}
+              onClick={() => void loadRoot()}
               className="group inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
             >
-              <RefreshCw className={`h-4 w-4 ${scanBusy ? "animate-spin" : "transition-transform group-hover:rotate-180"}`} />
-              {scanBusy ? t("diskExplorer.scanning") : scanSummary ? t("diskExplorer.rescan") : t("diskExplorer.scan")}
+              <RefreshCw className={`h-4 w-4 ${browseBusy ? "animate-spin" : "transition-transform group-hover:rotate-180"}`} />
+              {browseBusy ? t("diskExplorer.scanning") : rootPath ? t("diskExplorer.rescan") : t("diskExplorer.scan")}
             </button>
           </div>
         </div>
 
-        {scanBusy && (
+        {browseBusy && (
           <div className="mt-4 flex items-center gap-3 text-xs text-slate-400">
             <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
               <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-r from-cyan-400 to-violet-400" />
             </div>
             <span className="font-mono">
-              {t("diskExplorer.scannedNodes", { count: scanProgress?.scannedNodes ?? 0 })}
+              {t("diskExplorer.scannedNodes", { count: browseProgress?.scannedNodes ?? 0 })}
             </span>
           </div>
         )}
-        {scanError && <div className="mt-4"><Notice tone="danger" message={scanError} /></div>}
-
-        {scanSummary && (
-          <p className="mt-4 text-xs text-slate-500">
-            {t("diskExplorer.lastScanned", { time: formatTimeAgo(scanSummary.scannedAt) })}
-            {scanSummary.canceled ? ` - ${t("diskExplorer.scanCanceled")}` : ""}
-            {scanSummary.capped ? ` - ${t("diskExplorer.scanCapped")}` : ""}
-          </p>
-        )}
+        {browseError && <div className="mt-4"><Notice tone="danger" message={browseError} /></div>}
       </section>
 
-      {!scanSummary && !scanBusy && (
+      {!rootPath && !browseBusy && (
         <div className="glass-panel flex flex-col items-center gap-2 rounded-2xl border border-cyan-500/10 p-10 text-center">
           <HardDrive className="h-8 w-8 text-cyan-300/60" />
           <h3 className="text-lg font-semibold text-slate-100">{t("diskExplorer.emptyTitle")}</h3>
@@ -307,10 +297,10 @@ export function DiskExplorer({
         </div>
       )}
 
-      {scanSummary && (
+      {rootPath && (
         <section className="glass-panel cyber-glow p-6">
           <div className="flex flex-wrap items-center gap-1 pb-4 font-mono text-xs text-slate-400">
-            {breadcrumbSegments(scanSummary.root, currentPath).map((segment, index, all) => (
+            {breadcrumbSegments(rootPath, currentPath).map((segment, index, all) => (
               <span key={segment.path} className="flex items-center gap-1">
                 <button
                   onClick={() => void openPath(segment.path)}
@@ -326,22 +316,21 @@ export function DiskExplorer({
             ))}
           </div>
 
-          {browseError && <Notice tone="danger" message={browseError} />}
           {actionMessage && <div className="mb-4"><Notice tone="info" message={actionMessage} /></div>}
 
-          {currentNode && (
+          {!browseBusy && children.length > 0 && (
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div className="flex items-center gap-3">
                 <button
                   onClick={goUp}
-                  disabled={currentPath === scanSummary.root}
+                  disabled={currentPath === rootPath}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/20 bg-slate-950/50 px-2.5 py-1.5 text-xs font-medium text-cyan-200 transition hover:border-cyan-400/40 disabled:opacity-40"
                 >
                   <ChevronRight className="h-3.5 w-3.5 rotate-180" />
                   {t("diskExplorer.up")}
                 </button>
                 <span className="text-sm text-slate-300">
-                  {t("diskExplorer.folderTotal", { size: formatBytes(currentNode.sizeBytes) })}
+                  {t("diskExplorer.folderTotal", { size: formatBytes(folderTotalBytes) })}
                 </span>
               </div>
               <DiskTreemapLegend t={t} />
@@ -354,7 +343,7 @@ export function DiskExplorer({
             <p className="py-8 text-center text-sm text-slate-500">{t("diskExplorer.folderEmpty")}</p>
           ) : (
             <>
-              <DiskTreemap items={sortedChildren} onOpen={(item) => void openPath(item.path)} />
+              <DiskTreemap items={treemapItems} onOpen={(item) => void openPath(item.path)} />
 
               <div className="mt-5 flex items-center justify-between">
                 <h3 className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
@@ -379,8 +368,15 @@ export function DiskExplorer({
               <div className="mt-2 flex flex-col divide-y divide-cyan-500/5 overflow-hidden rounded-xl border border-cyan-500/10">
                 {sortedChildren.map((item) => {
                   const permanent = item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES;
+                  const deleting = deletingPaths.has(item.path);
                   return (
-                  <div key={item.path} className="flex flex-col gap-2 bg-slate-950/30 px-3 py-2.5 text-sm">
+                  <div
+                    key={item.path}
+                    className={`flex flex-col gap-2 bg-slate-950/30 px-3 py-2.5 text-sm transition-all duration-200 ease-in ${
+                      deleting ? "-translate-x-2 scale-[0.98] opacity-0" : "translate-x-0 scale-100 opacity-100"
+                    }`}
+                    style={deleting ? { maxHeight: 0, paddingTop: 0, paddingBottom: 0, overflow: "hidden" } : undefined}
+                  >
                   <div className="flex items-center gap-3">
                     {item.isDir ? (
                       <Folder className="h-4 w-4 shrink-0 text-cyan-300" />

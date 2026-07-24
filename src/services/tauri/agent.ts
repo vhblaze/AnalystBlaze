@@ -569,17 +569,6 @@ export type DiskTreeNodeSummary = {
   actionable: boolean;
 };
 
-export type DiskTreeScanSummary = {
-  root: string;
-  totalSizeBytes: number;
-  dirCount: number;
-  fileCount: number;
-  scannedAt: number;
-  durationMs: number;
-  canceled: boolean;
-  capped: boolean;
-};
-
 export type DiskTreeProgress = {
   currentPath: string;
   scannedNodes: number;
@@ -1012,24 +1001,14 @@ export async function listDiskVolumes(): Promise<DiskVolumeInfo[]> {
   return invoke<DiskVolumeInfo[]>("list_disk_volumes");
 }
 
-export async function scanDiskTree(root: string): Promise<DiskTreeScanSummary> {
+export async function listDiskDirectory(path: string): Promise<DiskTreeNodeSummary[]> {
   requireTauriRuntime("Explorador de disco");
-  return invoke<DiskTreeScanSummary>("scan_disk_tree", { root });
+  return invoke<DiskTreeNodeSummary[]>("list_disk_directory", { path });
 }
 
 export async function cancelDiskTreeScan(): Promise<boolean> {
   requireTauriRuntime("Explorador de disco");
   return invoke<boolean>("cancel_disk_tree_scan");
-}
-
-export async function getDiskTreeNode(path: string): Promise<DiskTreeNodeSummary> {
-  requireTauriRuntime("Explorador de disco");
-  return invoke<DiskTreeNodeSummary>("get_disk_tree_node", { path });
-}
-
-export async function getDiskTreeChildren(path: string): Promise<DiskTreeNodeSummary[]> {
-  requireTauriRuntime("Explorador de disco");
-  return invoke<DiskTreeNodeSummary[]>("get_disk_tree_children", { path });
 }
 
 export async function listenToDiskTreeProgress(onProgress: (progress: DiskTreeProgress) => void) {
