@@ -2,6 +2,7 @@ pub mod adaptive;
 pub mod autostart;
 pub mod cleanup;
 pub mod detection;
+pub mod disk_tree;
 pub mod disk_usage;
 pub mod energy;
 pub mod focus;

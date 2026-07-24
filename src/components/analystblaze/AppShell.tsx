@@ -20,12 +20,13 @@ import {
   type RemoteCommandConfirmationRequest,
 } from "@/services/tauri/agent";
 
-export type ViewKey = "dashboard" | "telemetry" | "insights" | "controls" | "settings";
+export type ViewKey = "dashboard" | "telemetry" | "insights" | "controls" | "disk" | "settings";
 
 const Dashboard = lazy(() => import("./views/Dashboard").then((module) => ({ default: module.Dashboard })));
 const Telemetry = lazy(() => import("./views/Telemetry").then((module) => ({ default: module.Telemetry })));
 const Insights = lazy(() => import("./views/Insights").then((module) => ({ default: module.Insights })));
 const LocalControls = lazy(() => import("./views/LocalControls").then((module) => ({ default: module.LocalControls })));
+const DiskExplorer = lazy(() => import("./views/DiskExplorer").then((module) => ({ default: module.DiskExplorer })));
 const Settings = lazy(() => import("./views/Settings").then((module) => ({ default: module.Settings })));
 
 export function AppShell() {
@@ -70,6 +71,7 @@ export function AppShell() {
       telemetry: t("nav.telemetry"),
       insights: t("nav.insights"),
       controls: t("nav.controls"),
+      disk: t("nav.disk"),
       settings: t("nav.settings"),
     }),
     [t],
@@ -85,7 +87,7 @@ export function AppShell() {
 
   const openDiskUsageDetails = useCallback(() => {
     setFocusDiskUsage(true);
-    handleViewChange("controls");
+    handleViewChange("disk");
   }, [handleViewChange]);
 
   const requestConfirmation = useCallback((request: Omit<ConfirmRequest, "resolve" | "id">) => {
@@ -852,8 +854,13 @@ export function AppShell() {
                       auth.resetWinsock,
                     )
                   }
-                  focusDiskUsage={focusDiskUsage}
-                  onDiskUsageFocused={() => setFocusDiskUsage(false)}
+                />
+              </Suspense>
+            ) : view === "disk" ? (
+              <Suspense fallback={<ViewFallback />}>
+                <DiskExplorer
+                  autoScan={focusDiskUsage}
+                  onAutoScanHandled={() => setFocusDiskUsage(false)}
                 />
               </Suspense>
             ) : (

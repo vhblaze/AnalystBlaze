@@ -708,8 +708,11 @@ fn parse_steam_library_paths(vdf_text: &str) -> Vec<PathBuf> {
 }
 
 /// Validates a path for the DELETE_DISK_USAGE_ITEM action: must exist,
-/// must sit under one of the roots this scan actually looks at (never
-/// C:\Windows or a bare drive root), and must not match a protected app.
+/// must not be a protected app, must not be a bare drive/volume root, and
+/// must not fall under `is_system_critical_path`. This is a denylist
+/// (not the old curated-folder allowlist) so both the categorized scan
+/// and the D6 all-files tree browser can delete anywhere the user can
+/// see a file, while system-critical paths stay excluded either way.
 pub fn validate_deletable_path(raw_path: &str) -> Result<PathBuf, String> {
     let path = PathBuf::from(raw_path);
     let canonical = fs::canonicalize(&path).map_err(|error| format!("path_not_found: {error}"))?;
@@ -722,38 +725,54 @@ pub fn validate_deletable_path(raw_path: &str) -> Result<PathBuf, String> {
         return Err("protected_app".to_string());
     }
 
-    let allowed_roots = allowed_deletion_roots();
-    let is_allowed = allowed_roots
-        .iter()
-        .any(|root| fs::canonicalize(root).is_ok_and(|root| canonical.starts_with(&root)));
-    if !is_allowed {
-        return Err("outside_allowed_roots".to_string());
+    // Bare drive/volume root, e.g. "C:\" or "D:\" - a path with no parent.
+    if canonical.parent().is_none() {
+        return Err("cannot_delete_root".to_string());
     }
 
-    // Never the root itself, only something inside it.
-    if allowed_roots
-        .iter()
-        .any(|root| fs::canonicalize(root).is_ok_and(|root| root == canonical))
-    {
-        return Err("cannot_delete_root".to_string());
+    if is_system_critical_path(&canonical) {
+        return Err("system_protected".to_string());
     }
 
     Ok(canonical)
 }
 
-fn allowed_deletion_roots() -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    for folder in ["Downloads", "Videos", "Documents", "Desktop", "Pictures", "Music"] {
-        if let Some(path) = user_dir(folder) {
-            roots.push(path);
+/// Paths that are informational-only everywhere in the product, regardless
+/// of which scan surfaced them - the Windows directory, recycle bin,
+/// System Volume Information, ProgramData, boot/recovery partitionish
+/// folders, and the well-known paging/hibernation/swap files by name.
+/// Used both to block deletion and to mark tree nodes non-actionable.
+pub(crate) fn is_system_critical_path(canonical: &Path) -> bool {
+    let system_drive = system_drive_root();
+    let windows_dir = std::env::var_os("WINDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| system_drive.join("Windows"));
+    let denylist = [
+        windows_dir,
+        system_drive.join("$Recycle.Bin"),
+        system_drive.join("System Volume Information"),
+        system_drive.join("ProgramData"),
+        system_drive.join("Recovery"),
+        system_drive.join("Boot"),
+    ];
+    if denylist
+        .iter()
+        .any(|root| fs::canonicalize(root).is_ok_and(|root| canonical.starts_with(&root)))
+    {
+        return true;
+    }
+
+    if let Some(name) = canonical.file_name().and_then(|name| name.to_str()) {
+        let lower = name.to_ascii_lowercase();
+        if matches!(
+            lower.as_str(),
+            "pagefile.sys" | "hiberfil.sys" | "swapfile.sys" | "bootmgr" | "bootnxt"
+        ) {
+            return true;
         }
     }
-    roots.extend(program_files_roots());
-    roots.extend(steam_library_common_dirs());
-    if let Some(epic_root) = epic_games_root() {
-        roots.push(epic_root);
-    }
-    roots
+
+    false
 }
 
 pub async fn delete_item(path: String) -> ExecutionResult {
