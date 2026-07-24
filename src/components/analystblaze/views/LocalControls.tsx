@@ -665,60 +665,13 @@ export function LocalControls({
           <SummaryTile label="Restauracao" value={hasPendingRestore ? "Disponivel" : "Limpa"} detail={helperStatus?.running ? "Helper rodando" : "Sem helper ativo"} />
         </div>
 
-        <div className="mt-5 flex flex-col gap-3 border-t border-cyan-500/10 pt-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0">
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-cyan-400/70">
-              Modo Foco
-            </div>
-            <div className="mt-1 truncate text-sm font-semibold text-slate-100" title={activeFocusLabel}>
-              {focusModeActive ? activeFocusLabel : "Trabalho, jogo, chamada ou estudo"}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void activateFocus("work")}
-              className="inline-flex items-center gap-2 rounded-xl border border-sky-400/35 bg-sky-400/10 px-3 py-2 text-xs font-semibold text-sky-100 transition hover:bg-sky-400/15 disabled:opacity-50"
-            >
-              <Briefcase className="h-3.5 w-3.5" />
-              Trabalho
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void activateFocus("game")}
-              className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/35 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
-            >
-              <Gamepad2 className="h-3.5 w-3.5" />
-              Jogo
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void activateFocus("call")}
-              className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/35 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
-            >
-              <PhoneCall className="h-3.5 w-3.5" />
-              Chamada
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void activateFocus("study")}
-              className="inline-flex items-center gap-2 rounded-xl border border-violet-400/35 bg-violet-400/10 px-3 py-2 text-xs font-semibold text-violet-100 transition hover:bg-violet-400/15 disabled:opacity-50"
-            >
-              <BookOpen className="h-3.5 w-3.5" />
-              Estudo
-            </button>
-            {focusModeActive && (
-              <button
-                disabled={busy || !runtimeAvailable}
-                onClick={() => void deactivateFocus()}
-                className="inline-flex items-center gap-2 rounded-xl border border-amber-400/35 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
-              >
-                <ShieldCheck className="h-3.5 w-3.5" />
-                Restaurar
-              </button>
-            )}
-          </div>
-        </div>
+        {/* D4: "Modo Foco" card removed from the surface. optimizations/focus.rs and the
+            enter/restore Tauri commands are untouched - the adaptive policy engine
+            (telemetry/engine.rs -> ENTER_FOCUS_MODE -> optimizations/mod.rs) can still
+            trigger focus mode automatically on gaming+latency, independent of this UI.
+            activeFocusSession/focusModeActive stay live (feed the "Restauracao" tile
+            above); activateFocus/deactivateFocus/activeFocusLabel are now unused here -
+            left in place for D5 to evaluate. */}
       </section>
 
       <AdvancedSection
