@@ -12,7 +12,6 @@ import {
   ShieldCheck,
   Sparkles,
   Thermometer,
-  Timer,
   Wifi,
 } from "lucide-react";
 import { TiltCard } from "../TiltCard";
@@ -29,6 +28,7 @@ import {
 } from "@/services/tauri/agent";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useI18n } from "@/i18n";
+import { temperatureSourceLabel } from "@/lib/telemetry-labels";
 
 const HISTORY_LEN = 28;
 
@@ -40,6 +40,7 @@ export function Dashboard({
   onActivateGameMode,
   onRestoreGameMode,
   onApplyPcCleanFast,
+  onOpenDiskUsage,
   busy,
 }: {
   user: User | null;
@@ -49,6 +50,9 @@ export function Dashboard({
   onActivateGameMode: () => Promise<void>;
   onRestoreGameMode: () => Promise<void>;
   onApplyPcCleanFast: () => Promise<void>;
+  /** Navigates to the Disk Explorer - the disk MetricCard is clickable
+   * instead of duplicating a mini disk-usage view here. */
+  onOpenDiskUsage?: () => void;
   busy: boolean;
 }) {
   const { t } = useI18n();
@@ -267,9 +271,8 @@ export function Dashboard({
         <MetricCard icon={Thermometer} label={t("dashboard.cpuTemp")} value={formatTemp(telemetry?.cpu_temperature, telemetry?.cpu_temperature_available)} detail={telemetry ? thermalDetail(telemetry) : t("common.unavailable")} />
         <MetricCard icon={Thermometer} label={t("dashboard.gpuTemp")} value={formatTemp(telemetry?.gpu_temperature, telemetry?.gpu_temperature_available)} detail={telemetry ? `${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")} / ${thermalStateLabel(telemetry.thermal_state)}` : t("common.unavailable")} />
         <MetricCard icon={PlugZap} label="Energia" value={formatWatts(telemetry?.watts)} detail={telemetry ? energyDetail(telemetry) : t("common.unavailable")} />
-        <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)}` : t("common.unavailable")} />
+        <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
         <MetricCard icon={Wifi} label={t("dashboard.latency")} value={telemetry ? formatLatency(telemetry.latency_ms) : "--"} detail={telemetry ? networkDetail(telemetry.network) : t("common.unavailable")} />
-        <MetricCard icon={Timer} label={t("dashboard.idleState")} value={telemetry ? formatDuration(telemetry.idle_seconds ?? 0) : "--"} detail={telemetry?.active_window || t("dashboard.noActiveWindow")} />
         <MetricCard icon={ShieldCheck} label={t("dashboard.optimizationStatus")} value={telemetry ? optimizationLabel(telemetry.optimization_status, t) : "--"} detail={telemetry ? profileLabel(telemetry.active_profile, t) : t("common.unavailable")} />
       </div>
     </div>
@@ -310,21 +313,32 @@ function MetricCard({
   label,
   value,
   detail,
+  onClick,
 }: {
   icon: typeof Activity;
   label: string;
   value: string;
   detail: string;
+  /** When set, the whole card becomes a button - used for metrics that are
+   * a summary of a dedicated screen (e.g. disk usage -> Disk Explorer)
+   * instead of a dead-end duplicate of it. */
+  onClick?: () => void;
 }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className="rounded-2xl border border-cyan-500/10 bg-slate-950/45 p-5">
+    <Tag
+      onClick={onClick}
+      className={`rounded-2xl border border-cyan-500/10 bg-slate-950/45 p-5 text-left transition-colors ${
+        onClick ? "cursor-pointer hover:border-cyan-400/30 hover:bg-slate-950/70" : ""
+      }`}
+    >
       <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500">
         <Icon className="h-4 w-4 text-cyan-300" />
         <span className="truncate">{label}</span>
       </div>
       <div className="mt-3 truncate text-xl font-semibold text-slate-100">{value}</div>
       <div className="mt-1 truncate text-xs text-slate-500">{detail}</div>
-    </div>
+    </Tag>
   );
 }
 
@@ -432,18 +446,6 @@ function trendLabel(value?: string) {
   if (value === "stable") return "estavel";
   if (value === "warming_up") return "aquecendo";
   return "tendencia indisponivel";
-}
-
-function temperatureSourceLabel(source: string) {
-  if (source === "nvml") return "NVML";
-  if (source === "libre_hardware_monitor") return "LibreHardwareMonitor";
-  if (source === "open_hardware_monitor") return "OpenHardwareMonitor";
-  if (source === "acpi_thermal_zone") return "ACPI";
-  if (source === "sysinfo_cpu_sensor") return "sysinfo";
-  if (source === "sysinfo_gpu_sensor") return "sysinfo GPU";
-  if (source === "sysinfo_component_max") return "sysinfo max";
-  if (source === "hardware_monitor") return "monitor";
-  return source;
 }
 
 function formatGameModeMinutes(seconds: number) {

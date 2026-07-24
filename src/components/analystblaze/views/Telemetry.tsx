@@ -33,6 +33,7 @@ import {
 } from "@/services/tauri/agent";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
+import { temperatureSourceLabel } from "@/lib/telemetry-labels";
 
 const LIVE_MODE_SAMPLE_HISTORY = 60;
 const STREAMING_APP_POLL_MS = 15_000;
@@ -159,6 +160,7 @@ export function Telemetry({
   busy,
   onCollectSample,
   onSetTelemetryMode,
+  onOpenDiskUsage,
 }: {
   latestSample: AgentTelemetrySample | null;
   agentMode?: string | null;
@@ -166,6 +168,9 @@ export function Telemetry({
   busy: boolean;
   onCollectSample: () => Promise<AgentTelemetrySample>;
   onSetTelemetryMode: (mode: "normal" | "realtime") => Promise<void>;
+  /** Navigates to the Disk Explorer - shown as a link under the disk
+   * metric's detail instead of this screen growing its own mini disk view. */
+  onOpenDiskUsage?: () => void;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("telemetry");
@@ -395,6 +400,14 @@ export function Telemetry({
                     <div className="mt-1 max-w-[520px] truncate text-xs text-slate-500">
                       {selectedMetric.detail(sample)}
                     </div>
+                  )}
+                  {selectedMetric.key === "disk" && onOpenDiskUsage && (
+                    <button
+                      onClick={onOpenDiskUsage}
+                      className="mt-1.5 text-xs font-medium text-cyan-300 underline-offset-2 hover:underline"
+                    >
+                      {t("telemetry.openDiskExplorer")}
+                    </button>
                   )}
                 </div>
               </div>
@@ -880,18 +893,6 @@ function cpuTemperatureMethodSummary(sample: AgentTelemetrySample | null) {
     .join(" / ");
 }
 
-function temperatureSourceLabel(source?: string | null) {
-  if (source === "nvml") return "NVML";
-  if (source === "sysinfo_cpu_sensor") return "sensor do sistema";
-  if (source === "sysinfo_gpu_sensor") return "sensor GPU do sistema";
-  if (source === "sysinfo_component_max") return "componente mais quente";
-  if (source === "libre_hardware_monitor") return "LibreHardwareMonitor";
-  if (source === "open_hardware_monitor") return "OpenHardwareMonitor";
-  if (source === "acpi_thermal_zone") return "ACPI thermal zone";
-  if (source === "hardware_monitor") return "monitor de hardware";
-  if (source === "external_wmi") return "WMI";
-  return "fonte local";
-}
 
 function formatDuration(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "--";

@@ -603,6 +603,7 @@ export function AppShell() {
                       auth.pcCleanFast,
                     );
                   }}
+                  onOpenDiskUsage={openDiskUsageDetails}
                   busy={auth.busy}
                 />
               </Suspense>
@@ -615,6 +616,7 @@ export function AppShell() {
                   busy={auth.busy}
                   onCollectSample={auth.collectSample}
                   onSetTelemetryMode={auth.setTelemetryMode}
+                  onOpenDiskUsage={openDiskUsageDetails}
                 />
               </Suspense>
             ) : view === "insights" ? (

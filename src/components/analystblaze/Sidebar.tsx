@@ -156,16 +156,17 @@ export function Sidebar({
                 className="w-60 border-cyan-500/20 bg-slate-950/95 backdrop-blur-xl"
               >
                 <DropdownMenuLabel className="flex flex-col gap-0.5">
-                  <span className="font-mono text-[10px] font-normal uppercase tracking-widest text-cyan-300">
-                    {t("sidebar.currentPlan")}: {planLabel(user.plan)}
-                  </span>
                   <span className="text-sm text-slate-100">{user.name}</span>
                   {user.email && <span className="truncate text-xs font-normal text-slate-500">{user.email}</span>}
-                  <span className="font-mono text-[10px] font-normal text-slate-500">
-                    {t("sidebar.session")} - {user.sessionId.slice(0, 6)}...{user.sessionId.slice(-4)}
-                  </span>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator className="bg-cyan-500/10" />
+                <DropdownMenuItem
+                  onClick={() => onChange("settings")}
+                  className="gap-2 focus:bg-cyan-500/10 focus:text-cyan-100"
+                >
+                  <Settings className="h-4 w-4 text-cyan-300" />
+                  <span className="flex-1">{t("sidebar.viewAccount")}</span>
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={() => {
                     track("external_account_clicked");
@@ -217,9 +218,13 @@ export function Sidebar({
             <ChevronRight className="h-3.5 w-3.5 text-cyan-300/70 transition-transform group-hover:translate-x-0.5" />
           </button>
         )}
-        <div className="mt-1 text-center font-mono text-[10px] uppercase tracking-[0.3em] text-slate-700">
+        <button
+          onClick={() => onChange("settings")}
+          title={t("sidebar.viewAccount")}
+          className="mt-1 text-center font-mono text-[10px] uppercase tracking-[0.3em] text-slate-700 transition hover:text-cyan-400"
+        >
           {t("app.versionLine")}
-        </div>
+        </button>
       </div>
     </aside>
   );

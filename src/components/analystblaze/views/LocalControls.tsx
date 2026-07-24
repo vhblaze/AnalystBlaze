@@ -725,11 +725,8 @@ export function LocalControls({
               ["Tipo", networkDiagnostics?.adapter_type ?? networkDiagnostics?.adapter_description ?? "--"],
               ["Link", networkDiagnostics?.link_speed ?? "--"],
               ["Wi-Fi", networkDiagnostics?.wifi_ssid ? `${networkDiagnostics.wifi_ssid}${networkDiagnostics.wifi_signal_percent != null ? ` - ${Math.round(networkDiagnostics.wifi_signal_percent)}%` : ""}` : "--"],
-              ["Ping externo", formatMs(networkDiagnostics?.external_latency_ms)],
-              ["Jitter", formatMs(networkDiagnostics?.jitter_ms)],
-              ["Perda", formatPercent(networkDiagnostics?.packet_loss_percent)],
             ]}
-            footer={networkDiagnostics?.recommendations?.join(" / ") ?? "Aguardando leitura real do Windows."}
+            footer={`Leitura pontual do adaptador (para as acoes abaixo) - ping/jitter/perda ao vivo ficam na Telemetria. ${networkDiagnostics?.recommendations?.join(" / ") ?? ""}`}
           />
           <DiagnosticsPanel
             icon={<BatteryCharging className="h-4 w-4 text-cyan-300" />}
@@ -1269,16 +1266,6 @@ function errorMessage(error: unknown) {
 function formatMinutesLabel(seconds: number) {
   const minutes = Math.max(0, Math.round(seconds / 60));
   return `${minutes} min`;
-}
-
-function formatMs(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return "--";
-  return `${Math.round(value)} ms`;
-}
-
-function formatPercent(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return "--";
-  return `${Math.round(value)}%`;
 }
 
 function formatClock(current?: number | null, max?: number | null) {

@@ -61,6 +61,7 @@ export const translations = {
       currentPlan: "plano atual",
       becomePro: "Assinar Pro",
       session: "sessao",
+      viewAccount: "Ver conta",
     },
     dashboard: {
       eyebrow: "sistema sincronizado",
@@ -89,9 +90,8 @@ export const translations = {
       cpuTempDetail: "sensor ACPI/sistema quando exposto",
       gpuTemp: "Temp. GPU",
       diskUsage: "Disco",
+      openDiskExplorer: "ver no Explorador de Disco",
       vramTotal: "VRAM total",
-      idleState: "Inatividade",
-      noActiveWindow: "janela ativa indisponivel",
       optimizationStatus: "Estado",
       activeProfileValue: "perfil {{profile}}",
       localTelemetry: "Telemetria local ativa",
@@ -154,6 +154,7 @@ export const translations = {
       uptime: "Uptime",
       activeWindow: "Janela ativa",
       fallbackGpu: "GPU",
+      openDiskExplorer: "Ver no Explorador de Disco",
     },
     insights: {
       eyebrow: "analise inteligente",
@@ -465,6 +466,7 @@ export const translations = {
       currentPlan: "current plan",
       becomePro: "Become Pro",
       session: "session",
+      viewAccount: "View account",
     },
     dashboard: {
       eyebrow: "system synchronized",
@@ -493,9 +495,8 @@ export const translations = {
       cpuTempDetail: "ACPI/system sensor when exposed",
       gpuTemp: "GPU temp",
       diskUsage: "Disk",
+      openDiskExplorer: "view in Disk Explorer",
       vramTotal: "total VRAM",
-      idleState: "Idle",
-      noActiveWindow: "active window unavailable",
       optimizationStatus: "Status",
       activeProfileValue: "profile {{profile}}",
       localTelemetry: "Local telemetry active",
@@ -558,6 +559,7 @@ export const translations = {
       uptime: "Uptime",
       activeWindow: "Active window",
       fallbackGpu: "GPU",
+      openDiskExplorer: "View in Disk Explorer",
     },
     insights: {
       eyebrow: "smart analysis",
