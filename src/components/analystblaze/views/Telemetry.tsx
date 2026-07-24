@@ -431,14 +431,10 @@ export function Telemetry({
               <FrameTile label={t("telemetry.lastFrame")} value={age == null ? "--" : `${age}s`} />
             </div>
 
-            <div className="mt-4 rounded-xl border border-emerald-400/15 bg-emerald-400/10 px-3 py-2">
-              <div className="font-mono text-[10px] uppercase tracking-widest text-emerald-200">
-                {t("telemetry.localOnly")}
-              </div>
-              <div className="mt-1 text-xs leading-relaxed text-emerald-100/75">
-                {t("telemetry.backendStorageOff")}
-              </div>
-            </div>
+            {/* D2: "Local Only" indicator removed from the surface. It was static copy
+                ("local only" / "realtime frames are not stored in the backend") fed by no
+                JS state; its translation keys (telemetry.localOnly / backendStorageOff)
+                were removed as orphaned — re-add them if this gets repositioned. */}
 
             <div className="mt-5 flex flex-col gap-2">
               <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500">
@@ -458,12 +454,8 @@ export function Telemetry({
           <div className="flex items-center gap-2">
             <Video className="h-3.5 w-3.5 text-cyan-300" />
             <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Modo Live</h2>
-            {liveModeActive && (
-              <span className="inline-flex items-center gap-1 rounded-md border border-emerald-400/40 bg-emerald-500/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-emerald-200">
-                <span className="h-1 w-1 animate-pulse rounded-full bg-emerald-300" />
-                ativo
-              </span>
-            )}
+            {/* D2: "Modo Live ativo" badge removed from the surface. Fed by `liveModeActive`
+                state (still live below, e.g. the toggle button and live-mode panels). */}
           </div>
           <button
             role="switch"
