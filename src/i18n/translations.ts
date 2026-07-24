@@ -215,6 +215,7 @@ export const translations = {
       confirmDelete: "Confirmar exclusao",
       confirmDeletePermanent: "Apagar permanentemente",
       permanentWarning: "Item muito grande ({{size}}) - sera apagado direto, sem passar pela quarentena. Nao da pra desfazer.",
+      deleting: "Apagando...",
       deleteSuccess: "{{name}} movido para a quarentena local.",
     },
     controls: {
@@ -617,6 +618,7 @@ export const translations = {
       confirmDelete: "Confirm delete",
       confirmDeletePermanent: "Delete permanently",
       permanentWarning: "Item too large ({{size}}) - it will be deleted directly, skipping quarantine. This can't be undone.",
+      deleting: "Deleting...",
       deleteSuccess: "{{name}} moved to local quarantine.",
     },
     controls: {

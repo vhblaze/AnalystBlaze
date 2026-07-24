@@ -90,6 +90,7 @@ export function DiskExplorer({
 
   const [sortBy, setSortBy] = useState<"size" | "name">("size");
   const [confirmingDeletePath, setConfirmingDeletePath] = useState<string | null>(null);
+  const [pendingDeletePath, setPendingDeletePath] = useState<string | null>(null);
   const [deletingPaths, setDeletingPaths] = useState<Set<string>>(new Set());
   const [actionMessage, setActionMessage] = useState<string | null>(null);
 
@@ -170,6 +171,11 @@ export function DiskExplorer({
   const deleteItem = async (item: DiskTreeNodeSummary) => {
     setConfirmingDeletePath(null);
     setActionMessage(null);
+    // A large folder's permanent delete (fs::remove_dir_all over tens of
+    // GB / hundreds of thousands of small files, e.g. a cargo target dir)
+    // can take real time - show the row as actively deleting right away
+    // instead of leaving it looking unresponsive until the promise settles.
+    setPendingDeletePath(item.path);
     try {
       const result = await deleteDiskUsageItem(item.path);
       const outcome = result as { success?: boolean; message?: string } | undefined;
@@ -196,6 +202,8 @@ export function DiskExplorer({
       }, DELETE_ANIMATION_MS);
     } catch (error) {
       setActionMessage(errorMessage(error));
+    } finally {
+      setPendingDeletePath((current) => (current === item.path ? null : current));
     }
   };
 
@@ -369,11 +377,16 @@ export function DiskExplorer({
                 {sortedChildren.map((item) => {
                   const permanent = item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES;
                   const deleting = deletingPaths.has(item.path);
+                  const pending = pendingDeletePath === item.path;
                   return (
                   <div
                     key={item.path}
                     className={`flex flex-col gap-2 bg-slate-950/30 px-3 py-2.5 text-sm transition-all duration-200 ease-in ${
-                      deleting ? "-translate-x-2 scale-[0.98] opacity-0" : "translate-x-0 scale-100 opacity-100"
+                      deleting
+                        ? "-translate-x-2 scale-[0.98] opacity-0"
+                        : pending
+                          ? "translate-x-0 scale-100 opacity-60"
+                          : "translate-x-0 scale-100 opacity-100"
                     }`}
                     style={deleting ? { maxHeight: 0, paddingTop: 0, paddingBottom: 0, overflow: "hidden" } : undefined}
                   >
@@ -404,7 +417,12 @@ export function DiskExplorer({
                       {formatBytes(item.sizeBytes)}
                     </span>
                     {item.actionable &&
-                      (confirmingDeletePath === item.path ? (
+                      (pending ? (
+                        <span className="flex shrink-0 items-center gap-1.5 rounded-md border border-rose-400/30 bg-rose-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-rose-200">
+                          <RefreshCw className="h-3 w-3 animate-spin" />
+                          {t("diskExplorer.deleting")}
+                        </span>
+                      ) : confirmingDeletePath === item.path ? (
                         <div className="flex shrink-0 items-center gap-1">
                           <button
                             onClick={() => void deleteItem(item)}
