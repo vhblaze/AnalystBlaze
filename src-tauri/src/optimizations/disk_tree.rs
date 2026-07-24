@@ -1,8 +1,9 @@
+use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -116,15 +117,22 @@ pub struct DiskTree {
     root: TreeNode,
 }
 
+/// Filesystem walks are I/O-bound (mostly waiting on `stat`/`read_dir`
+/// syscalls, not CPU), so splitting work across threads overlaps that wait
+/// time instead of doing it serially - this is the same reason WizTree-
+/// alternative tools like `dust`/`dua-cli` parallelize their conventional
+/// walk. `should_continue` below is called concurrently from every worker,
+/// so every counter is atomic; there is no `&mut self` anywhere in here.
 struct Scanner {
     app: AppHandle,
     cancel: Arc<AtomicBool>,
-    node_count: usize,
-    dir_count: usize,
-    file_count: usize,
-    last_emit: Instant,
-    canceled: bool,
-    capped: bool,
+    node_count: AtomicUsize,
+    dir_count: AtomicUsize,
+    file_count: AtomicUsize,
+    started: Instant,
+    last_emit_millis: AtomicU64,
+    canceled: AtomicBool,
+    capped: AtomicBool,
 }
 
 impl Scanner {
@@ -132,38 +140,48 @@ impl Scanner {
         Self {
             app,
             cancel,
-            node_count: 0,
-            dir_count: 0,
-            file_count: 0,
-            last_emit: Instant::now() - PROGRESS_EMIT_INTERVAL,
-            canceled: false,
-            capped: false,
+            node_count: AtomicUsize::new(0),
+            dir_count: AtomicUsize::new(0),
+            file_count: AtomicUsize::new(0),
+            started: Instant::now(),
+            last_emit_millis: AtomicU64::new(0),
+            canceled: AtomicBool::new(false),
+            capped: AtomicBool::new(false),
         }
     }
 
-    /// Called once per node (file or directory) visited - cheap enough
-    /// (an atomic load plus an occasional event emit) to check on every
-    /// entry rather than only when descending into directories, so
-    /// cancel stays responsive even inside one huge flat folder.
-    fn should_continue(&mut self, current_path: &str) -> bool {
-        if self.canceled {
+    /// Called once per node (file or directory) visited, from any worker
+    /// thread - cheap enough (a few atomic ops, an occasional event emit
+    /// only for whichever thread wins the CAS) to check on every entry
+    /// rather than only when descending into directories, so cancel stays
+    /// responsive even inside one huge flat folder.
+    fn should_continue(&self, current_path: &str) -> bool {
+        if self.canceled.load(Ordering::Relaxed) {
             return false;
         }
         if self.cancel.load(Ordering::Relaxed) {
-            self.canceled = true;
+            self.canceled.store(true, Ordering::Relaxed);
             return false;
         }
-        if self.node_count >= NODE_CAP {
-            self.capped = true;
+        let count = self.node_count.load(Ordering::Relaxed);
+        if count >= NODE_CAP {
+            self.capped.store(true, Ordering::Relaxed);
             return false;
         }
-        if self.last_emit.elapsed() >= PROGRESS_EMIT_INTERVAL {
-            self.last_emit = Instant::now();
+        let now = self.started.elapsed().as_millis() as u64;
+        let last = self.last_emit_millis.load(Ordering::Relaxed);
+        let interval = PROGRESS_EMIT_INTERVAL.as_millis() as u64;
+        if now.saturating_sub(last) >= interval
+            && self
+                .last_emit_millis
+                .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
             let _ = self.app.emit(
                 DISK_TREE_PROGRESS_EVENT,
                 DiskTreeProgress {
                     current_path: current_path.to_string(),
-                    scanned_nodes: self.node_count,
+                    scanned_nodes: count,
                     done: false,
                 },
             );
@@ -176,7 +194,7 @@ impl Scanner {
             DISK_TREE_PROGRESS_EVENT,
             DiskTreeProgress {
                 current_path: "done".to_string(),
-                scanned_nodes: self.node_count,
+                scanned_nodes: self.node_count.load(Ordering::Relaxed),
                 done: true,
             },
         );
@@ -203,19 +221,19 @@ fn scan_disk_tree_blocking(
     root_path: PathBuf,
 ) -> (DiskTree, DiskTreeScanSummary) {
     let started = Instant::now();
-    let mut scanner = Scanner::new(app, cancel);
-    let root_node = build_node(&mut scanner, &root_path);
+    let scanner = Scanner::new(app, cancel);
+    let root_node = build_node(&scanner, &root_path);
     scanner.emit_done();
 
     let summary = DiskTreeScanSummary {
         root: root_path.display().to_string(),
         total_size_bytes: root_node.size_bytes,
-        dir_count: scanner.dir_count,
-        file_count: scanner.file_count,
+        dir_count: scanner.dir_count.load(Ordering::Relaxed),
+        file_count: scanner.file_count.load(Ordering::Relaxed),
         scanned_at: chrono::Utc::now().timestamp(),
         duration_ms: started.elapsed().as_millis() as u64,
-        canceled: scanner.canceled,
-        capped: scanner.capped,
+        canceled: scanner.canceled.load(Ordering::Relaxed),
+        capped: scanner.capped.load(Ordering::Relaxed),
     };
 
     (
@@ -227,7 +245,7 @@ fn scan_disk_tree_blocking(
     )
 }
 
-fn build_node(scanner: &mut Scanner, path: &Path) -> TreeNode {
+fn build_node(scanner: &Scanner, path: &Path) -> TreeNode {
     let metadata = fs::symlink_metadata(path).ok();
     // Reparse points (symlinks and NTFS junctions/mount points) are
     // treated as non-directories to avoid cycles - see module docs.
@@ -243,11 +261,11 @@ fn build_node(scanner: &mut Scanner, path: &Path) -> TreeNode {
     let protected = is_protected_app(&label);
     let path_str = path.display().to_string();
 
-    scanner.node_count += 1;
+    scanner.node_count.fetch_add(1, Ordering::Relaxed);
     if is_dir {
-        scanner.dir_count += 1;
+        scanner.dir_count.fetch_add(1, Ordering::Relaxed);
     } else {
-        scanner.file_count += 1;
+        scanner.file_count.fetch_add(1, Ordering::Relaxed);
     }
 
     if !scanner.should_continue(&path_str) || !is_dir {
@@ -260,19 +278,27 @@ fn build_node(scanner: &mut Scanner, path: &Path) -> TreeNode {
         };
     }
 
-    let mut children = HashMap::new();
-    let mut total = 0u64;
-    if let Ok(entries) = fs::read_dir(path) {
-        for entry in entries.flatten() {
-            if scanner.canceled || scanner.capped {
-                break;
+    let entries: Vec<PathBuf> = fs::read_dir(path)
+        .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
+        .unwrap_or_default();
+
+    // Each child subtree is built independently and only merged here, so
+    // this recursion is a natural fit for rayon's work-stealing pool -
+    // no shared mutable state besides the Scanner's atomics.
+    let children_vec: Vec<(String, TreeNode)> = entries
+        .into_par_iter()
+        .filter_map(|child_path| {
+            if scanner.canceled.load(Ordering::Relaxed) || scanner.capped.load(Ordering::Relaxed) {
+                return None;
             }
-            let child_name = entry.file_name().to_string_lossy().to_string();
-            let child_node = build_node(scanner, &entry.path());
-            total += child_node.size_bytes;
-            children.insert(child_name, child_node);
-        }
-    }
+            let child_name = child_path.file_name()?.to_string_lossy().to_string();
+            let child_node = build_node(scanner, &child_path);
+            Some((child_name, child_node))
+        })
+        .collect();
+
+    let total = children_vec.iter().map(|(_, node)| node.size_bytes).sum();
+    let children: HashMap<String, TreeNode> = children_vec.into_iter().collect();
 
     TreeNode {
         size_bytes: total,
