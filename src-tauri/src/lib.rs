@@ -50,6 +50,11 @@ struct AgentState {
     /// Set while a scan is in flight so cancel_disk_usage_scan has
     /// something to signal; cleared when the scan finishes either way.
     disk_usage_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    /// Set while a disk-tree directory listing is in flight (D6 "Explorador
+    /// de Disco") so cancel_disk_tree_scan has something to signal; cleared
+    /// when the listing finishes either way. Nothing about the listing
+    /// itself is cached here - see disk_tree::list_directory's docs on why.
+    disk_tree_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
     /// Rolling ~10 minute window of network samples collected only while
     /// Modo Live is active - see spawn_live_mode_loop.
     live_mode_samples: Mutex<std::collections::VecDeque<telemetry::live_mode::LiveModeSample>>,
@@ -517,6 +522,55 @@ async fn delete_disk_usage_item(path: String) -> Result<optimizations::Execution
         Some(serde_json::json!({ "path": path })),
     )
     .await)
+}
+
+#[tauri::command]
+fn list_disk_volumes() -> Vec<optimizations::disk_tree::DiskVolumeInfo> {
+    optimizations::disk_tree::list_volumes()
+}
+
+/// Lists `path`'s immediate children with sizes computed on the spot (D6
+/// "Explorador de Disco"). Deliberately not cached in AgentState - a
+/// whole-drive tree held in memory for the app's lifetime is what made the
+/// feature keep eating RAM after the scan finished and even after leaving
+/// the screen. Every navigation re-asks the filesystem instead.
+#[tauri::command]
+async fn list_disk_directory(
+    path: String,
+    state: State<'_, AgentState>,
+    app: AppHandle,
+) -> Result<Vec<optimizations::disk_tree::DiskTreeNodeSummary>, String> {
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    {
+        let mut guard = state
+            .disk_tree_cancel
+            .lock()
+            .map_err(|_| "Estado do agente bloqueado.".to_string())?;
+        *guard = Some(cancel.clone());
+    }
+
+    let result = optimizations::disk_tree::list_directory(app, cancel, path).await;
+
+    if let Ok(mut guard) = state.disk_tree_cancel.lock() {
+        *guard = None;
+    }
+
+    result
+}
+
+#[tauri::command]
+async fn cancel_disk_tree_scan(state: State<'_, AgentState>) -> Result<bool, String> {
+    let guard = state
+        .disk_tree_cancel
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?;
+    match guard.as_ref() {
+        Some(cancel) => {
+            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(true)
+        }
+        None => Ok(false),
+    }
 }
 
 const LIVE_MODE_SAMPLE_EVENT: &str = "live-mode-sample";
@@ -1423,6 +1477,7 @@ pub fn run() {
         plan_sync_error: Mutex::new(None),
         disk_usage_cache: Mutex::new(None),
         disk_usage_cancel: Mutex::new(None),
+        disk_tree_cancel: Mutex::new(None),
         live_mode_samples: Mutex::new(std::collections::VecDeque::new()),
         live_mode_cancel: Mutex::new(None),
         live_mode_last_incident: Mutex::new(None),
@@ -1540,6 +1595,9 @@ pub fn run() {
             disk_usage_summary,
             cancel_disk_usage_scan,
             delete_disk_usage_item,
+            list_disk_volumes,
+            list_disk_directory,
+            cancel_disk_tree_scan,
             detect_live_mode_streaming_app,
             start_live_mode,
             stop_live_mode,

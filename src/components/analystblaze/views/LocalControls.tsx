@@ -1,17 +1,14 @@
-import { BatteryCharging, BookOpen, Briefcase, Download, FileWarning, Film, Gamepad2, Gauge, HardDrive, History, ListChecks, PhoneCall, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench, X } from "lucide-react";
+import { BatteryCharging, Gamepad2, Gauge, History, ListChecks, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { canUseAutomaticGameMode, canUsePaidGameMode } from "@/hooks/useAuth";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
   addProtectedApp,
-  cancelDiskUsageScan,
-  deleteDiskUsageItem,
   getLocalAiPolicy,
   getAuditLog,
   getActiveFocusSession,
-  getDiskUsageSummary,
   getEnergyDiagnostics,
   getActiveGameModeSession,
   getNetworkDiagnostics,
@@ -23,7 +20,6 @@ import {
   installPrivilegedHelper,
   isTauriRuntime,
   listNetworkAdapters,
-  listenToDiskUsageProgress,
   listenToGameModeUsage,
   restartPrivilegedHelper,
   runPerformanceScan,
@@ -37,11 +33,7 @@ import {
   type AuditEvent,
   type AgentStatus,
   type CleanupCategory,
-  type DiskUsageCategory,
-  type DiskUsageProgress,
-  type DiskUsageSummary,
   type EnergyDiagnostics,
-  type FocusModeProfile,
   type FocusSession,
   type GameModeSession,
   type GameModeUsage,
@@ -61,7 +53,6 @@ export function LocalControls({
   automaticGameModeAllowed,
   busy,
   onActivateGameMode,
-  onActivateFocusMode,
   onRestoreOptimizations,
   onDisableStartup,
   onRestoreStartup,
@@ -73,7 +64,6 @@ export function LocalControls({
   onDeepCleanTemp,
   onPurgeCleanup,
   onRestoreGameMode,
-  onRestoreFocusMode,
   onApplyPcCleanFast,
   onRestorePerformanceSession,
   onApplyCleanupCategory,
@@ -82,14 +72,11 @@ export function LocalControls({
   onFlushDnsCache,
   onSetDnsServers,
   onResetWinsockCatalog,
-  focusDiskUsage,
-  onDiskUsageFocused,
 }: {
   status: AgentStatus | null;
   automaticGameModeAllowed?: boolean;
   busy: boolean;
   onActivateGameMode: () => Promise<unknown>;
-  onActivateFocusMode: (profile: FocusModeProfile) => Promise<unknown>;
   onRestoreOptimizations: () => Promise<unknown>;
   onDisableStartup: (name: string, location?: string | null) => Promise<unknown>;
   onRestoreStartup: (name?: string | null) => Promise<unknown>;
@@ -101,7 +88,6 @@ export function LocalControls({
   onDeepCleanTemp: () => Promise<unknown>;
   onPurgeCleanup: () => Promise<unknown>;
   onRestoreGameMode: () => Promise<unknown>;
-  onRestoreFocusMode: () => Promise<unknown>;
   onApplyPcCleanFast: () => Promise<unknown>;
   onRestorePerformanceSession: (sessionId?: string | null) => Promise<unknown>;
   onApplyCleanupCategory: (category: string, mode?: string | null) => Promise<unknown>;
@@ -110,10 +96,6 @@ export function LocalControls({
   onFlushDnsCache: () => Promise<unknown>;
   onSetDnsServers: (adapterName: string, dnsServers: string[]) => Promise<unknown>;
   onResetWinsockCatalog: () => Promise<unknown>;
-  /** Set (transiently) when the user navigated here from an Insights card
-   * asking to see disk-usage details - triggers a scan/scroll on arrival. */
-  focusDiskUsage?: boolean;
-  onDiskUsageFocused?: () => void;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("local_controls");
@@ -137,14 +119,6 @@ export function LocalControls({
   const [performanceReport, setPerformanceReport] = useState<PerformanceReport | null>(null);
   const [cleanupCategories, setCleanupCategories] = useState<CleanupCategory[]>([]);
   const [startupImpact, setStartupImpact] = useState<StartupImpact[]>([]);
-  const [diskUsageSummary, setDiskUsageSummary] = useState<DiskUsageSummary | null>(null);
-  const [diskUsageBusy, setDiskUsageBusy] = useState(false);
-  const [diskUsageError, setDiskUsageError] = useState<string | null>(null);
-  const [diskUsageProgress, setDiskUsageProgress] = useState<DiskUsageProgress | null>(null);
-  const [confirmingDeletePath, setConfirmingDeletePath] = useState<string | null>(null);
-  const [diskUsageMinSizeBytes, setDiskUsageMinSizeBytes] = useState(0);
-  const [diskUsageSortBy, setDiskUsageSortBy] = useState<"size" | "date">("size");
-  const diskUsageSectionRef = useRef<HTMLElement | null>(null);
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [performanceBusy, setPerformanceBusy] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
@@ -186,7 +160,6 @@ export function LocalControls({
       ? "PC limpo/rapido"
       : "Monitorando";
   const gameModeTargetLabel = activeGameModeSession?.targetProcessName ?? performanceReport?.metrics.gameProcess ?? "Sem jogo detectado";
-  const activeFocusLabel = activeFocusSession?.label ?? "Sem foco ativo";
 
   const visibleStartupApps = useMemo(
     () => inventory.startup_apps.filter((app) => app.risk === "safe").slice(0, 8),
@@ -207,14 +180,6 @@ export function LocalControls({
   useEffect(() => {
     setActiveFocusSession(status?.focus_session ?? null);
   }, [status?.focus_session]);
-
-  useEffect(() => {
-    let dispose: (() => void) | undefined;
-    listenToDiskUsageProgress((progress) => setDiskUsageProgress(progress)).then((next) => {
-      dispose = next;
-    });
-    return () => dispose?.();
-  }, []);
 
   useEffect(() => {
     if (paidGameModeAllowed) {
@@ -324,60 +289,6 @@ export function LocalControls({
       setPerformanceBusy(false);
     }
   };
-
-  const scanDiskUsage = async (forceRefresh: boolean) => {
-    setDiskUsageBusy(true);
-    setDiskUsageError(null);
-    setDiskUsageProgress(null);
-    try {
-      const summary = await getDiskUsageSummary(forceRefresh);
-      setDiskUsageSummary(summary);
-      track("disk_usage_scanned", { forceRefresh, canceled: summary.canceled });
-    } catch (error) {
-      setDiskUsageError(errorMessage(error));
-    } finally {
-      setDiskUsageBusy(false);
-    }
-  };
-
-  const cancelDiskScan = async () => {
-    try {
-      await cancelDiskUsageScan();
-    } catch (error) {
-      setDiskUsageError(errorMessage(error));
-    }
-  };
-
-  const deleteDiskItem = async (category: DiskUsageCategory, item: DiskUsageCategory["items"][number]) => {
-    setConfirmingDeletePath(null);
-    setActionMessage(null);
-    try {
-      const result = item.deletesViaCleanupCategory
-        ? await onApplyCleanupCategory(item.path, item.path === "cleanup_quarantine" ? "purge" : "safe")
-        : await deleteDiskUsageItem(item.path);
-      const outcome = result as { success?: boolean; message?: string } | undefined;
-      setActionMessage(
-        outcome && outcome.success === false && outcome.message
-          ? outcome.message
-          : `${item.label} movido para a quarentena local.`,
-      );
-      track("disk_usage_item_deleted", { category: category.kind });
-      await scanDiskUsage(true);
-      await refreshOperationalHistory();
-    } catch (error) {
-      setActionMessage(errorMessage(error));
-    }
-  };
-
-  useEffect(() => {
-    if (!focusDiskUsage) return;
-    diskUsageSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    if (!diskUsageSummary && !diskUsageBusy) {
-      void scanDiskUsage(false);
-    }
-    onDiskUsageFocused?.();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusDiskUsage]);
 
   const addProtected = async () => {
     const name = protectedInput.trim();
@@ -536,31 +447,6 @@ export function LocalControls({
     );
   };
 
-  const activateFocus = async (profile: FocusModeProfile) => {
-    await runControlAction(
-      async () => {
-        const result = await onActivateFocusMode(profile);
-        if (result === false) return false;
-        const nextFocusSession = await getActiveFocusSession();
-        setActiveFocusSession(nextFocusSession);
-        await refreshOperationalHistory();
-      },
-      "Modo Foco ativado.",
-    );
-  };
-
-  const deactivateFocus = async () => {
-    await runControlAction(
-      async () => {
-        const result = await onRestoreFocusMode();
-        if (result === false) return false;
-        setActiveFocusSession(null);
-        await refreshOperationalHistory();
-      },
-      "Modo Foco restaurado.",
-    );
-  };
-
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
@@ -665,60 +551,15 @@ export function LocalControls({
           <SummaryTile label="Restauracao" value={hasPendingRestore ? "Disponivel" : "Limpa"} detail={helperStatus?.running ? "Helper rodando" : "Sem helper ativo"} />
         </div>
 
-        <div className="mt-5 flex flex-col gap-3 border-t border-cyan-500/10 pt-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="min-w-0">
-            <div className="font-mono text-[10px] uppercase tracking-[0.24em] text-cyan-400/70">
-              Modo Foco
-            </div>
-            <div className="mt-1 truncate text-sm font-semibold text-slate-100" title={activeFocusLabel}>
-              {focusModeActive ? activeFocusLabel : "Trabalho, jogo, chamada ou estudo"}
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void activateFocus("work")}
-              className="inline-flex items-center gap-2 rounded-xl border border-sky-400/35 bg-sky-400/10 px-3 py-2 text-xs font-semibold text-sky-100 transition hover:bg-sky-400/15 disabled:opacity-50"
-            >
-              <Briefcase className="h-3.5 w-3.5" />
-              Trabalho
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void activateFocus("game")}
-              className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/35 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
-            >
-              <Gamepad2 className="h-3.5 w-3.5" />
-              Jogo
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void activateFocus("call")}
-              className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/35 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
-            >
-              <PhoneCall className="h-3.5 w-3.5" />
-              Chamada
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void activateFocus("study")}
-              className="inline-flex items-center gap-2 rounded-xl border border-violet-400/35 bg-violet-400/10 px-3 py-2 text-xs font-semibold text-violet-100 transition hover:bg-violet-400/15 disabled:opacity-50"
-            >
-              <BookOpen className="h-3.5 w-3.5" />
-              Estudo
-            </button>
-            {focusModeActive && (
-              <button
-                disabled={busy || !runtimeAvailable}
-                onClick={() => void deactivateFocus()}
-                className="inline-flex items-center gap-2 rounded-xl border border-amber-400/35 bg-amber-400/10 px-3 py-2 text-xs font-semibold text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
-              >
-                <ShieldCheck className="h-3.5 w-3.5" />
-                Restaurar
-              </button>
-            )}
-          </div>
-        </div>
+        {/* D4/D5: "Modo Foco" card removed from the surface. optimizations/focus.rs and
+            the enter/restore Tauri commands are untouched - the adaptive policy engine
+            (telemetry/engine.rs -> ENTER_FOCUS_MODE -> optimizations/mod.rs) can still
+            trigger focus mode automatically on gaming+latency, independent of this UI.
+            activeFocusSession/focusModeActive stay live (feed the "Restauracao" tile
+            above). The card's local wrapper functions (activateFocus/deactivateFocus),
+            activeFocusLabel, and the onActivateFocusMode/onRestoreFocusMode props they
+            called were dead after the removal and were cleaned up in D5 - auth.activateFocus
+            / auth.restoreFocus (useAuth.ts) are untouched and just no longer wired here. */}
       </section>
 
       <AdvancedSection
@@ -849,97 +690,14 @@ export function LocalControls({
         </div>
       </section>
 
-      <section ref={diskUsageSectionRef} className="glass-panel cyber-glow p-6 scroll-mt-6">
-        <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-2">
-            <HardDrive className="h-3.5 w-3.5 text-cyan-300" />
-            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Uso de disco</h2>
-          </div>
-          <div className="flex items-center gap-2">
-            {diskUsageBusy ? (
-              <button
-                onClick={() => void cancelDiskScan()}
-                className="inline-flex items-center gap-2 rounded-xl border border-rose-400/40 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition-all hover:border-rose-300/60"
-              >
-                <X className="h-3.5 w-3.5" />
-                Cancelar analise
-              </button>
-            ) : (
-              <button
-                disabled={!runtimeAvailable}
-                onClick={() => void scanDiskUsage(true)}
-                className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                {diskUsageSummary ? "Analisar novamente" : "Analisar disco"}
-              </button>
-            )}
-          </div>
-        </div>
-        {diskUsageError && <Notice tone="danger" message={diskUsageError} />}
-        {diskUsageBusy && (
-          <div className="mb-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>Analisando disco...</span>
-              <span>{diskUsageProgress?.scannedItems ?? 0} itens verificados</span>
-            </div>
-            <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
-              <div className="h-full w-1/3 animate-pulse rounded-full bg-cyan-400/70" />
-            </div>
-          </div>
-        )}
-        {!diskUsageSummary && !diskUsageBusy && (
-          <p className="text-sm text-slate-400">
-            Analise sob demanda: categoriza jogos, aplicativos, videos, cache, downloads, arquivos grandes e itens de
-            sistema. Nada e excluido sem sua acao explicita.
-          </p>
-        )}
-        {diskUsageSummary && !diskUsageBusy && (
-          <>
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <p className="text-xs text-slate-500">
-                Ultima analise ha {formatTimeAgo(diskUsageSummary.scannedAt)}
-                {diskUsageSummary.canceled ? " - cancelada, resultado parcial" : ""}.
-              </p>
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  value={diskUsageMinSizeBytes}
-                  onChange={(event) => setDiskUsageMinSizeBytes(Number(event.target.value))}
-                  className="h-9 rounded-lg border border-cyan-500/20 bg-slate-950/60 px-2 text-xs text-slate-200 outline-none focus:border-cyan-300/60"
-                >
-                  <option value={0}>Qualquer tamanho</option>
-                  <option value={100 * 1024 * 1024}>Acima de 100 MB</option>
-                  <option value={500 * 1024 * 1024}>Acima de 500 MB</option>
-                  <option value={1024 * 1024 * 1024}>Acima de 1 GB</option>
-                  <option value={5 * 1024 * 1024 * 1024}>Acima de 5 GB</option>
-                </select>
-                <select
-                  value={diskUsageSortBy}
-                  onChange={(event) => setDiskUsageSortBy(event.target.value as "size" | "date")}
-                  className="h-9 rounded-lg border border-cyan-500/20 bg-slate-950/60 px-2 text-xs text-slate-200 outline-none focus:border-cyan-300/60"
-                >
-                  <option value="size">Ordenar por tamanho</option>
-                  <option value="date">Ordenar por data</option>
-                </select>
-              </div>
-            </div>
-            <div className="grid gap-3 md:grid-cols-2">
-              {diskUsageSummary.categories.map((category) => (
-                <DiskUsageCategoryPanel
-                  key={category.kind}
-                  category={category}
-                  disabled={busy || diskUsageBusy}
-                  confirmingDeletePath={confirmingDeletePath}
-                  onRequestDelete={setConfirmingDeletePath}
-                  onConfirmDelete={(item) => void deleteDiskItem(category, item)}
-                  minSizeBytes={diskUsageMinSizeBytes}
-                  sortBy={diskUsageSortBy}
-                />
-              ))}
-            </div>
-          </>
-        )}
-      </section>
+      {/* D6: the curated-category disk-usage panel (Games/Apps/Videos/Cache/
+          Downloads/LargeFiles/System) that lived here moved to its own nav
+          item, "Disco" (views/DiskExplorer.tsx) - a full all-files scan with
+          treemap + tree browsing, WizTree-style, replacing this capped view
+          rather than duplicating it. deleteDiskUsageItem (now validated by a
+          broader denylist, see disk_usage.rs) is reused as-is by the new
+          screen. disk_usage.rs's categorized scan/commands are untouched on
+          the backend in case this curated view is wanted back later. */}
 
       <section className="glass-panel cyber-glow p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
@@ -1553,17 +1311,6 @@ function formatBytes(bytes?: number | null) {
   return `${(mb / 1024).toFixed(1)} GB`;
 }
 
-function formatTimeAgo(unixSeconds: number): string {
-  const deltaSeconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
-  if (deltaSeconds < 60) return "poucos segundos";
-  const minutes = Math.floor(deltaSeconds / 60);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h`;
-  const days = Math.floor(hours / 24);
-  return `${days} d`;
-}
-
 function powerSourceLabel(value?: string | null) {
   if (value === "ac") return "tomada";
   if (value === "battery") return "bateria";
@@ -1634,125 +1381,6 @@ function ActionList({
         </div>
       )}
     </div>
-  );
-}
-
-function diskUsageCategoryIcon(kind: DiskUsageCategory["kind"]) {
-  switch (kind) {
-    case "games":
-      return <Gamepad2 className="h-4 w-4 text-cyan-300" />;
-    case "apps":
-      return <Briefcase className="h-4 w-4 text-cyan-300" />;
-    case "videos":
-      return <Film className="h-4 w-4 text-cyan-300" />;
-    case "cache":
-      return <ListChecks className="h-4 w-4 text-cyan-300" />;
-    case "downloads":
-      return <Download className="h-4 w-4 text-cyan-300" />;
-    case "large_files":
-      return <FileWarning className="h-4 w-4 text-cyan-300" />;
-    case "system":
-      return <Shield className="h-4 w-4 text-cyan-300" />;
-    default:
-      return <HardDrive className="h-4 w-4 text-cyan-300" />;
-  }
-}
-
-function DiskUsageCategoryPanel({
-  category,
-  disabled,
-  confirmingDeletePath,
-  onRequestDelete,
-  onConfirmDelete,
-  minSizeBytes,
-  sortBy,
-}: {
-  category: DiskUsageCategory;
-  disabled: boolean;
-  confirmingDeletePath: string | null;
-  onRequestDelete: (path: string | null) => void;
-  onConfirmDelete: (item: DiskUsageCategory["items"][number]) => void;
-  minSizeBytes: number;
-  sortBy: "size" | "date";
-}) {
-  const visibleItems = category.items
-    .filter((item) => item.sizeBytes >= minSizeBytes)
-    .slice()
-    .sort((a, b) =>
-      sortBy === "date" ? (b.modifiedAt ?? 0) - (a.modifiedAt ?? 0) : b.sizeBytes - a.sizeBytes,
-    );
-
-  return (
-    <AdvancedSection
-      icon={diskUsageCategoryIcon(category.kind)}
-      title={`${category.label} - ${formatBytes(category.totalBytes)}`}
-      description={
-        category.itemCount === 0
-          ? "Nada encontrado nesta categoria."
-          : `${category.itemCount} item(ns)${category.capped ? " - varredura limitada, pode haver mais" : ""}.`
-      }
-    >
-      {category.items.length === 0 ? (
-        <p className="text-xs text-slate-500">Nada encontrado nesta categoria.</p>
-      ) : visibleItems.length === 0 ? (
-        <p className="text-xs text-slate-500">Nenhum item acima do tamanho filtrado.</p>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {visibleItems.map((item) => (
-            <div key={item.path} className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
-              <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-sm font-medium text-slate-100" title={item.path}>
-                      {item.label}
-                    </span>
-                    {item.protected && (
-                      <span className="shrink-0 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-amber-200">
-                        protegido
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 truncate text-xs text-slate-500">
-                    {formatBytes(item.sizeBytes)}
-                    {item.modifiedAt ? ` - modificado ha ${formatTimeAgo(item.modifiedAt)}` : ""}
-                  </div>
-                </div>
-                {item.actionable && (
-                  <div className="flex shrink-0 gap-2">
-                    {confirmingDeletePath === item.path ? (
-                      <>
-                        <button
-                          disabled={disabled}
-                          onClick={() => onConfirmDelete(item)}
-                          className="rounded-lg border border-rose-400/40 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition-all hover:bg-rose-400/15 disabled:opacity-50"
-                        >
-                          Confirmar exclusao
-                        </button>
-                        <button
-                          disabled={disabled}
-                          onClick={() => onRequestDelete(null)}
-                          className="rounded-lg border border-cyan-500/20 bg-slate-950/60 px-3 py-2 text-xs font-medium text-slate-300 transition-all hover:border-cyan-300/40 disabled:opacity-50"
-                        >
-                          Cancelar
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        disabled={disabled}
-                        onClick={() => onRequestDelete(item.path)}
-                        className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
-                      >
-                        Excluir
-                      </button>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </AdvancedSection>
   );
 }
 

@@ -550,6 +550,31 @@ export type DiskUsageProgress = {
   done: boolean;
 };
 
+export type DiskVolumeInfo = {
+  mountPoint: string;
+  label: string;
+  totalBytes: number;
+  availableBytes: number;
+  fileSystem: string;
+  isRemovable: boolean;
+};
+
+export type DiskTreeNodeSummary = {
+  path: string;
+  name: string;
+  sizeBytes: number;
+  isDir: boolean;
+  modifiedAt?: number | null;
+  protected: boolean;
+  actionable: boolean;
+};
+
+export type DiskTreeProgress = {
+  currentPath: string;
+  scannedNodes: number;
+  done: boolean;
+};
+
 export type StartupImpact = {
   name: string;
   location: string;
@@ -969,6 +994,26 @@ export async function deleteDiskUsageItem(path: string): Promise<OptimizationRes
 export async function listenToDiskUsageProgress(onProgress: (progress: DiskUsageProgress) => void) {
   if (!isTauriRuntime()) return () => undefined;
   return listen<DiskUsageProgress>("disk-usage-scan-progress", (event) => onProgress(event.payload));
+}
+
+export async function listDiskVolumes(): Promise<DiskVolumeInfo[]> {
+  requireTauriRuntime("Explorador de disco");
+  return invoke<DiskVolumeInfo[]>("list_disk_volumes");
+}
+
+export async function listDiskDirectory(path: string): Promise<DiskTreeNodeSummary[]> {
+  requireTauriRuntime("Explorador de disco");
+  return invoke<DiskTreeNodeSummary[]>("list_disk_directory", { path });
+}
+
+export async function cancelDiskTreeScan(): Promise<boolean> {
+  requireTauriRuntime("Explorador de disco");
+  return invoke<boolean>("cancel_disk_tree_scan");
+}
+
+export async function listenToDiskTreeProgress(onProgress: (progress: DiskTreeProgress) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<DiskTreeProgress>("disk-tree-scan-progress", (event) => onProgress(event.payload));
 }
 
 export async function scanStartupImpact(): Promise<StartupImpact[]> {
