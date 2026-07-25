@@ -1,4 +1,4 @@
-import { Activity, ChevronRight, CreditCard, ExternalLink, HardDrive, LayoutDashboard, LogIn, LogOut, Settings, ShieldCheck, Sparkles, UserCog } from "lucide-react";
+import { Activity, ChevronRight, CreditCard, ExternalLink, HardDrive, LayoutDashboard, LogIn, LogOut, Settings, ShieldCheck, Sparkles, UserCog, Wifi } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ViewKey } from "./AppShell";
 import type { User } from "@/hooks/useAuth";
@@ -25,7 +25,8 @@ const items: { key: ViewKey; labelKey: string; icon: typeof Activity; hint: stri
   { key: "insights", labelKey: "nav.insights", icon: Sparkles, hint: "03" },
   { key: "controls", labelKey: "nav.controls", icon: ShieldCheck, hint: "04" },
   { key: "disk", labelKey: "nav.disk", icon: HardDrive, hint: "05" },
-  { key: "settings", labelKey: "nav.settings", icon: Settings, hint: "06" },
+  { key: "network", labelKey: "nav.network", icon: Wifi, hint: "06" },
+  { key: "settings", labelKey: "nav.settings", icon: Settings, hint: "07" },
 ];
 
 const planStyles: Record<string, string> = {

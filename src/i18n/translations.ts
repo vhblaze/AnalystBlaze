@@ -41,6 +41,7 @@ export const translations = {
       insights: "Insights IA",
       controls: "Controles",
       disk: "Disco",
+      network: "Rede",
       settings: "Configuracoes",
     },
     topbar: {
@@ -91,6 +92,7 @@ export const translations = {
       gpuTemp: "Temp. GPU",
       diskUsage: "Disco",
       openDiskExplorer: "ver no Explorador de Disco",
+      openNetwork: "ver em Rede",
       vramTotal: "VRAM total",
       optimizationStatus: "Estado",
       activeProfileValue: "perfil {{profile}}",
@@ -155,6 +157,7 @@ export const translations = {
       activeWindow: "Janela ativa",
       fallbackGpu: "GPU",
       openDiskExplorer: "Ver no Explorador de Disco",
+      openNetwork: "Ver em Rede",
     },
     insights: {
       eyebrow: "analise inteligente",
@@ -220,6 +223,14 @@ export const translations = {
       deleteSuccess: "{{name}} movido para a quarentena local.",
       errorDialogTitle: "Nao foi possivel excluir",
     },
+    network: {
+      eyebrow: "conexao local",
+      title: "Rede",
+      diagnostics: "Diagnostico de rede",
+      diagnosticsFooter: "Leitura pontual do adaptador (para as acoes abaixo) - ping/jitter/perda ao vivo ficam no Modo Live logo abaixo.",
+      adminActions: "Ajustes de rede admin",
+      adminActionsDesc: "Acoes que mexem em DNS e no catalogo Winsock. Troca de DNS e reset de Winsock exigem o helper privilegiado instalado (Controles > Avancado).",
+    },
     controls: {
       eyebrow: "area operacional",
       title: "Controles locais",
@@ -230,7 +241,6 @@ export const translations = {
       restoreCompleted: "Restauracao concluida. Historico local atualizado.",
       protectedAdded: "{{name}} foi adicionado aos apps protegidos.",
       protectedRemoved: "{{name}} foi removido dos apps protegidos.",
-      networkAndPower: "Rede e energia",
       noActiveAdapter: "Nenhum adaptador ativo encontrado",
     },
     settings: {
@@ -446,6 +456,7 @@ export const translations = {
       insights: "AI Insights",
       controls: "Controls",
       disk: "Disk",
+      network: "Network",
       settings: "Settings",
     },
     topbar: {
@@ -496,6 +507,7 @@ export const translations = {
       gpuTemp: "GPU temp",
       diskUsage: "Disk",
       openDiskExplorer: "view in Disk Explorer",
+      openNetwork: "view in Network",
       vramTotal: "total VRAM",
       optimizationStatus: "Status",
       activeProfileValue: "profile {{profile}}",
@@ -560,6 +572,7 @@ export const translations = {
       activeWindow: "Active window",
       fallbackGpu: "GPU",
       openDiskExplorer: "View in Disk Explorer",
+      openNetwork: "View in Network",
     },
     insights: {
       eyebrow: "smart analysis",
@@ -625,6 +638,14 @@ export const translations = {
       deleteSuccess: "{{name}} moved to local quarantine.",
       errorDialogTitle: "Couldn't delete",
     },
+    network: {
+      eyebrow: "local connection",
+      title: "Network",
+      diagnostics: "Network diagnostics",
+      diagnosticsFooter: "Point-in-time adapter reading (context for the actions below) - live ping/jitter/loss live in Modo Live below.",
+      adminActions: "Admin network settings",
+      adminActionsDesc: "Actions that touch DNS and the Winsock catalog. Changing DNS and resetting Winsock require the privileged helper installed (Controls > Advanced).",
+    },
     controls: {
       eyebrow: "operations",
       title: "Local controls",
@@ -635,7 +656,6 @@ export const translations = {
       restoreCompleted: "Restore completed. Local history was refreshed.",
       protectedAdded: "{{name}} was added to protected apps.",
       protectedRemoved: "{{name}} was removed from protected apps.",
-      networkAndPower: "Network and power",
       noActiveAdapter: "No active adapter found",
     },
     settings: {

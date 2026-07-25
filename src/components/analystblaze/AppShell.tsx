@@ -20,13 +20,14 @@ import {
   type RemoteCommandConfirmationRequest,
 } from "@/services/tauri/agent";
 
-export type ViewKey = "dashboard" | "telemetry" | "insights" | "controls" | "disk" | "settings";
+export type ViewKey = "dashboard" | "telemetry" | "insights" | "controls" | "disk" | "network" | "settings";
 
 const Dashboard = lazy(() => import("./views/Dashboard").then((module) => ({ default: module.Dashboard })));
 const Telemetry = lazy(() => import("./views/Telemetry").then((module) => ({ default: module.Telemetry })));
 const Insights = lazy(() => import("./views/Insights").then((module) => ({ default: module.Insights })));
 const LocalControls = lazy(() => import("./views/LocalControls").then((module) => ({ default: module.LocalControls })));
 const DiskExplorer = lazy(() => import("./views/DiskExplorer").then((module) => ({ default: module.DiskExplorer })));
+const Network = lazy(() => import("./views/Network").then((module) => ({ default: module.Network })));
 const Settings = lazy(() => import("./views/Settings").then((module) => ({ default: module.Settings })));
 
 export function AppShell() {
@@ -72,6 +73,7 @@ export function AppShell() {
       insights: t("nav.insights"),
       controls: t("nav.controls"),
       disk: t("nav.disk"),
+      network: t("nav.network"),
       settings: t("nav.settings"),
     }),
     [t],
@@ -88,6 +90,10 @@ export function AppShell() {
   const openDiskUsageDetails = useCallback(() => {
     setFocusDiskUsage(true);
     handleViewChange("disk");
+  }, [handleViewChange]);
+
+  const openNetworkDetails = useCallback(() => {
+    handleViewChange("network");
   }, [handleViewChange]);
 
   const requestConfirmation = useCallback((request: Omit<ConfirmRequest, "resolve" | "id">) => {
@@ -604,6 +610,7 @@ export function AppShell() {
                     );
                   }}
                   onOpenDiskUsage={openDiskUsageDetails}
+                  onOpenNetwork={openNetworkDetails}
                   busy={auth.busy}
                 />
               </Suspense>
@@ -617,6 +624,7 @@ export function AppShell() {
                   onCollectSample={auth.collectSample}
                   onSetTelemetryMode={auth.setTelemetryMode}
                   onOpenDiskUsage={openDiskUsageDetails}
+                  onOpenNetwork={openNetworkDetails}
                 />
               </Suspense>
             ) : view === "insights" ? (
@@ -823,6 +831,20 @@ export function AppShell() {
                       () => auth.restoreDelayedStartup(name),
                     )
                   }
+                />
+              </Suspense>
+            ) : view === "disk" ? (
+              <Suspense fallback={<ViewFallback />}>
+                <DiskExplorer
+                  autoScan={focusDiskUsage}
+                  onAutoScanHandled={() => setFocusDiskUsage(false)}
+                />
+              </Suspense>
+            ) : view === "network" ? (
+              <Suspense fallback={<ViewFallback />}>
+                <Network
+                  busy={auth.busy}
+                  isReady={Boolean(auth.status?.authenticated && auth.status.registered)}
                   onFlushDnsCache={() =>
                     runConfirmed(
                       {
@@ -856,13 +878,6 @@ export function AppShell() {
                       auth.resetWinsock,
                     )
                   }
-                />
-              </Suspense>
-            ) : view === "disk" ? (
-              <Suspense fallback={<ViewFallback />}>
-                <DiskExplorer
-                  autoScan={focusDiskUsage}
-                  onAutoScanHandled={() => setFocusDiskUsage(false)}
                 />
               </Suspense>
             ) : (

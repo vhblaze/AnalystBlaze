@@ -41,6 +41,7 @@ export function Dashboard({
   onRestoreGameMode,
   onApplyPcCleanFast,
   onOpenDiskUsage,
+  onOpenNetwork,
   busy,
 }: {
   user: User | null;
@@ -53,6 +54,8 @@ export function Dashboard({
   /** Navigates to the Disk Explorer - the disk MetricCard is clickable
    * instead of duplicating a mini disk-usage view here. */
   onOpenDiskUsage?: () => void;
+  /** Navigates to the Rede screen - same idea for the latency card. */
+  onOpenNetwork?: () => void;
   busy: boolean;
 }) {
   const { t } = useI18n();
@@ -272,7 +275,7 @@ export function Dashboard({
         <MetricCard icon={Thermometer} label={t("dashboard.gpuTemp")} value={formatTemp(telemetry?.gpu_temperature, telemetry?.gpu_temperature_available)} detail={telemetry ? `${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")} / ${thermalStateLabel(telemetry.thermal_state)}` : t("common.unavailable")} />
         <MetricCard icon={PlugZap} label="Energia" value={formatWatts(telemetry?.watts)} detail={telemetry ? energyDetail(telemetry) : t("common.unavailable")} />
         <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
-        <MetricCard icon={Wifi} label={t("dashboard.latency")} value={telemetry ? formatLatency(telemetry.latency_ms) : "--"} detail={telemetry ? networkDetail(telemetry.network) : t("common.unavailable")} />
+        <MetricCard icon={Wifi} label={t("dashboard.latency")} value={telemetry ? formatLatency(telemetry.latency_ms) : "--"} detail={telemetry ? `${networkDetail(telemetry.network)} - ${t("dashboard.openNetwork")}` : t("common.unavailable")} onClick={onOpenNetwork} />
         <MetricCard icon={ShieldCheck} label={t("dashboard.optimizationStatus")} value={telemetry ? optimizationLabel(telemetry.optimization_status, t) : "--"} detail={telemetry ? profileLabel(telemetry.active_profile, t) : t("common.unavailable")} />
       </div>
     </div>

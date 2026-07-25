@@ -1,4 +1,4 @@
-import { BatteryCharging, Gamepad2, Gauge, History, ListChecks, RefreshCw, Shield, ShieldCheck, Sparkles, Wifi, Wrench } from "lucide-react";
+import { BatteryCharging, Gamepad2, Gauge, History, ListChecks, RefreshCw, Shield, ShieldCheck, Sparkles, Wrench } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { canUseAutomaticGameMode, canUsePaidGameMode } from "@/hooks/useAuth";
@@ -11,7 +11,6 @@ import {
   getActiveFocusSession,
   getEnergyDiagnostics,
   getActiveGameModeSession,
-  getNetworkDiagnostics,
   getOptimizationSnapshots,
   getPrivilegedHelperStatus,
   getProtectedApps,
@@ -19,7 +18,6 @@ import {
   getWindowsInventory,
   installPrivilegedHelper,
   isTauriRuntime,
-  listNetworkAdapters,
   listenToGameModeUsage,
   restartPrivilegedHelper,
   runPerformanceScan,
@@ -38,8 +36,6 @@ import {
   type GameModeSession,
   type GameModeUsage,
   type LocalAiPolicy,
-  type NetworkAdapterSummary,
-  type NetworkDiagnostics,
   type OptimizationSnapshot,
   type PerformanceReport,
   type PrivilegedHelperStatus,
@@ -69,9 +65,6 @@ export function LocalControls({
   onApplyCleanupCategory,
   onDelayStartupApp,
   onRestoreDelayedStartupApp,
-  onFlushDnsCache,
-  onSetDnsServers,
-  onResetWinsockCatalog,
 }: {
   status: AgentStatus | null;
   automaticGameModeAllowed?: boolean;
@@ -93,9 +86,6 @@ export function LocalControls({
   onApplyCleanupCategory: (category: string, mode?: string | null) => Promise<unknown>;
   onDelayStartupApp: (name: string, location?: string | null) => Promise<unknown>;
   onRestoreDelayedStartupApp: (name?: string | null) => Promise<unknown>;
-  onFlushDnsCache: () => Promise<unknown>;
-  onSetDnsServers: (adapterName: string, dnsServers: string[]) => Promise<unknown>;
-  onResetWinsockCatalog: () => Promise<unknown>;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("local_controls");
@@ -110,11 +100,6 @@ export function LocalControls({
   const [gameModeUsage, setGameModeUsage] = useState<GameModeUsage | null>(null);
   const [activeFocusSession, setActiveFocusSession] = useState<FocusSession | null>(status?.focus_session ?? null);
   const [localAiPolicy, setLocalAiPolicy] = useState<LocalAiPolicy | null>(null);
-  const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(null);
-  const [networkAdapters, setNetworkAdapters] = useState<NetworkAdapterSummary[]>([]);
-  const [dnsAdapterName, setDnsAdapterName] = useState("");
-  const [dnsPrimary, setDnsPrimary] = useState("");
-  const [dnsSecondary, setDnsSecondary] = useState("");
   const [energyDiagnostics, setEnergyDiagnostics] = useState<EnergyDiagnostics | null>(null);
   const [performanceReport, setPerformanceReport] = useState<PerformanceReport | null>(null);
   const [cleanupCategories, setCleanupCategories] = useState<CleanupCategory[]>([]);
@@ -173,7 +158,7 @@ export function LocalControls({
   useEffect(() => {
     void refreshWindowsInventory();
     void refreshOperationalHistory();
-    void refreshNetworkAndEnergy();
+    void refreshEnergy();
     void refreshPerformanceSuite();
   }, []);
 
@@ -240,27 +225,14 @@ export function LocalControls({
     }
   };
 
-  const refreshNetworkAndEnergy = async () => {
+  const refreshEnergy = async () => {
     setDiagnosticsBusy(true);
     setDiagnosticsError(null);
     try {
-      const [nextNetwork, nextEnergy, nextAdapters] = await Promise.all([
-        getNetworkDiagnostics(),
-        getEnergyDiagnostics(),
-        listNetworkAdapters(),
-      ]);
-      setNetworkDiagnostics(nextNetwork);
-      setEnergyDiagnostics(nextEnergy);
-      setNetworkAdapters(nextAdapters);
-      setDnsAdapterName((current) => {
-        if (current && nextAdapters.some((adapter) => adapter.name === current)) return current;
-        return nextNetwork.adapter_name ?? nextAdapters[0]?.name ?? "";
-      });
-      track("network_energy_refreshed");
+      setEnergyDiagnostics(await getEnergyDiagnostics());
+      track("energy_refreshed");
     } catch (error) {
-      setNetworkDiagnostics(null);
       setEnergyDiagnostics(null);
-      setNetworkAdapters([]);
       setDiagnosticsError(errorMessage(error));
     } finally {
       setDiagnosticsBusy(false);
@@ -334,7 +306,7 @@ export function LocalControls({
       async () => {
         const result = await onSetPowerPlan(plan);
         if (result === false) return false;
-        await refreshNetworkAndEnergy();
+        await refreshEnergy();
         await refreshOperationalHistory();
       },
       "Plano de energia atualizado.",
@@ -389,30 +361,6 @@ export function LocalControls({
     );
   };
 
-  const runNetworkAction = async (action: () => Promise<unknown>, successMessage: string) => {
-    await runControlAction(
-      async () => {
-        const result = await action();
-        if (result === false) return false;
-        await refreshNetworkAndEnergy();
-        await refreshOperationalHistory();
-      },
-      successMessage,
-    );
-  };
-
-  const applyDnsServers = async () => {
-    const servers = [dnsPrimary, dnsSecondary].map((value) => value.trim()).filter(Boolean);
-    if (!dnsAdapterName || servers.length === 0) {
-      setActionMessage("Selecione um adaptador e informe ao menos um servidor DNS.");
-      return;
-    }
-    await runNetworkAction(
-      () => onSetDnsServers(dnsAdapterName, servers),
-      "Servidores DNS alterados.",
-    );
-  };
-
   const runPerformanceAction = async (action: () => Promise<unknown>, successMessage: string) => {
     await runControlAction(
       async () => {
@@ -440,7 +388,7 @@ export function LocalControls({
         if (result === false) return false;
         setActiveGameModeSession(null);
         await refreshOperationalHistory();
-        await refreshNetworkAndEnergy();
+        await refreshEnergy();
         await refreshPerformanceSuite("after");
       },
       "Modo Gamer desativado.",
@@ -702,12 +650,12 @@ export function LocalControls({
       <section className="glass-panel cyber-glow p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
-            <Wifi className="h-3.5 w-3.5 text-cyan-300" />
-            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("controls.networkAndPower")}</h2>
+            <BatteryCharging className="h-3.5 w-3.5 text-cyan-300" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Energia</h2>
           </div>
           <button
             disabled={diagnosticsBusy}
-            onClick={() => void refreshNetworkAndEnergy()}
+            onClick={() => void refreshEnergy()}
             className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${diagnosticsBusy ? "animate-spin" : ""}`} />
@@ -715,119 +663,40 @@ export function LocalControls({
           </button>
         </div>
         {diagnosticsError && <Notice tone="danger" message={diagnosticsError} />}
-        <div className="grid gap-4 lg:grid-cols-2">
-          <DiagnosticsPanel
-            icon={<Wifi className="h-4 w-4 text-cyan-300" />}
-            title="Diagnostico de rede"
-            rows={[
-              ["Status", networkDiagnostics ? (networkDiagnostics.connected ? "online" : "offline") : "--"],
-              ["Adaptador", networkDiagnostics?.adapter_name ?? "--"],
-              ["Tipo", networkDiagnostics?.adapter_type ?? networkDiagnostics?.adapter_description ?? "--"],
-              ["Link", networkDiagnostics?.link_speed ?? "--"],
-              ["Wi-Fi", networkDiagnostics?.wifi_ssid ? `${networkDiagnostics.wifi_ssid}${networkDiagnostics.wifi_signal_percent != null ? ` - ${Math.round(networkDiagnostics.wifi_signal_percent)}%` : ""}` : "--"],
-            ]}
-            footer={`Leitura pontual do adaptador (para as acoes abaixo) - ping/jitter/perda ao vivo ficam na Telemetria. ${networkDiagnostics?.recommendations?.join(" / ") ?? ""}`}
-          />
-          <DiagnosticsPanel
-            icon={<BatteryCharging className="h-4 w-4 text-cyan-300" />}
-            title="Energia"
-            rows={[
-              ["Plano ativo", energyPlanLabel(energyDiagnostics?.active_scheme_alias, energyDiagnostics?.active_scheme_name)],
-              ["Fonte", powerSourceLabel(energyDiagnostics?.power_source)],
-              ["Bateria", energyDiagnostics?.battery_percent != null ? `${Math.round(energyDiagnostics.battery_percent)}% ${energyDiagnostics.battery_status ?? ""}` : "--"],
-              ["Economia", energyDiagnostics?.battery_saver_on == null ? "--" : energyDiagnostics.battery_saver_on ? "ativa" : "inativa"],
-              ["Clock CPU", formatClock(energyDiagnostics?.cpu_current_clock_mhz, energyDiagnostics?.cpu_max_clock_mhz)],
-              ["Recomendado", energyPlanLabel(energyDiagnostics?.recommended_plan, null)],
-            ]}
-            footer={energyDiagnostics?.recommendations?.join(" / ") ?? "Aguardando leitura real do Windows."}
-            actions={
-              <div className="flex flex-wrap gap-2">
-                <PowerButton disabled={busy || diagnosticsBusy} onClick={() => void applyPowerPlan("balanced")} label="Equilibrado" />
-                <PowerButton disabled={busy || diagnosticsBusy} onClick={() => void applyPowerPlan("high_performance")} label="Desempenho" />
-                <PowerButton disabled={busy || diagnosticsBusy} onClick={() => void applyPowerPlan("power_saver")} label="Economia" />
-                <PowerButton
-                  disabled={busy || diagnosticsBusy}
-                  onClick={() => void runVisualAction(onApplyVisualPerformance, "Efeitos visuais ajustados para desempenho.")}
-                  label="Visual desempenho"
-                />
-                <PowerButton
-                  disabled={busy || diagnosticsBusy}
-                  onClick={() => void runVisualAction(onRestoreVisualPerformance, "Efeitos visuais restaurados.")}
-                  label="Restaurar visual"
-                />
-              </div>
-            }
-          />
-        </div>
-
-        <div className="mt-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-            <Wifi className="h-4 w-4 text-cyan-300" />
-            Ajustes de rede admin
-          </div>
-          <p className="mt-1 text-xs text-slate-500">
-            Acoes que mexem em DNS e no catalogo Winsock. Troca de DNS e reset de Winsock exigem o helper privilegiado instalado.
-          </p>
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              disabled={busy || diagnosticsBusy || !runtimeAvailable}
-              onClick={() => void runNetworkAction(onFlushDnsCache, "Cache de DNS limpo.")}
-              className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
-            >
-              Limpar cache DNS
-            </button>
-            <button
-              disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available}
-              onClick={() => void runNetworkAction(
-                onResetWinsockCatalog,
-                "Catalogo Winsock resetado. Reinicie o computador para concluir.",
-              )}
-              className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
-              title={!helperStatus?.available ? "Instale o helper privilegiado para liberar esta acao." : "Exige reinicializacao do computador."}
-            >
-              Resetar Winsock
-            </button>
-          </div>
-
-          <div className="mt-4 grid gap-2 sm:grid-cols-4">
-            <select
-              value={dnsAdapterName}
-              onChange={(event) => setDnsAdapterName(event.target.value)}
-              disabled={busy || diagnosticsBusy || !runtimeAvailable || networkAdapters.length === 0}
-              className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60 sm:col-span-2 disabled:opacity-50"
-            >
-              {networkAdapters.length === 0 ? (
-                <option value="">{t("controls.noActiveAdapter")}</option>
-              ) : (
-                networkAdapters.map((adapter) => (
-                  <option key={adapter.name} value={adapter.name}>
-                    {adapter.name}
-                  </option>
-                ))
-              )}
-            </select>
-            <input
-              value={dnsPrimary}
-              onChange={(event) => setDnsPrimary(event.target.value)}
-              placeholder="DNS primario (ex: 1.1.1.1)"
-              className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60"
-            />
-            <input
-              value={dnsSecondary}
-              onChange={(event) => setDnsSecondary(event.target.value)}
-              placeholder="DNS secundario (opcional)"
-              className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60"
-            />
-          </div>
-          <button
-            disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available || !dnsAdapterName}
-            onClick={() => void applyDnsServers()}
-            className="mt-3 inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
-            title={!helperStatus?.available ? "Instale o helper privilegiado para liberar esta acao." : undefined}
-          >
-            Aplicar DNS
-          </button>
-        </div>
+        {/* Diagnostico de rede + acoes de DNS/Winsock moved to their own nav
+            item ("Rede", views/Network.tsx) - was scattered between here,
+            Dashboard and Telemetria's Modo Live. Energy stays here since it's
+            not a network concern. */}
+        <DiagnosticsPanel
+          icon={<BatteryCharging className="h-4 w-4 text-cyan-300" />}
+          title="Energia"
+          rows={[
+            ["Plano ativo", energyPlanLabel(energyDiagnostics?.active_scheme_alias, energyDiagnostics?.active_scheme_name)],
+            ["Fonte", powerSourceLabel(energyDiagnostics?.power_source)],
+            ["Bateria", energyDiagnostics?.battery_percent != null ? `${Math.round(energyDiagnostics.battery_percent)}% ${energyDiagnostics.battery_status ?? ""}` : "--"],
+            ["Economia", energyDiagnostics?.battery_saver_on == null ? "--" : energyDiagnostics.battery_saver_on ? "ativa" : "inativa"],
+            ["Clock CPU", formatClock(energyDiagnostics?.cpu_current_clock_mhz, energyDiagnostics?.cpu_max_clock_mhz)],
+            ["Recomendado", energyPlanLabel(energyDiagnostics?.recommended_plan, null)],
+          ]}
+          footer={energyDiagnostics?.recommendations?.join(" / ") ?? "Aguardando leitura real do Windows."}
+          actions={
+            <div className="flex flex-wrap gap-2">
+              <PowerButton disabled={busy || diagnosticsBusy} onClick={() => void applyPowerPlan("balanced")} label="Equilibrado" />
+              <PowerButton disabled={busy || diagnosticsBusy} onClick={() => void applyPowerPlan("high_performance")} label="Desempenho" />
+              <PowerButton disabled={busy || diagnosticsBusy} onClick={() => void applyPowerPlan("power_saver")} label="Economia" />
+              <PowerButton
+                disabled={busy || diagnosticsBusy}
+                onClick={() => void runVisualAction(onApplyVisualPerformance, "Efeitos visuais ajustados para desempenho.")}
+                label="Visual desempenho"
+              />
+              <PowerButton
+                disabled={busy || diagnosticsBusy}
+                onClick={() => void runVisualAction(onRestoreVisualPerformance, "Efeitos visuais restaurados.")}
+                label="Restaurar visual"
+              />
+            </div>
+          }
+        />
       </section>
 
       <section className="glass-panel cyber-glow p-6">
@@ -1001,7 +870,7 @@ export function LocalControls({
                   if (result === false) return false;
                   setActiveGameModeSession(null);
                   await refreshOperationalHistory();
-                  await refreshNetworkAndEnergy();
+                  await refreshEnergy();
                 },
                 "Modo Gamer restaurado.",
               )}
