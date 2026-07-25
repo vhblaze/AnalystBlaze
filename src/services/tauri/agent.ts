@@ -832,6 +832,45 @@ export async function getNetworkDiagnostics(): Promise<NetworkDiagnostics> {
   return invoke<NetworkDiagnostics>("network_diagnostics");
 }
 
+export type TracerouteHop = {
+  hop: number;
+  ip?: string | null;
+  rttMs: [number | null, number | null, number | null];
+  timedOut: boolean;
+};
+
+export type TracerouteResult = {
+  target: string;
+  hops: TracerouteHop[];
+  reachedTarget: boolean;
+};
+
+export async function runNetworkTraceroute(target?: string): Promise<TracerouteResult> {
+  requireTauriRuntime("Diagnostico de rota");
+  return invoke<TracerouteResult>("run_network_traceroute", { target: target ?? null });
+}
+
+export type DnsBenchmarkResult = {
+  label: string;
+  server: string;
+  latencyMs?: number | null;
+  isCurrent: boolean;
+};
+
+export async function benchmarkDnsServers(currentDns: string[]): Promise<DnsBenchmarkResult[]> {
+  requireTauriRuntime("Teste de servidores DNS");
+  return invoke<DnsBenchmarkResult[]>("benchmark_dns_servers", { currentDns });
+}
+
+/** Best-effort, read-only - just an HTTP GET to the gateway's own admin
+ * page to see what it announces (title/Server header). No login, no
+ * credentials, nothing changed. Returns null if the router doesn't answer
+ * on plain HTTP (common for HTTPS-only admin pages). */
+export async function probeGatewayIdentity(gatewayIp: string): Promise<string | null> {
+  requireTauriRuntime("Identificacao do roteador");
+  return invoke<string | null>("probe_gateway_identity", { gatewayIp });
+}
+
 export async function getEnergyDiagnostics(): Promise<EnergyDiagnostics> {
   requireTauriRuntime("Diagnostico real de energia");
   return invoke<EnergyDiagnostics>("energy_diagnostics");

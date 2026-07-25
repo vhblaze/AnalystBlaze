@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::net::UdpSocket;
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use crate::process_ext::{decode_console_bytes, CommandExt};
 
@@ -473,9 +475,281 @@ pub fn best_latency_ms(diagnostics: &NetworkDiagnostics) -> f64 {
         .unwrap_or_default()
 }
 
+// ============================================================
+// Traceroute - hop-by-hop route diagnostics (D "Rede" round 2).
+// Shells out to Windows' own tracert.exe (-d skips reverse DNS,
+// which is both faster and one less thing to sanitize) rather than
+// hand-rolling raw ICMP with TTL manipulation - same call+parse
+// pattern as probe_latency above, just a different command.
+// ============================================================
+
+const TRACEROUTE_MAX_HOPS: u32 = 20;
+const TRACEROUTE_TIMEOUT_MS: u32 = 800;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TracerouteHop {
+    pub hop: u32,
+    pub ip: Option<String>,
+    pub rtt_ms: [Option<f64>; 3],
+    pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TracerouteResult {
+    pub target: String,
+    pub hops: Vec<TracerouteHop>,
+    pub reached_target: bool,
+}
+
+pub fn run_traceroute(raw_target: &str) -> Result<TracerouteResult, String> {
+    let target = sanitize_target(raw_target).ok_or_else(|| "alvo_invalido".to_string())?;
+
+    let output = Command::new("tracert")
+        .args([
+            "-d",
+            "-h",
+            &TRACEROUTE_MAX_HOPS.to_string(),
+            "-w",
+            &TRACEROUTE_TIMEOUT_MS.to_string(),
+            &target,
+        ])
+        .no_window()
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    let stdout = decode_console_bytes(&output.stdout);
+    let hops: Vec<TracerouteHop> = stdout.lines().filter_map(parse_traceroute_line).collect();
+    let reached_target = hops
+        .last()
+        .and_then(|hop| hop.ip.as_deref())
+        .map(|ip| ip == target)
+        .unwrap_or(false);
+
+    Ok(TracerouteResult {
+        target,
+        hops,
+        reached_target,
+    })
+}
+
+fn parse_traceroute_line(line: &str) -> Option<TracerouteHop> {
+    let trimmed = line.trim();
+    let mut tokens = trimmed.split_whitespace().peekable();
+    let hop: u32 = tokens.next()?.parse().ok()?;
+
+    let mut rtts: Vec<Option<f64>> = Vec::with_capacity(3);
+    while rtts.len() < 3 {
+        let Some(&token) = tokens.peek() else { break };
+        if token == "*" {
+            rtts.push(None);
+            tokens.next();
+            continue;
+        }
+        if let Some(stripped) = token.strip_suffix("ms") {
+            if !stripped.is_empty() {
+                rtts.push(stripped.trim_start_matches('<').parse::<f64>().ok());
+                tokens.next();
+                continue;
+            }
+        }
+        let numeric = token.trim_start_matches('<');
+        if !numeric.is_empty() && numeric.chars().all(|ch| ch.is_ascii_digit()) {
+            rtts.push(numeric.parse::<f64>().ok());
+            tokens.next();
+            // consume a separate "ms" token if present
+            if tokens.peek() == Some(&"ms") {
+                tokens.next();
+            }
+            continue;
+        }
+        break;
+    }
+    while rtts.len() < 3 {
+        rtts.push(None);
+    }
+
+    let remainder: String = tokens.collect::<Vec<_>>().join(" ");
+    let lower = remainder.to_ascii_lowercase();
+    let timed_out = lower.contains("timed out")
+        || lower.contains("esgotado")
+        || lower.contains("tempo limite")
+        || remainder.trim().is_empty();
+    let ip = if timed_out {
+        None
+    } else {
+        clean_string(remainder.trim())
+    };
+
+    Some(TracerouteHop {
+        hop,
+        ip,
+        rtt_ms: [rtts[0], rtts[1], rtts[2]],
+        timed_out,
+    })
+}
+
+// ============================================================
+// DNS benchmark - times a real DNS query (not just a ping) against
+// a handful of candidate resolvers plus whatever the adapter is
+// using today, so "which DNS is actually fastest for this network
+// right now" is a measured answer instead of a guess. Hand-rolled
+// minimal DNS-over-UDP query (12-byte header + one question) - the
+// wire format is simple enough that pulling in a full DNS client
+// crate for this one timing probe isn't worth it.
+// ============================================================
+
+const DNS_BENCHMARK_TIMEOUT_MS: u64 = 1500;
+const DNS_BENCHMARK_PROBE_DOMAIN: &str = "www.cloudflare.com";
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DnsBenchmarkResult {
+    pub label: String,
+    pub server: String,
+    pub latency_ms: Option<f64>,
+    pub is_current: bool,
+}
+
+pub fn benchmark_dns_servers(current_dns: &[String]) -> Vec<DnsBenchmarkResult> {
+    let mut candidates: Vec<(String, String)> = vec![
+        ("Cloudflare".to_string(), "1.1.1.1".to_string()),
+        ("Google".to_string(), "8.8.8.8".to_string()),
+        ("Quad9".to_string(), "9.9.9.9".to_string()),
+        ("OpenDNS".to_string(), "208.67.222.222".to_string()),
+    ];
+    for server in current_dns {
+        if sanitize_target(server).is_some()
+            && !candidates.iter().any(|(_, ip)| ip == server)
+        {
+            candidates.push(("Atual (DHCP/manual)".to_string(), server.clone()));
+        }
+    }
+
+    candidates
+        .into_iter()
+        .map(|(label, server)| {
+            let latency_ms = benchmark_one_dns(&server).map(round2);
+            let is_current = current_dns.iter().any(|dns| dns == &server);
+            DnsBenchmarkResult {
+                label,
+                server,
+                latency_ms,
+                is_current,
+            }
+        })
+        .collect()
+}
+
+fn benchmark_one_dns(server_ip: &str) -> Option<f64> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket
+        .set_read_timeout(Some(Duration::from_millis(DNS_BENCHMARK_TIMEOUT_MS)))
+        .ok()?;
+    let id: u16 = 0x4241; // "AB" - arbitrary, only used to match the reply
+    let query = build_dns_query(id, DNS_BENCHMARK_PROBE_DOMAIN);
+    let addr = format!("{server_ip}:53");
+
+    let started = Instant::now();
+    socket.send_to(&query, &addr).ok()?;
+    let mut buf = [0u8; 512];
+    let (len, _from) = socket.recv_from(&mut buf).ok()?;
+    let elapsed = started.elapsed();
+
+    if len < 2 || buf[0] != (id >> 8) as u8 || buf[1] != (id & 0xff) as u8 {
+        return None;
+    }
+    Some(elapsed.as_secs_f64() * 1000.0)
+}
+
+// ============================================================
+// Gateway identity - best-effort, read-only. Just an HTTP GET to the
+// router's own admin page on the LAN to grab whatever it's willing to
+// announce (HTTP Server header or <title>) - no login, no credentials,
+// nothing is ever sent to it besides the request itself. Purely
+// informational; if it doesn't answer (most routers use HTTPS with a
+// self-signed cert, or nothing at all on 80), this just returns None.
+// ============================================================
+
+pub async fn probe_gateway_identity(gateway_ip: &str) -> Option<String> {
+    let target = sanitize_target(gateway_ip)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(1200))
+        .build()
+        .ok()?;
+    let response = client.get(format!("http://{target}/")).send().await.ok()?;
+
+    let server_header = response
+        .headers()
+        .get(reqwest::header::SERVER)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let body = response.text().await.unwrap_or_default();
+    let title = extract_html_title(&body);
+
+    title.or(server_header)
+}
+
+fn extract_html_title(html: &str) -> Option<String> {
+    let lower = html.to_ascii_lowercase();
+    let start = lower.find("<title>")? + "<title>".len();
+    let end = lower[start..].find("</title>")? + start;
+    clean_string(html.get(start..end)?.trim())
+}
+
+fn build_dns_query(id: u16, qname: &str) -> Vec<u8> {
+    let mut packet = Vec::with_capacity(32 + qname.len());
+    packet.extend_from_slice(&id.to_be_bytes());
+    packet.extend_from_slice(&[0x01, 0x00]); // flags: standard query, recursion desired
+    packet.extend_from_slice(&[0x00, 0x01]); // QDCOUNT=1
+    packet.extend_from_slice(&[0x00, 0x00]); // ANCOUNT=0
+    packet.extend_from_slice(&[0x00, 0x00]); // NSCOUNT=0
+    packet.extend_from_slice(&[0x00, 0x00]); // ARCOUNT=0
+    for label in qname.split('.') {
+        packet.push(label.len() as u8);
+        packet.extend_from_slice(label.as_bytes());
+    }
+    packet.push(0); // root label
+    packet.extend_from_slice(&[0x00, 0x01]); // QTYPE=A
+    packet.extend_from_slice(&[0x00, 0x01]); // QCLASS=IN
+    packet
+}
+
 #[cfg(test)]
 mod tests {
-    use super::parse_ping_latencies;
+    use super::{parse_ping_latencies, parse_traceroute_line};
+
+    #[test]
+    fn parses_traceroute_hop_with_three_replies() {
+        let hop = parse_traceroute_line("  1     2 ms     1 ms     1 ms  192.168.1.1").unwrap();
+        assert_eq!(hop.hop, 1);
+        assert_eq!(hop.rtt_ms, [Some(2.0), Some(1.0), Some(1.0)]);
+        assert_eq!(hop.ip.as_deref(), Some("192.168.1.1"));
+        assert!(!hop.timed_out);
+    }
+
+    #[test]
+    fn parses_traceroute_hop_with_sub_millisecond_reply() {
+        let hop = parse_traceroute_line("  2    <1 ms    <1 ms    <1 ms  10.0.0.1").unwrap();
+        assert_eq!(hop.rtt_ms, [Some(1.0), Some(1.0), Some(1.0)]);
+        assert_eq!(hop.ip.as_deref(), Some("10.0.0.1"));
+    }
+
+    #[test]
+    fn parses_timed_out_hop_in_english() {
+        let hop = parse_traceroute_line("  3     *        *        *     Request timed out.").unwrap();
+        assert_eq!(hop.rtt_ms, [None, None, None]);
+        assert!(hop.timed_out);
+        assert!(hop.ip.is_none());
+    }
+
+    #[test]
+    fn parses_timed_out_hop_in_portuguese() {
+        let hop = parse_traceroute_line("  4     *        *        *     Esgotado o tempo limite do pedido.").unwrap();
+        assert!(hop.timed_out);
+        assert!(hop.ip.is_none());
+    }
 
     #[test]
     fn parses_english_ping_latencies() {

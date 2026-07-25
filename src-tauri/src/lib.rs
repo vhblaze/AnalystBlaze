@@ -938,6 +938,36 @@ async fn list_network_adapters() -> Result<Vec<telemetry::network::NetworkAdapte
         .map_err(|error| error.to_string())
 }
 
+/// Read-only route diagnostics (D "Rede" round 2). `target` defaults to
+/// Cloudflare's resolver when not given - just needs to be some reachable
+/// host so the hop-by-hop path is meaningful.
+#[tauri::command]
+async fn run_network_traceroute(
+    target: Option<String>,
+) -> Result<telemetry::network::TracerouteResult, String> {
+    let target = target
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "1.1.1.1".to_string());
+    tokio::task::spawn_blocking(move || telemetry::network::run_traceroute(&target))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn benchmark_dns_servers(
+    current_dns: Vec<String>,
+) -> Result<Vec<telemetry::network::DnsBenchmarkResult>, String> {
+    tokio::task::spawn_blocking(move || telemetry::network::benchmark_dns_servers(&current_dns))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// Best-effort, read-only - never logs into anything, see module docs.
+#[tauri::command]
+async fn probe_gateway_identity(gateway_ip: String) -> Option<String> {
+    telemetry::network::probe_gateway_identity(&gateway_ip).await
+}
+
 #[tauri::command]
 async fn apply_visual_performance_mode() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command("APPLY_VISUAL_PERFORMANCE_MODE", None).await)
@@ -1568,6 +1598,9 @@ pub fn run() {
             set_dns_servers,
             reset_winsock_catalog,
             list_network_adapters,
+            run_network_traceroute,
+            benchmark_dns_servers,
+            probe_gateway_identity,
             protected_apps,
             add_protected_app,
             remove_protected_app,

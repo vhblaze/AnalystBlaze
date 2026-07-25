@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, FileWarning, Radio, RefreshCw, Video, Wifi } from "lucide-react";
+import { AlertTriangle, FileWarning, Gauge, Radio, RefreshCw, Route, Router, Video, Wifi } from "lucide-react";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
+  benchmarkDnsServers,
   detectLiveModeStreamingApp,
   generateLiveModeIncidentReport,
   getLiveModeStatus,
@@ -12,14 +13,18 @@ import {
   listNetworkAdapters,
   listenToLiveModeIncident,
   listenToLiveModeSample,
+  probeGatewayIdentity,
+  runNetworkTraceroute,
   startLiveMode,
   stopLiveMode,
   type BitrateRecommendation,
+  type DnsBenchmarkResult,
   type IncidentReport,
   type LiveModeSample,
   type NetworkAdapterSummary,
   type NetworkDiagnostics,
   type PrivilegedHelperStatus,
+  type TracerouteResult,
 } from "@/services/tauri/agent";
 
 const LIVE_MODE_SAMPLE_HISTORY = 60;
@@ -61,6 +66,17 @@ export function Network({
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [gatewayIdentity, setGatewayIdentity] = useState<string | null>(null);
+  const [gatewayIdentityBusy, setGatewayIdentityBusy] = useState(false);
+
+  const [tracerouteTarget, setTracerouteTarget] = useState("1.1.1.1");
+  const [tracerouteResult, setTracerouteResult] = useState<TracerouteResult | null>(null);
+  const [tracerouteBusy, setTracerouteBusy] = useState(false);
+  const [tracerouteError, setTracerouteError] = useState<string | null>(null);
+
+  const [dnsBenchmarkResults, setDnsBenchmarkResults] = useState<DnsBenchmarkResult[] | null>(null);
+  const [dnsBenchmarkBusy, setDnsBenchmarkBusy] = useState(false);
+  const [dnsBenchmarkError, setDnsBenchmarkError] = useState<string | null>(null);
 
   const [liveModeActive, setLiveModeActive] = useState(false);
   const [liveModeBusy, setLiveModeBusy] = useState(false);
@@ -224,6 +240,59 @@ export function Network({
     );
   };
 
+  const identifyGateway = async () => {
+    if (!networkDiagnostics?.gateway) return;
+    setGatewayIdentityBusy(true);
+    try {
+      const identity = await probeGatewayIdentity(networkDiagnostics.gateway);
+      setGatewayIdentity(identity ?? t("network.gatewayIdentityUnavailable"));
+      track("gateway_identity_probed", { found: Boolean(identity) });
+    } catch (error) {
+      setGatewayIdentity(t("network.gatewayIdentityUnavailable"));
+    } finally {
+      setGatewayIdentityBusy(false);
+    }
+  };
+
+  const runTraceroute = async () => {
+    setTracerouteBusy(true);
+    setTracerouteError(null);
+    try {
+      const result = await runNetworkTraceroute(tracerouteTarget.trim() || undefined);
+      setTracerouteResult(result);
+      track("traceroute_run", { target: result.target, hops: result.hops.length });
+    } catch (error) {
+      setTracerouteError(errorMessage(error));
+    } finally {
+      setTracerouteBusy(false);
+    }
+  };
+
+  const runDnsBenchmark = async () => {
+    setDnsBenchmarkBusy(true);
+    setDnsBenchmarkError(null);
+    try {
+      const results = await benchmarkDnsServers(networkDiagnostics?.dns_servers ?? []);
+      setDnsBenchmarkResults(results);
+      track("dns_benchmark_run", { count: results.length });
+    } catch (error) {
+      setDnsBenchmarkError(errorMessage(error));
+    } finally {
+      setDnsBenchmarkBusy(false);
+    }
+  };
+
+  const useBenchmarkedDns = async (server: string) => {
+    if (!dnsAdapterName) {
+      setActionMessage(t("network.selectAdapterFirst"));
+      return;
+    }
+    await runNetworkAction(
+      () => onSetDnsServers(dnsAdapterName, [server]),
+      "Servidores DNS alterados.",
+    );
+  };
+
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
@@ -259,6 +328,12 @@ export function Network({
             ["Tipo", networkDiagnostics?.adapter_type ?? networkDiagnostics?.adapter_description ?? "--"],
             ["Link", networkDiagnostics?.link_speed ?? "--"],
             ["Wi-Fi", networkDiagnostics?.wifi_ssid ? `${networkDiagnostics.wifi_ssid}${networkDiagnostics.wifi_signal_percent != null ? ` - ${Math.round(networkDiagnostics.wifi_signal_percent)}%` : ""}` : "--"],
+            [
+              t("network.gateway"),
+              networkDiagnostics?.gateway
+                ? `${networkDiagnostics.gateway}${networkDiagnostics.gateway_latency_ms != null ? ` - ${Math.round(networkDiagnostics.gateway_latency_ms)} ms` : ""}`
+                : "--",
+            ],
           ] as Array<[string, string]>).map(([label, value]) => (
             <div key={label} className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
               <div className="font-mono text-[9px] uppercase tracking-widest text-slate-500">{label}</div>
@@ -271,6 +346,24 @@ export function Network({
         <p className="mt-3 text-xs text-slate-500">
           {t("network.diagnosticsFooter")} {networkDiagnostics?.recommendations?.join(" / ") ?? ""}
         </p>
+
+        {networkDiagnostics?.gateway && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              disabled={gatewayIdentityBusy}
+              onClick={() => void identifyGateway()}
+              className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+            >
+              <Router className={`h-3.5 w-3.5 ${gatewayIdentityBusy ? "animate-pulse" : ""}`} />
+              {t("network.identifyGateway")}
+            </button>
+            {gatewayIdentity && (
+              <span className="text-xs text-slate-400" title={gatewayIdentity}>
+                {gatewayIdentity}
+              </span>
+            )}
+          </div>
+        )}
 
         <div className="mt-5 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
           <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
@@ -338,6 +431,115 @@ export function Network({
             Aplicar DNS
           </button>
         </div>
+      </section>
+
+      <section className="glass-panel cyber-glow p-6">
+        <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <Route className="h-3.5 w-3.5 text-cyan-300" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("network.route")}</h2>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={tracerouteTarget}
+              onChange={(event) => setTracerouteTarget(event.target.value)}
+              placeholder="1.1.1.1"
+              className="min-h-9 w-40 rounded-lg border border-cyan-500/20 bg-slate-950/60 px-3 text-xs text-slate-100 outline-none transition focus:border-cyan-300/60"
+            />
+            <button
+              disabled={tracerouteBusy || !runtimeAvailable}
+              onClick={() => void runTraceroute()}
+              className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${tracerouteBusy ? "animate-spin" : ""}`} />
+              {tracerouteBusy ? t("network.tracing") : t("network.traceRoute")}
+            </button>
+          </div>
+        </div>
+        <p className="text-xs text-slate-500">{t("network.routeDesc")}</p>
+        {tracerouteError && <div className="mt-3"><Notice tone="danger" message={tracerouteError} /></div>}
+
+        {tracerouteResult && (
+          <div className="mt-4 flex flex-col divide-y divide-cyan-500/5 overflow-hidden rounded-xl border border-cyan-500/10">
+            {tracerouteResult.hops.map((hop) => (
+              <div key={hop.hop} className="flex items-center gap-3 bg-slate-950/30 px-3 py-2 text-xs">
+                <span className="w-6 shrink-0 text-right font-mono text-slate-500">{hop.hop}</span>
+                <span className={`min-w-0 flex-1 truncate font-mono ${hop.timedOut ? "text-slate-600" : "text-slate-200"}`}>
+                  {hop.timedOut ? t("network.hopTimedOut") : hop.ip}
+                  {!hop.timedOut && hop.ip === tracerouteResult.target && (
+                    <span className="ml-2 rounded border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-emerald-300">
+                      {t("network.destination")}
+                    </span>
+                  )}
+                </span>
+                <span className="flex shrink-0 gap-2 font-mono text-slate-400">
+                  {hop.rttMs.map((value, index) => (
+                    <span key={index} className="w-12 text-right">
+                      {value == null ? "*" : `${Math.round(value)}ms`}
+                    </span>
+                  ))}
+                </span>
+              </div>
+            ))}
+            {!tracerouteResult.reachedTarget && (
+              <p className="bg-slate-950/30 px-3 py-2 text-xs text-amber-300">{t("network.routeIncomplete")}</p>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section className="glass-panel cyber-glow p-6">
+        <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
+            <Gauge className="h-3.5 w-3.5 text-cyan-300" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("network.dnsBenchmark")}</h2>
+          </div>
+          <button
+            disabled={dnsBenchmarkBusy || !runtimeAvailable}
+            onClick={() => void runDnsBenchmark()}
+            className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${dnsBenchmarkBusy ? "animate-spin" : ""}`} />
+            {dnsBenchmarkBusy ? t("network.testing") : t("network.testDns")}
+          </button>
+        </div>
+        <p className="text-xs text-slate-500">{t("network.dnsBenchmarkDesc")}</p>
+        {dnsBenchmarkError && <div className="mt-3"><Notice tone="danger" message={dnsBenchmarkError} /></div>}
+
+        {dnsBenchmarkResults && (
+          <div className="mt-4 flex flex-col divide-y divide-cyan-500/5 overflow-hidden rounded-xl border border-cyan-500/10">
+            {[...dnsBenchmarkResults]
+              .sort((a, b) => (a.latencyMs ?? Infinity) - (b.latencyMs ?? Infinity))
+              .map((result, index) => (
+                <div key={result.server} className="flex items-center gap-3 bg-slate-950/30 px-3 py-2.5 text-sm">
+                  {index === 0 && result.latencyMs != null && (
+                    <span className="shrink-0 rounded-md border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-emerald-300">
+                      {t("network.fastest")}
+                    </span>
+                  )}
+                  <span className="min-w-0 flex-1 truncate text-slate-100">
+                    {result.label} <span className="text-slate-500">({result.server})</span>
+                    {result.isCurrent && (
+                      <span className="ml-2 text-[10px] uppercase tracking-widest text-cyan-400">{t("network.currentDns")}</span>
+                    )}
+                  </span>
+                  <span className="w-16 shrink-0 text-right font-mono text-xs text-slate-400">
+                    {result.latencyMs == null ? "--" : `${Math.round(result.latencyMs)} ms`}
+                  </span>
+                  {!result.isCurrent && (
+                    <button
+                      disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available}
+                      onClick={() => void useBenchmarkedDns(result.server)}
+                      className="shrink-0 rounded-md border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+                      title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avancado) para liberar esta acao." : undefined}
+                    >
+                      {t("network.useThis")}
+                    </button>
+                  )}
+                </div>
+              ))}
+          </div>
+        )}
       </section>
 
       <section className="glass-panel cyber-glow p-5">
