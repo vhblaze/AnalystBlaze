@@ -220,6 +220,7 @@ async fn execute_command_checked_with_helper(
         "CLEAR_STANDBY_LIST" => memory::clear_standby_list(payload).await,
         "FLUSH_DNS_CACHE" => network_admin::flush_dns_cache(payload).await,
         "SET_DNS_SERVERS" => network_admin::set_dns_servers(payload).await,
+        "SET_INTERFACE_METRIC" => network_admin::set_interface_metric(payload).await,
         "RESET_WINSOCK_CATALOG" => network_admin::reset_winsock_catalog(payload).await,
         "APPLY_VISUAL_PERFORMANCE_MODE" => {
             visual_effects::apply_visual_performance_mode(payload).await

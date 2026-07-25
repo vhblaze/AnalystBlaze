@@ -11,6 +11,22 @@ pub const TELEMETRY_UPDATE_EVENT: &str = "telemetry-update";
 pub const AGENT_SESSION_INVALIDATED_EVENT: &str = "agent-session-invalidated";
 pub const WEEKLY_AI_USAGE_EVENT: &str = "weekly-ai-usage";
 pub const ANNOUNCEMENTS_EVENT: &str = "announcements-updated";
+pub const DNS_OPTIMIZATION_SUGGESTED_EVENT: &str = "dns-optimization-suggested";
+
+/// Payload for DNS_OPTIMIZATION_SUGGESTED_EVENT - a background benchmark
+/// found a measurably faster DNS server than the one currently configured.
+/// Local policy never applies this on its own (the privileged helper
+/// rejects admin actions sourced from automatic policy without a human in
+/// the loop, by design) - this is surfaced to the user to apply manually.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DnsOptimizationSuggestion {
+    pub adapter_name: String,
+    pub dns_server: String,
+    pub dns_label: String,
+    pub previous_latency_ms: Option<f64>,
+    pub candidate_latency_ms: f64,
+}
 
 pub type SharedTelemetryState = Arc<RwLock<Option<TelemetryDashboardSnapshot>>>;
 

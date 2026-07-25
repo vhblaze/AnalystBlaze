@@ -33,6 +33,20 @@ pub struct LocalAiPolicy {
     pub thermal_gpu_limit_c: f64,
     pub battery_saver_threshold_percent: f64,
     pub network_latency_threshold_ms: f64,
+    /// Whether the local policy engine may benchmark the active adapter's
+    /// DNS in the background and suggest a measurably faster one. This never
+    /// applies the change by itself - SET_DNS_SERVERS always requires the
+    /// privileged helper, and the helper rejects admin actions sourced from
+    /// automatic policy without a human present - so this only surfaces a
+    /// suggestion the user applies manually from the Rede screen.
+    pub auto_best_dns: bool,
+    /// Minimum time between DNS benchmarks - keeps this from re-testing the
+    /// network on every local-policy tick. In practice this makes it fire
+    /// close to once per boot/session for most users.
+    pub dns_optimization_cooldown_seconds: u64,
+    /// Minimum measured improvement (ms) before suggesting a switch - avoids
+    /// flagging noise-level differences between servers.
+    pub dns_improvement_threshold_ms: f64,
     /// Minimum age before shader/thumbnail/browser cache files are eligible
     /// for cleanup - low-risk, short-lived data, so this can default low.
     pub cleanup_cache_min_age_minutes: u64,
@@ -81,6 +95,9 @@ impl Default for LocalAiPolicy {
             thermal_gpu_limit_c: 84.0,
             battery_saver_threshold_percent: 20.0,
             network_latency_threshold_ms: 100.0,
+            auto_best_dns: false,
+            dns_optimization_cooldown_seconds: 6 * 60 * 60,
+            dns_improvement_threshold_ms: 15.0,
             cleanup_cache_min_age_minutes: 6 * 60,
             cleanup_temp_min_age_minutes: 60,
             cleanup_system_min_age_minutes: 24 * 60,
@@ -144,6 +161,9 @@ pub fn save_local_ai_policy(policy: LocalAiPolicy) -> Result<LocalAiPolicy, Stri
             "thermal_gpu_limit_c": policy.thermal_gpu_limit_c,
             "battery_saver_threshold_percent": policy.battery_saver_threshold_percent,
             "network_latency_threshold_ms": policy.network_latency_threshold_ms,
+            "auto_best_dns": policy.auto_best_dns,
+            "dns_optimization_cooldown_seconds": policy.dns_optimization_cooldown_seconds,
+            "dns_improvement_threshold_ms": policy.dns_improvement_threshold_ms,
             "cleanup_cache_min_age_minutes": policy.cleanup_cache_min_age_minutes,
             "cleanup_temp_min_age_minutes": policy.cleanup_temp_min_age_minutes,
             "cleanup_system_min_age_minutes": policy.cleanup_system_min_age_minutes,
@@ -192,6 +212,10 @@ fn normalize_policy(mut policy: LocalAiPolicy) -> LocalAiPolicy {
     policy.battery_saver_threshold_percent =
         policy.battery_saver_threshold_percent.clamp(5.0, 50.0);
     policy.network_latency_threshold_ms = policy.network_latency_threshold_ms.clamp(40.0, 500.0);
+    policy.dns_optimization_cooldown_seconds = policy
+        .dns_optimization_cooldown_seconds
+        .clamp(60 * 60, 7 * 24 * 60 * 60);
+    policy.dns_improvement_threshold_ms = policy.dns_improvement_threshold_ms.clamp(5.0, 200.0);
     policy.cleanup_cache_min_age_minutes = policy.cleanup_cache_min_age_minutes.clamp(10, 7 * 24 * 60);
     policy.cleanup_temp_min_age_minutes = policy.cleanup_temp_min_age_minutes.clamp(5, 7 * 24 * 60);
     policy.cleanup_system_min_age_minutes =

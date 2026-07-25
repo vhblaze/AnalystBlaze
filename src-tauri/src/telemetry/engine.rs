@@ -19,8 +19,9 @@ use crate::optimizations::{self, safety::CommandSource};
 
 use super::collector::{TelemetryCollector, TelemetrySample};
 use super::state::{
-    SharedTelemetryState, TelemetryDashboardSnapshot, AGENT_SESSION_INVALIDATED_EVENT,
-    ANNOUNCEMENTS_EVENT, TELEMETRY_UPDATE_EVENT, WEEKLY_AI_USAGE_EVENT,
+    DnsOptimizationSuggestion, SharedTelemetryState, TelemetryDashboardSnapshot,
+    AGENT_SESSION_INVALIDATED_EVENT, ANNOUNCEMENTS_EVENT, DNS_OPTIMIZATION_SUGGESTED_EVENT,
+    TELEMETRY_UPDATE_EVENT, WEEKLY_AI_USAGE_EVENT,
 };
 
 pub const REMOTE_COMMAND_CONFIRMATION_EVENT: &str = "remote-command-confirmation-request";
@@ -765,6 +766,22 @@ impl TelemetryEngine {
         let local_ai_policy = optimizations::local_ai_policy::load_local_ai_policy();
         if !local_ai_policy.enabled {
             return;
+        }
+
+        if let Some(suggestion) = find_best_dns_suggestion(&local_ai_policy) {
+            let _ = crate::audit::record_event(
+                "info",
+                "local_ai.dns_optimization_suggested",
+                "IA local encontrou um DNS mais rapido e sugeriu a troca ao usuario.",
+                json!({
+                    "adapter_name": suggestion.adapter_name,
+                    "dns_server": suggestion.dns_server,
+                    "dns_label": suggestion.dns_label,
+                    "previous_latency_ms": suggestion.previous_latency_ms,
+                    "candidate_latency_ms": suggestion.candidate_latency_ms,
+                }),
+            );
+            let _ = self.app_handle.emit(DNS_OPTIMIZATION_SUGGESTED_EVENT, &suggestion);
         }
 
         let now = chrono::Utc::now().timestamp();
@@ -2024,6 +2041,69 @@ fn evaluate_local_policy(
     }
 
     None
+}
+
+/// Background "best route" check: benchmarks the current adapter's DNS
+/// against a short list of public resolvers and, if one is measurably
+/// faster, builds a suggestion payload for the UI. This intentionally does
+/// NOT go through the LocalPolicyDecision/execute_command_checked pipeline
+/// like the other automated decisions above - SET_DNS_SERVERS always
+/// requires the privileged helper, and the helper rejects any admin action
+/// sourced from automatic local policy without a human present (see
+/// privileged_helper::validate_request_execution_policy). So this only ever
+/// proposes the change; applying it is a manual, confirmed user action.
+/// Throttled independently of the general decision cooldown (see
+/// `should_run_auto_dns_check`) because it performs real network I/O, so it
+/// only actually benchmarks once per `dns_optimization_cooldown_seconds` -
+/// in practice close to once per boot/session for most users.
+fn find_best_dns_suggestion(
+    local_ai_policy: &optimizations::local_ai_policy::LocalAiPolicy,
+) -> Option<DnsOptimizationSuggestion> {
+    if !local_ai_policy.auto_best_dns {
+        return None;
+    }
+    if !crate::telemetry::network::should_run_auto_dns_check(
+        local_ai_policy.dns_optimization_cooldown_seconds as i64,
+    ) {
+        return None;
+    }
+
+    let diagnostics = crate::telemetry::network::collect_network_diagnostics();
+    let adapter_name = diagnostics.adapter_name?;
+    if diagnostics.dns_servers.is_empty() {
+        return None;
+    }
+
+    let results = crate::telemetry::network::benchmark_dns_servers(&diagnostics.dns_servers);
+    let current_latency_ms = results
+        .iter()
+        .find(|result| result.is_current)
+        .and_then(|result| result.latency_ms);
+    let best = results
+        .iter()
+        .filter(|result| !result.is_current)
+        .filter_map(|result| result.latency_ms.map(|latency| (result, latency)))
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))?;
+    let (best_result, best_latency_ms) = best;
+
+    let improvement_ms = current_latency_ms.map(|current| current - best_latency_ms);
+    let worth_suggesting = match improvement_ms {
+        Some(improvement) => improvement >= local_ai_policy.dns_improvement_threshold_ms,
+        // Current DNS didn't respond at all within the benchmark window -
+        // any server that did respond is already an improvement.
+        None => true,
+    };
+    if !worth_suggesting {
+        return None;
+    }
+
+    Some(DnsOptimizationSuggestion {
+        adapter_name,
+        dns_server: best_result.server.clone(),
+        dns_label: best_result.label.clone(),
+        previous_latency_ms: current_latency_ms,
+        candidate_latency_ms: best_latency_ms,
+    })
 }
 
 fn action_allowed(policy: &AgentPolicyBundle, action: &str) -> bool {

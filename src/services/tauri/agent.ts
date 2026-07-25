@@ -413,6 +413,9 @@ export type LocalAiPolicy = {
   thermal_gpu_limit_c: number;
   battery_saver_threshold_percent: number;
   network_latency_threshold_ms: number;
+  auto_best_dns: boolean;
+  dns_optimization_cooldown_seconds: number;
+  dns_improvement_threshold_ms: number;
   cleanup_cache_min_age_minutes: number;
   cleanup_temp_min_age_minutes: number;
   cleanup_system_min_age_minutes: number;
@@ -862,6 +865,23 @@ export async function benchmarkDnsServers(currentDns: string[]): Promise<DnsBenc
   return invoke<DnsBenchmarkResult[]>("benchmark_dns_servers", { currentDns });
 }
 
+/** Emitted by the local policy engine's background DNS check - a
+ * suggestion only, never applied automatically (see engine.rs for why). */
+export type DnsOptimizationSuggestion = {
+  adapterName: string;
+  dnsServer: string;
+  dnsLabel: string;
+  previousLatencyMs?: number | null;
+  candidateLatencyMs: number;
+};
+
+export async function listenToDnsOptimizationSuggested(
+  onSuggestion: (suggestion: DnsOptimizationSuggestion) => void,
+) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<DnsOptimizationSuggestion>("dns-optimization-suggested", (event) => onSuggestion(event.payload));
+}
+
 /** Best-effort, read-only - just an HTTP GET to the gateway's own admin
  * page to see what it announces (title/Server header). No login, no
  * credentials, nothing changed. Returns null if the router doesn't answer
@@ -897,6 +917,11 @@ export async function setDnsServers(
 export async function resetWinsockCatalog(): Promise<OptimizationResult> {
   requireTauriRuntime("Reset do catalogo Winsock");
   return invoke<OptimizationResult>("reset_winsock_catalog");
+}
+
+export async function setInterfaceMetric(adapterName: string, metric: number): Promise<OptimizationResult> {
+  requireTauriRuntime("Prioridade de adaptador de rede");
+  return invoke<OptimizationResult>("set_interface_metric", { adapterName, metric });
 }
 
 export async function getProtectedApps(): Promise<ProtectedApp[]> {
@@ -1098,6 +1123,9 @@ export async function getLocalAiPolicy(): Promise<LocalAiPolicy> {
       thermal_gpu_limit_c: 84,
       battery_saver_threshold_percent: 20,
       network_latency_threshold_ms: 100,
+      auto_best_dns: false,
+      dns_optimization_cooldown_seconds: 21600,
+      dns_improvement_threshold_ms: 15,
       cleanup_cache_min_age_minutes: 360,
       cleanup_temp_min_age_minutes: 60,
       cleanup_system_min_age_minutes: 1440,

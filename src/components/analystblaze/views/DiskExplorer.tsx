@@ -95,6 +95,11 @@ export function DiskExplorer({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
+  const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+
   useEffect(() => {
     if (!runtimeAvailable) return;
     listDiskVolumes()
@@ -134,6 +139,7 @@ export function DiskExplorer({
     setBrowseBusy(true);
     setBrowseError(null);
     setBrowseProgress(null);
+    setSelectedPaths(new Set());
     try {
       const kids = await listDiskDirectory(path);
       setCurrentPath(path);
@@ -212,11 +218,77 @@ export function DiskExplorer({
     }
   };
 
+  const toggleSelected = (path: string) => {
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const deleteSelected = async () => {
+    setConfirmingBulkDelete(false);
+    const items = sortedChildren.filter((item) => selectedPaths.has(item.path));
+    if (items.length === 0) return;
+    setBulkDeleteBusy(true);
+    setActionMessage(null);
+    setActionError(null);
+    const failures: string[] = [];
+    let successCount = 0;
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      setBulkProgress({ done: index, total: items.length });
+      setPendingDeletePath(item.path);
+      try {
+        const result = await deleteDiskUsageItem(item.path);
+        const outcome = result as { success?: boolean; message?: string } | undefined;
+        if (outcome && outcome.success === false) {
+          failures.push(`${item.name}: ${outcome.message ?? ""}`);
+          continue;
+        }
+        successCount += 1;
+        setDeletingPaths((current) => new Set(current).add(item.path));
+        window.setTimeout(() => {
+          setChildren((current) => current.filter((child) => child.path !== item.path));
+          setDeletingPaths((current) => {
+            const next = new Set(current);
+            next.delete(item.path);
+            return next;
+          });
+        }, DELETE_ANIMATION_MS);
+      } catch (error) {
+        failures.push(`${item.name}: ${errorMessage(error)}`);
+      }
+    }
+    setPendingDeletePath(null);
+    setBulkProgress(null);
+    setSelectedPaths(new Set());
+    setBulkDeleteBusy(false);
+    track("disk_tree_bulk_deleted", { count: successCount, failed: failures.length });
+    if (successCount > 0) {
+      setActionMessage(t("diskExplorer.bulkDeleteSuccess", { count: successCount }));
+    }
+    if (failures.length > 0) {
+      setActionError(failures.join("\n"));
+    }
+  };
+
   const sortedChildren = [...children].sort((a, b) =>
     sortBy === "size" ? b.sizeBytes - a.sizeBytes : a.name.localeCompare(b.name),
   );
   const treemapItems = sortedChildren.filter((item) => !deletingPaths.has(item.path));
   const folderTotalBytes = children.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const selectableChildren = sortedChildren.filter((item) => item.actionable && !deletingPaths.has(item.path));
+  const allSelected = selectableChildren.length > 0 && selectableChildren.every((item) => selectedPaths.has(item.path));
+  const toggleSelectAll = () => {
+    setSelectedPaths(allSelected ? new Set() : new Set(selectableChildren.map((item) => item.path)));
+  };
+  const selectedItems = sortedChildren.filter((item) => selectedPaths.has(item.path));
+  const selectedTotalBytes = selectedItems.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const selectedFolderCount = selectedItems.filter((item) => item.isDir).length;
+  const selectedFileCount = selectedItems.length - selectedFolderCount;
+  const selectedPermanentCount = selectedItems.filter((item) => item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES).length;
 
   if (!runtimeAvailable) {
     return <Notice tone="info" message={t("diskExplorer.desktopOnly")} />;
@@ -359,9 +431,19 @@ export function DiskExplorer({
               <DiskTreemap items={treemapItems} onOpen={(item) => void openPath(item.path)} />
 
               <div className="mt-5 flex items-center justify-between">
-                <h3 className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
-                  {t("diskExplorer.listTitle")}
-                </h3>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleSelectAll}
+                    disabled={bulkDeleteBusy || selectableChildren.length === 0}
+                    aria-label={t("diskExplorer.selectAll")}
+                    className="h-4 w-4 accent-cyan-400"
+                  />
+                  <h3 className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                    {t("diskExplorer.listTitle")}
+                  </h3>
+                </div>
                 <div className="flex items-center gap-1 rounded-lg border border-cyan-500/10 bg-slate-950/40 p-0.5 text-[10px] font-mono uppercase tracking-widest">
                   <button
                     onClick={() => setSortBy("size")}
@@ -377,6 +459,34 @@ export function DiskExplorer({
                   </button>
                 </div>
               </div>
+
+              {selectedPaths.size > 0 && (
+                <div className="sticky top-0 z-10 mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border-2 border-rose-400/50 bg-rose-500/15 px-4 py-3 shadow-[0_10px_40px_-15px_hsl(350_90%_55%/0.6)] backdrop-blur">
+                  <span className="flex items-center gap-2 text-sm font-semibold text-rose-100">
+                    <Trash2 className="h-4 w-4 shrink-0" />
+                    {bulkProgress
+                      ? t("diskExplorer.bulkDeleting", { done: bulkProgress.done + 1, total: bulkProgress.total })
+                      : t("diskExplorer.selectedSummary", { count: selectedItems.length, size: formatBytes(selectedTotalBytes) })}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={bulkDeleteBusy}
+                      onClick={() => setSelectedPaths(new Set())}
+                      className="rounded-lg border border-white/15 bg-slate-950/40 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:text-white disabled:opacity-40"
+                    >
+                      {t("diskExplorer.clearSelection")}
+                    </button>
+                    <button
+                      disabled={bulkDeleteBusy}
+                      onClick={() => setConfirmingBulkDelete(true)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300/60 bg-rose-500 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-400 disabled:opacity-50"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {t("diskExplorer.deleteSelected")}
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="mt-2 flex flex-col divide-y divide-cyan-500/5 overflow-hidden rounded-xl border border-cyan-500/10">
                 {sortedChildren.map((item) => {
@@ -396,6 +506,18 @@ export function DiskExplorer({
                     style={deleting ? { maxHeight: 0, paddingTop: 0, paddingBottom: 0, overflow: "hidden" } : undefined}
                   >
                   <div className="flex items-center gap-3">
+                    {item.actionable ? (
+                      <input
+                        type="checkbox"
+                        checked={selectedPaths.has(item.path)}
+                        onChange={() => toggleSelected(item.path)}
+                        disabled={bulkDeleteBusy || pending || deleting}
+                        aria-label={t("diskExplorer.selectItem", { name: item.name })}
+                        className="h-4 w-4 shrink-0 accent-cyan-400"
+                      />
+                    ) : (
+                      <span className="h-4 w-4 shrink-0" />
+                    )}
                     {item.isDir ? (
                       <Folder className="h-4 w-4 shrink-0 text-cyan-300" />
                     ) : (
@@ -444,9 +566,10 @@ export function DiskExplorer({
                         </div>
                       ) : (
                         <button
+                          disabled={bulkDeleteBusy}
                           onClick={() => setConfirmingDeletePath(item.path)}
                           title={permanent ? t("diskExplorer.deleteHintPermanent") : t("diskExplorer.deleteHint")}
-                          className="shrink-0 rounded-md border border-white/10 bg-slate-950/60 p-1.5 text-slate-500 transition hover:border-rose-400/40 hover:text-rose-200"
+                          className="shrink-0 rounded-md border border-white/10 bg-slate-950/60 p-1.5 text-slate-500 transition hover:border-rose-400/40 hover:text-rose-200 disabled:opacity-40"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
@@ -467,9 +590,78 @@ export function DiskExplorer({
         </section>
       )}
 
+      {confirmingBulkDelete && (
+        <BulkDeleteConfirmDialog
+          folderCount={selectedFolderCount}
+          fileCount={selectedFileCount}
+          totalBytes={selectedTotalBytes}
+          permanentCount={selectedPermanentCount}
+          onConfirm={() => void deleteSelected()}
+          onCancel={() => setConfirmingBulkDelete(false)}
+          t={t}
+        />
+      )}
+
       {actionError && (
         <ErrorDialog message={actionError} onClose={() => setActionError(null)} t={t} />
       )}
+    </div>
+  );
+}
+
+function BulkDeleteConfirmDialog({
+  folderCount,
+  fileCount,
+  totalBytes,
+  permanentCount,
+  onConfirm,
+  onCancel,
+  t,
+}: {
+  folderCount: number;
+  fileCount: number;
+  totalBytes: number;
+  permanentCount: number;
+  onConfirm: () => void;
+  onCancel: () => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+      <section
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={t("diskExplorer.bulkConfirmTitle", { count: folderCount + fileCount })}
+        className="w-full max-w-md rounded-2xl border border-rose-400/30 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(350_90%_55%/0.6)]"
+      >
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-rose-300">
+          <AlertTriangle className="h-3.5 w-3.5" />
+          {t("diskExplorer.bulkConfirmTitle", { count: folderCount + fileCount })}
+        </div>
+        <p className="mt-3 text-sm leading-relaxed text-slate-200">
+          {t("diskExplorer.bulkConfirmSummary", { folders: folderCount, files: fileCount, size: formatBytes(totalBytes) })}
+        </p>
+        {permanentCount > 0 && (
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs text-rose-200">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            {t("diskExplorer.bulkPermanentWarning", { count: permanentCount })}
+          </div>
+        )}
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            onClick={onCancel}
+            className="rounded-xl border border-slate-600/40 px-4 py-2 text-sm font-medium text-slate-300 transition hover:text-slate-100"
+          >
+            {t("common.cancel")}
+          </button>
+          <button
+            onClick={onConfirm}
+            className="rounded-xl border border-rose-400/40 bg-rose-400/15 px-4 py-2 text-sm font-semibold text-rose-100 transition hover:bg-rose-400/25"
+          >
+            {t("diskExplorer.deleteSelected")}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }

@@ -62,6 +62,50 @@ pub async fn set_dns_servers(payload: Option<Value>) -> ExecutionResult {
     }
 }
 
+pub async fn set_interface_metric(payload: Option<Value>) -> ExecutionResult {
+    let adapter_name = extract_payload_string(payload.as_ref(), &["adapterName", "adapter_name"]);
+    let metric = payload
+        .as_ref()
+        .and_then(|value| value.get("metric"))
+        .and_then(Value::as_u64);
+    let fallback_payload = payload.clone();
+
+    let Some(adapter_name) = adapter_name else {
+        return ExecutionResult {
+            success: false,
+            message: "Informe o adaptador de rede.".to_string(),
+            details: json!({ "implemented": true, "payload": fallback_payload }),
+        };
+    };
+
+    if !safety::is_safe_network_target(&adapter_name) {
+        return ExecutionResult {
+            success: false,
+            message: "Nome de adaptador invalido.".to_string(),
+            details: json!({ "implemented": true, "adapter": adapter_name }),
+        };
+    }
+
+    let Some(metric) = metric.filter(|value| (1..=9999).contains(value)) else {
+        return ExecutionResult {
+            success: false,
+            message: "Informe uma prioridade de rede valida (1 a 9999).".to_string(),
+            details: json!({ "implemented": true, "payload": fallback_payload }),
+        };
+    };
+
+    match tokio::task::spawn_blocking(move || set_interface_metric_sync(&adapter_name, metric as u32))
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => ExecutionResult {
+            success: false,
+            message: format!("Falha ao alterar prioridade de rede: {error}"),
+            details: json!({ "implemented": true }),
+        },
+    }
+}
+
 pub async fn reset_winsock_catalog(_payload: Option<Value>) -> ExecutionResult {
     match tokio::task::spawn_blocking(reset_winsock_catalog_sync).await {
         Ok(result) => result,
@@ -220,6 +264,100 @@ fn set_dns_servers_sync(adapter_name: &str, _dns_servers: &[String]) -> Executio
 }
 
 #[cfg(windows)]
+fn set_interface_metric_sync(adapter_name: &str, metric: u32) -> ExecutionResult {
+    let (previous_metric, previous_automatic) = match query_adapter_interface_metric(adapter_name) {
+        Ok(value) => value,
+        Err(error) => {
+            return ExecutionResult {
+                success: false,
+                message: "Nao foi possivel consultar a prioridade de rede atual do adaptador."
+                    .to_string(),
+                details: json!({ "implemented": true, "adapter": adapter_name, "error": error }),
+            };
+        }
+    };
+
+    let snapshot = OptimizationSnapshot::new(
+        "SET_INTERFACE_METRIC",
+        vec![SnapshotEntry::InterfaceMetric {
+            adapter_name: adapter_name.to_string(),
+            previous_metric,
+            previous_automatic,
+        }],
+        json!({
+            "adapter": adapter_name,
+            "previous_metric": previous_metric,
+            "previous_automatic": previous_automatic,
+            "target_metric": metric,
+        }),
+    );
+
+    if let Err(error) = snapshot::save_snapshot(&snapshot) {
+        return ExecutionResult {
+            success: false,
+            message: "A alteracao foi bloqueada porque o snapshot nao pode ser salvo.".to_string(),
+            details: json!({
+                "implemented": true,
+                "adapter": adapter_name,
+                "snapshot_error": error,
+            }),
+        };
+    }
+
+    let script = format!(
+        "Set-NetIPInterface -InterfaceAlias '{}' -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric {}",
+        escape_powershell_literal(adapter_name),
+        metric
+    );
+
+    match run_powershell(&script) {
+        Ok(_) => {
+            let _ = audit::record_event(
+                "info",
+                "optimization.network.interface_metric_changed",
+                "Prioridade de rede do adaptador alterada com snapshot reversivel.",
+                json!({ "adapter": adapter_name, "metric": metric }),
+            );
+            ExecutionResult::ok(
+                "Adaptador priorizado com snapshot reversivel.",
+                json!({
+                    "implemented": true,
+                    "adapter": adapter_name,
+                    "metric": metric,
+                    "snapshot": {
+                        "id": snapshot.id,
+                        "entries": snapshot.entries.len(),
+                        "reversible": true,
+                    },
+                }),
+            )
+        }
+        Err(error) => {
+            let _ = snapshot::discard_snapshot(&snapshot.id);
+            ExecutionResult {
+                success: false,
+                message: "O Windows recusou alterar a prioridade de rede.".to_string(),
+                details: json!({
+                    "implemented": true,
+                    "adapter": adapter_name,
+                    "snapshot_discarded": true,
+                    "error": error,
+                }),
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn set_interface_metric_sync(adapter_name: &str, _metric: u32) -> ExecutionResult {
+    ExecutionResult {
+        success: false,
+        message: "Prioridade de rede indisponivel nesta plataforma.".to_string(),
+        details: json!({ "implemented": true, "adapter": adapter_name }),
+    }
+}
+
+#[cfg(windows)]
 fn reset_winsock_catalog_sync() -> ExecutionResult {
     let output = match Command::new("netsh").args(["winsock", "reset"]).no_window().output() {
         Ok(output) => output,
@@ -283,6 +421,27 @@ fn query_adapter_dns_servers(adapter_name: &str) -> Result<Vec<String>, String> 
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .collect())
+}
+
+#[cfg(windows)]
+fn query_adapter_interface_metric(adapter_name: &str) -> Result<(u32, bool), String> {
+    let script = format!(
+        "$i=Get-NetIPInterface -InterfaceAlias '{}' -AddressFamily IPv4 -ErrorAction Stop; [pscustomobject]@{{ Metric=$i.InterfaceMetric; Automatic=($i.AutomaticMetric -eq 'Enabled') }} | ConvertTo-Json -Compress",
+        escape_powershell_literal(adapter_name)
+    );
+    let output = run_powershell(&script)?;
+    let parsed: Value = serde_json::from_str(output.trim())
+        .map_err(|error| format!("resposta inesperada do Windows: {error}"))?;
+    let metric = parsed
+        .get("Metric")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "metrica de interface ausente na resposta do Windows".to_string())?
+        as u32;
+    let automatic = parsed
+        .get("Automatic")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok((metric, automatic))
 }
 
 #[cfg(windows)]

@@ -95,6 +95,11 @@ pub enum SnapshotEntry {
         previous_dns_servers: Vec<String>,
         was_dhcp: bool,
     },
+    InterfaceMetric {
+        adapter_name: String,
+        previous_metric: u32,
+        previous_automatic: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -668,6 +673,25 @@ pub fn restore_snapshot_entries(snapshot: &OptimizationSnapshot) -> SnapshotRest
                     ));
                 }
             },
+            SnapshotEntry::InterfaceMetric {
+                adapter_name,
+                previous_metric,
+                previous_automatic,
+            } => match restore_interface_metric(adapter_name, *previous_metric, *previous_automatic)
+            {
+                Ok(()) => {
+                    summary.restored_entries += 1;
+                    summary.messages.push(format!(
+                        "Prioridade de rede restaurada para o adaptador {adapter_name}."
+                    ));
+                }
+                Err(error) => {
+                    summary.failed_entries += 1;
+                    summary.messages.push(format!(
+                        "Falha ao restaurar prioridade de rede do adaptador {adapter_name}: {error}"
+                    ));
+                }
+            },
         }
     }
 
@@ -1051,6 +1075,53 @@ fn restore_dns_configuration(
     _was_dhcp: bool,
 ) -> Result<(), String> {
     Err("Configuracao de DNS indisponivel nesta plataforma.".to_string())
+}
+
+#[cfg(windows)]
+fn restore_interface_metric(
+    adapter_name: &str,
+    previous_metric: u32,
+    previous_automatic: bool,
+) -> Result<(), String> {
+    let script = if previous_automatic {
+        format!(
+            "Set-NetIPInterface -InterfaceAlias '{}' -AddressFamily IPv4 -AutomaticMetric Enabled",
+            escape_powershell_literal(adapter_name)
+        )
+    } else {
+        format!(
+            "Set-NetIPInterface -InterfaceAlias '{}' -AddressFamily IPv4 -AutomaticMetric Disabled -InterfaceMetric {}",
+            escape_powershell_literal(adapter_name),
+            previous_metric
+        )
+    };
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .no_window()
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(decode_console_bytes(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(not(windows))]
+fn restore_interface_metric(
+    _adapter_name: &str,
+    _previous_metric: u32,
+    _previous_automatic: bool,
+) -> Result<(), String> {
+    Err("Prioridade de rede indisponivel nesta plataforma.".to_string())
 }
 
 fn notify_user_settings_changed() {

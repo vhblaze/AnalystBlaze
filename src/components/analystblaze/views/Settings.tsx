@@ -1,4 +1,4 @@
-import { Battery, Brain, Check, DownloadCloud, ExternalLink, Eye, Globe, History, LogOut, Moon, RefreshCw, Shield, Sparkles, Sun, Trash2, User as UserIcon, Zap } from "lucide-react";
+import { AlertTriangle, Battery, Brain, Check, DownloadCloud, ExternalLink, Eye, Globe, History, LogOut, Moon, RefreshCw, Shield, Sparkles, Sun, Trash2, User as UserIcon, Wrench, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -15,11 +15,20 @@ import { canUseAutomaticGameMode, type User } from "@/hooks/useAuth";
 import { localeLabels, type Locale, useI18n } from "@/i18n";
 import {
   getLocalAiPolicy,
+  getPrivilegedHelperStatus,
   getWeeklyAiUsage,
+  installPrivilegedHelper,
+  isTauriRuntime,
   listenToWeeklyAiUsage,
+  restartPrivilegedHelper,
   saveLocalAiPolicy,
+  startPrivilegedHelper,
+  stopPrivilegedHelper,
+  testPrivilegedHelper,
+  uninstallPrivilegedHelper,
   type AgentStatus,
   type LocalAiPolicy,
+  type PrivilegedHelperStatus,
   type UpdateStatus,
   type WeeklyAiUsage,
 } from "@/services/tauri/agent";
@@ -63,6 +72,69 @@ export function Settings({
       .catch(() => undefined)
       .finally(() => setCheckingUpdate(false));
   };
+  const runtimeAvailable = isTauriRuntime();
+  const [helperStatus, setHelperStatus] = useState<PrivilegedHelperStatus | null>(null);
+  const [helperBusy, setHelperBusy] = useState(false);
+  const [helperMessage, setHelperMessage] = useState<string | null>(null);
+  const [helperError, setHelperError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!runtimeAvailable) return;
+    getPrivilegedHelperStatus().then(setHelperStatus).catch(() => undefined);
+  }, [runtimeAvailable]);
+
+  const helperStateLabel = !helperStatus
+    ? t("settings.helperStateUnknown")
+    : !helperStatus.installed
+      ? t("settings.helperStateNotInstalled")
+      : !helperStatus.running
+        ? t("settings.helperStateStopped")
+        : helperStatus.available
+          ? t("settings.helperStateRunning")
+          : t("settings.helperStateRunningAttention");
+  const helperStateStyle = !helperStatus?.installed
+    ? "border-rose-400/30 bg-rose-400/10 text-rose-200"
+    : !helperStatus.running
+      ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
+      : helperStatus.available
+        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
+        : "border-amber-400/30 bg-amber-400/10 text-amber-200";
+
+  const runHelperAction = async (action: () => Promise<PrivilegedHelperStatus>, successMessage: string) => {
+    setHelperBusy(true);
+    setHelperMessage(null);
+    setHelperError(null);
+    try {
+      const nextStatus = await action();
+      setHelperStatus(nextStatus);
+      setHelperMessage(successMessage);
+    } catch (error) {
+      setHelperError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHelperBusy(false);
+    }
+  };
+
+  const runHelperTest = async () => {
+    setHelperBusy(true);
+    setHelperMessage(null);
+    setHelperError(null);
+    try {
+      const handshake = await testPrivilegedHelper();
+      setHelperStatus(await getPrivilegedHelperStatus());
+      if (handshake.ok) {
+        setHelperMessage(handshake.message);
+      } else {
+        setHelperError(handshake.message);
+      }
+      track("privileged_helper_tested", { ok: handshake.ok, latencyMs: handshake.latencyMs });
+    } catch (error) {
+      setHelperError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setHelperBusy(false);
+    }
+  };
+
   const didMountPreferences = useRef(false);
   const [telem, setTelem] = useState(isTelemetryEnabled);
   const [queueSize, setQueueSize] = useState(getTelemetryQueueSize);
@@ -317,6 +389,11 @@ export function Settings({
             control={<Switch checked={aiPolicy.allow_automatic_sensitive_actions} onCheckedChange={(allow_automatic_sensitive_actions) => updateAiPolicy({ allow_automatic_sensitive_actions })} />}
           />
           <Row
+            label={t("settings.aiAutoBestDns")}
+            description={t("settings.aiAutoBestDnsDesc")}
+            control={<Switch checked={aiPolicy.auto_best_dns} onCheckedChange={(auto_best_dns) => updateAiPolicy({ auto_best_dns })} />}
+          />
+          <Row
             label={t("settings.aiPowerPlan")}
             description={t("settings.aiPowerPlanDesc")}
             control={<Switch checked={aiPolicy.optimize_power_plan} onCheckedChange={(optimize_power_plan) => updateAiPolicy({ optimize_power_plan })} />}
@@ -477,6 +554,96 @@ export function Settings({
           />
           <div className="rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4 font-mono text-[11px] uppercase tracking-widest text-slate-500">
             {updater.status?.currentVersion ?? "-"}
+          </div>
+        </div>
+      </section>
+
+      <section className="glass-panel cyber-glow p-6">
+        <div className="flex items-center gap-2 pb-4">
+          <Wrench className="h-3.5 w-3.5 text-cyan-300" />
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.privilegedHelper")}</h2>
+        </div>
+        <p className="text-xs text-slate-500">{t("settings.privilegedHelperDesc")}</p>
+
+        <div className="mt-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
+          <p className="text-xs text-slate-500">
+            {helperStatus?.message ?? t("settings.helperUnknown")}
+          </p>
+          <div className="mt-3 flex items-center gap-2 text-xs">
+            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${helperStateStyle}`}>
+              <span className="h-1.5 w-1.5 rounded-full bg-current" />
+              {helperStateLabel}
+            </span>
+          </div>
+          <div className="mt-3 grid gap-2 text-xs text-slate-400 sm:grid-cols-3">
+            <span className="rounded-lg border border-cyan-500/10 bg-slate-950/50 px-3 py-2">
+              {t("settings.helperInstalled")}: {helperStatus?.installed ? t("common.yes") : t("common.no")}
+            </span>
+            <span className="rounded-lg border border-cyan-500/10 bg-slate-950/50 px-3 py-2">
+              {t("settings.helperRunning")}: {helperStatus?.running ? t("common.yes") : t("common.no")}
+            </span>
+            <span className="rounded-lg border border-cyan-500/10 bg-slate-950/50 px-3 py-2">
+              {t("settings.helperVersion")}: {helperStatus?.version ?? "--"}
+            </span>
+          </div>
+
+          {helperMessage && (
+            <div className="mt-3 flex items-start gap-2 rounded-xl border border-cyan-400/25 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
+              {helperMessage}
+            </div>
+          )}
+          {helperError && (
+            <div className="mt-3 flex items-start gap-2 rounded-xl border border-rose-400/25 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              {helperError}
+            </div>
+          )}
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              disabled={helperBusy || !runtimeAvailable || helperStatus?.available === true || helperStatus?.canRequestUac === false}
+              onClick={() => void runHelperAction(installPrivilegedHelper, helperStatus?.installed ? t("settings.helperRepaired") : t("settings.helperInstalledMsg"))}
+              title={helperStatus?.canRequestUac === false ? t("settings.helperNeedsPerMachine") : (helperStatus?.installed ? t("settings.helperRepairHint") : t("settings.helperInstallHint"))}
+              className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
+            >
+              {helperStatus?.installed ? t("settings.helperInstallRepair") : t("settings.helperInstallButton")}
+            </button>
+            <button
+              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed || helperStatus?.running === true}
+              onClick={() => void runHelperAction(startPrivilegedHelper, t("settings.helperStarted"))}
+              className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
+            >
+              {t("settings.helperStart")}
+            </button>
+            <button
+              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed || helperStatus?.running === false}
+              onClick={() => void runHelperAction(stopPrivilegedHelper, t("settings.helperStopped"))}
+              className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
+            >
+              {t("settings.helperStop")}
+            </button>
+            <button
+              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed}
+              onClick={() => void runHelperAction(restartPrivilegedHelper, t("settings.helperRestarted"))}
+              className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+            >
+              {t("settings.helperRestart")}
+            </button>
+            <button
+              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed}
+              onClick={() => void runHelperTest()}
+              title={t("settings.helperTestHint")}
+              className="rounded-lg border border-sky-400/30 bg-sky-400/10 px-3 py-2 text-xs font-medium text-sky-100 transition hover:bg-sky-400/15 disabled:opacity-50"
+            >
+              {t("settings.helperTest")}
+            </button>
+            <button
+              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed}
+              onClick={() => void runHelperAction(uninstallPrivilegedHelper, t("settings.helperRemoved"))}
+              className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
+            >
+              {t("settings.helperRemove")}
+            </button>
           </div>
         </div>
       </section>
@@ -655,6 +822,9 @@ const DEFAULT_LOCAL_AI_POLICY: LocalAiPolicy = {
   thermal_gpu_limit_c: 84,
   battery_saver_threshold_percent: 20,
   network_latency_threshold_ms: 100,
+  auto_best_dns: false,
+  dns_optimization_cooldown_seconds: 21600,
+  dns_improvement_threshold_ms: 15,
   cleanup_cache_min_age_minutes: 360,
   cleanup_temp_min_age_minutes: 60,
   cleanup_system_min_age_minutes: 1440,

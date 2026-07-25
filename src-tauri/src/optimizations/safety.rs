@@ -191,6 +191,12 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: true,
             requires_privileged_helper: true,
         }),
+        "SET_INTERFACE_METRIC" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: true,
+            requires_privileged_helper: true,
+        }),
         "RESET_WINSOCK_CATALOG" => Some(CommandSafetyProfile {
             risk: RiskLevel::Sensitive,
             requires_local_confirmation: true,
@@ -233,6 +239,7 @@ pub fn supported_actions() -> &'static [&'static str] {
         "CLEAR_STANDBY_LIST",
         "FLUSH_DNS_CACHE",
         "SET_DNS_SERVERS",
+        "SET_INTERFACE_METRIC",
         "RESET_WINSOCK_CATALOG",
         "SET_POWER_PLAN_HIGH_PERFORMANCE",
         "SET_POWER_PLAN_BALANCED",
@@ -550,6 +557,40 @@ fn validate_action_payload(
                     context,
                     Some(profile),
                     json!({ "dns_servers": dns_servers }),
+                ));
+            }
+        }
+        "SET_INTERFACE_METRIC" => {
+            let adapter_name = payload
+                .and_then(|value| {
+                    value
+                        .get("adapterName")
+                        .or_else(|| value.get("adapter_name"))
+                })
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+
+            if !is_safe_network_target(adapter_name) {
+                return Err(safety_error(
+                    "invalid_adapter_name",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "adapter_name": adapter_name }),
+                ));
+            }
+
+            let metric = payload.and_then(|value| value.get("metric")).and_then(Value::as_u64);
+            let valid_metric = matches!(metric, Some(value) if (1..=9999).contains(&value));
+            if !valid_metric {
+                return Err(safety_error(
+                    "invalid_interface_metric",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "metric": metric, "allowed_range": [1, 9999] }),
                 ));
             }
         }
@@ -1036,6 +1077,54 @@ mod tests {
             &context_with_helper(true),
         )
         .expect("set dns servers should be allowed with a valid adapter and dns literals");
+
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn set_interface_metric_requires_helper_and_valid_payload() {
+        let helper_unavailable = validate_command(
+            "SET_INTERFACE_METRIC",
+            Some(&json!({ "adapterName": "Ethernet", "metric": 1 })),
+            &context(CommandSource::ManualUser, None, true),
+        );
+        assert_eq!(
+            helper_unavailable.unwrap_err().reason,
+            "privileged_helper_unavailable"
+        );
+
+        let missing_adapter = validate_command(
+            "SET_INTERFACE_METRIC",
+            Some(&json!({ "metric": 1 })),
+            &context_with_helper(true),
+        );
+        assert_eq!(missing_adapter.unwrap_err().reason, "invalid_adapter_name");
+
+        let bad_metric = validate_command(
+            "SET_INTERFACE_METRIC",
+            Some(&json!({ "adapterName": "Ethernet", "metric": 0 })),
+            &context_with_helper(true),
+        );
+        assert_eq!(bad_metric.unwrap_err().reason, "invalid_interface_metric");
+
+        let out_of_range_metric = validate_command(
+            "SET_INTERFACE_METRIC",
+            Some(&json!({ "adapterName": "Ethernet", "metric": 10_000 })),
+            &context_with_helper(true),
+        );
+        assert_eq!(
+            out_of_range_metric.unwrap_err().reason,
+            "invalid_interface_metric"
+        );
+
+        let profile = validate_command(
+            "SET_INTERFACE_METRIC",
+            Some(&json!({ "adapterName": "Ethernet", "metric": 1 })),
+            &context_with_helper(true),
+        )
+        .expect("set interface metric should be allowed with a valid adapter and metric");
 
         assert_eq!(profile.risk, super::RiskLevel::Sensitive);
         assert!(profile.requires_snapshot);

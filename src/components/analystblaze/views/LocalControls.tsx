@@ -16,18 +16,12 @@ import {
   getProtectedApps,
   getWeeklyGameModeUsage,
   getWindowsInventory,
-  installPrivilegedHelper,
   isTauriRuntime,
   listenToGameModeUsage,
-  restartPrivilegedHelper,
   runPerformanceScan,
   scanCleanupCategories,
   scanStartupImpact,
   removeProtectedApp,
-  startPrivilegedHelper,
-  stopPrivilegedHelper,
-  testPrivilegedHelper,
-  uninstallPrivilegedHelper,
   type AuditEvent,
   type AgentStatus,
   type CleanupCategory,
@@ -121,22 +115,6 @@ export function LocalControls({
     snapshots.some((snapshot) => !snapshot.restored_at) ||
     focusModeActive ||
     performanceReport?.restoreSession?.status === "available";
-  const helperStateLabel = !helperStatus
-    ? "estado desconhecido"
-    : !helperStatus.installed
-      ? "nao instalado"
-      : !helperStatus.running
-        ? "instalado, parado"
-        : helperStatus.available
-          ? "rodando"
-          : "rodando (atencao)";
-  const helperStateStyle = !helperStatus?.installed
-    ? "border-rose-400/30 bg-rose-400/10 text-rose-200"
-    : !helperStatus.running
-      ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
-      : helperStatus.available
-        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
-        : "border-amber-400/30 bg-amber-400/10 text-amber-200";
   const activeProfileLabel = gameModeActive
     ? "Modo Gamer Ativado"
     : performanceReport?.metrics.gameDetected
@@ -311,32 +289,6 @@ export function LocalControls({
       },
       "Plano de energia atualizado.",
     );
-  };
-
-  const runHelperAction = async (
-    action: () => Promise<PrivilegedHelperStatus>,
-    successMessage: string,
-  ) => {
-    await runControlAction(
-      async () => {
-        const nextStatus = await action();
-        setHelperStatus(nextStatus);
-        await refreshOperationalHistory();
-      },
-      successMessage,
-    );
-  };
-
-  const runHelperTest = async () => {
-    setActionMessage(null);
-    try {
-      const handshake = await testPrivilegedHelper();
-      setHelperStatus(await getPrivilegedHelperStatus());
-      setActionMessage(handshake.message);
-      track("privileged_helper_tested", { ok: handshake.ok, latencyMs: handshake.latencyMs });
-    } catch (error) {
-      setActionMessage(errorMessage(error));
-    }
   };
 
   const runTempAction = async (action: () => Promise<unknown>, successMessage: string) => {
@@ -903,91 +855,21 @@ export function LocalControls({
             }))}
           />
         </div>
-        <div className="mt-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-          <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-            <Wrench className="h-4 w-4 text-cyan-300" />
-            {t("settings.privilegedHelper")}
-          </div>
-          <p className="mt-1 text-xs text-slate-500">
-            {helperStatus?.message ?? t("settings.helperUnknown")}
-          </p>
-          <div className="mt-3 flex items-center gap-2 text-xs">
-            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${helperStateStyle}`}>
-              <span className="h-1.5 w-1.5 rounded-full bg-current" />
-              {helperStateLabel}
-            </span>
-          </div>
-          <div className="mt-3 grid gap-2 text-xs text-slate-400 sm:grid-cols-3">
-            <span className="rounded-lg border border-cyan-500/10 bg-slate-950/50 px-3 py-2">
-              instalado: {helperStatus?.installed ? "sim" : "nao"}
-            </span>
-            <span className="rounded-lg border border-cyan-500/10 bg-slate-950/50 px-3 py-2">
-              rodando: {helperStatus?.running ? "sim" : "nao"}
-            </span>
-            <span className="rounded-lg border border-cyan-500/10 bg-slate-950/50 px-3 py-2">
-              versao: {helperStatus?.version ?? "--"}
-            </span>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              disabled={busy || !runtimeAvailable || helperStatus?.available === true || helperStatus?.canRequestUac === false}
-              onClick={() => void runHelperAction(installPrivilegedHelper, helperStatus?.installed ? "Helper privilegiado reparado." : "Helper privilegiado instalado.")}
-              title={helperStatus?.canRequestUac === false ? "Instale o AnalystBlaze em modo per-machine/Program Files para liberar o reparo do helper." : (helperStatus?.installed ? "Reinstala o servico do helper para corrigir uma instalacao quebrada (pede UAC uma vez)." : "Instala o servico do helper (pede UAC uma vez).")}
-              className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
-            >
-              {helperStatus?.installed ? "Instalar / Reparar" : "Instalar helper"}
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable || !helperStatus?.installed || helperStatus?.running === true}
-              onClick={() => void runHelperAction(startPrivilegedHelper, "Helper privilegiado iniciado.")}
-              className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
-            >
-              Iniciar
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable || !helperStatus?.installed || helperStatus?.running === false}
-              onClick={() => void runHelperAction(stopPrivilegedHelper, "Helper privilegiado parado.")}
-              className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
-            >
-              Parar
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable || !helperStatus?.installed}
-              onClick={() => void runHelperAction(restartPrivilegedHelper, "Helper privilegiado reiniciado.")}
-              className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
-            >
-              Reiniciar
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable || !helperStatus?.installed}
-              onClick={() => void runHelperTest()}
-              title="Faz um handshake HMAC pelo named pipe local para confirmar que o canal seguro do helper responde."
-              className="rounded-lg border border-sky-400/30 bg-sky-400/10 px-3 py-2 text-xs font-medium text-sky-100 transition hover:bg-sky-400/15 disabled:opacity-50"
-            >
-              Testar conexao
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable || !helperStatus?.installed}
-              onClick={() => void runHelperAction(uninstallPrivilegedHelper, "Helper privilegiado removido.")}
-              className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
-            >
-              Remover
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void runTempAction(onDeepCleanTemp, "Limpeza profunda TEMP concluida.")}
-              className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
-            >
-              Limpeza profunda TEMP
-            </button>
-            <button
-              disabled={busy || !runtimeAvailable}
-              onClick={() => void runTempAction(onPurgeCleanup, "Quarentena de limpeza apagada.")}
-              className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
-            >
-              Purgar quarentena
-            </button>
-          </div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            disabled={busy || !runtimeAvailable}
+            onClick={() => void runTempAction(onDeepCleanTemp, "Limpeza profunda TEMP concluida.")}
+            className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
+          >
+            Limpeza profunda TEMP
+          </button>
+          <button
+            disabled={busy || !runtimeAvailable}
+            onClick={() => void runTempAction(onPurgeCleanup, "Quarentena de limpeza apagada.")}
+            className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
+          >
+            Purgar quarentena
+          </button>
         </div>
       </section>
       </AdvancedSection>

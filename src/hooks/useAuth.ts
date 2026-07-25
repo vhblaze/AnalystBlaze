@@ -30,6 +30,7 @@ import {
   resetWinsockCatalog,
   setAgentTelemetryMode,
   setDnsServers as setDnsServersAction,
+  setInterfaceMetric as setInterfaceMetricAction,
   setPowerPlanBalanced,
   setPowerPlanHighPerformance,
   setPowerPlanPowerSaver,
@@ -553,6 +554,27 @@ export function useAuth() {
     [runAction],
   );
 
+  const setInterfaceMetric = useCallback(
+    async (adapterName: string, metric: number) => {
+      const result = await runAction(async () => {
+        const result = await setInterfaceMetricAction(adapterName, metric);
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? "interface_metric_changed" : "interface_metric_change_failed",
+          category: "agent",
+          properties: { adapter: adapterName },
+        });
+        return result;
+      }, { rethrow: true });
+      if (result && !result.success) throw new Error(result.message);
+      return result;
+    },
+    [runAction],
+  );
+
   const resetWinsock = useCallback(async () => {
     const result = await runAction(async () => {
       const result = await resetWinsockCatalog();
@@ -826,6 +848,7 @@ export function useAuth() {
     setPowerPlan,
     flushDns,
     setDnsServers,
+    setInterfaceMetric,
     resetWinsock,
     applyVisualPerformance,
     restoreVisualPerformance,

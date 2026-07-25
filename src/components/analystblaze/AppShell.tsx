@@ -878,6 +878,17 @@ export function AppShell() {
                       auth.resetWinsock,
                     )
                   }
+                  onSetInterfaceMetric={(adapterName, metric) =>
+                    runConfirmed(
+                      {
+                        title: "Priorizar adaptador de rede",
+                        description: "Diminui a prioridade de rota do adaptador selecionado para que o Windows prefira ele sobre os demais adaptadores ativos. O agente salva a configuracao atual em snapshot local para restaurar depois.",
+                        risk: "sensivel",
+                        snapshot: true,
+                      },
+                      () => auth.setInterfaceMetric(adapterName, metric),
+                    )
+                  }
                 />
               </Suspense>
             ) : (

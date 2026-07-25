@@ -2,9 +2,28 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::UdpSocket;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::process_ext::{decode_console_bytes, CommandExt};
+
+static LAST_AUTO_DNS_CHECK_AT: OnceLock<Mutex<i64>> = OnceLock::new();
+
+/// Cheap in-memory throttle so the "best DNS route" local-policy decision
+/// doesn't re-run the live benchmark (real UDP queries) on every tick -
+/// only once the configured cooldown has elapsed since the last attempt.
+pub fn should_run_auto_dns_check(min_interval_seconds: i64) -> bool {
+    let cell = LAST_AUTO_DNS_CHECK_AT.get_or_init(|| Mutex::new(0));
+    let Ok(mut last) = cell.lock() else {
+        return false;
+    };
+    let now = chrono::Utc::now().timestamp();
+    if now.saturating_sub(*last) < min_interval_seconds.max(0) {
+        return false;
+    }
+    *last = now;
+    true
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NetworkDiagnostics {

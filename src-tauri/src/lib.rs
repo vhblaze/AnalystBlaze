@@ -922,6 +922,21 @@ async fn set_dns_servers(
 }
 
 #[tauri::command]
+async fn set_interface_metric(
+    adapter_name: String,
+    metric: u32,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "SET_INTERFACE_METRIC",
+        Some(serde_json::json!({
+            "adapterName": adapter_name,
+            "metric": metric,
+        })),
+    )
+    .await)
+}
+
+#[tauri::command]
 async fn reset_winsock_catalog() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command(
         "RESET_WINSOCK_CATALOG",
@@ -1596,6 +1611,7 @@ pub fn run() {
             energy_diagnostics,
             flush_dns_cache,
             set_dns_servers,
+            set_interface_metric,
             reset_winsock_catalog,
             list_network_adapters,
             run_network_traceroute,

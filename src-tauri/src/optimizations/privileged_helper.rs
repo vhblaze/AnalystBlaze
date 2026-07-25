@@ -1564,6 +1564,7 @@ fn supported_actions() -> &'static [&'static str] {
         "STOP_SERVICE",
         "RESTORE_SERVICE",
         "SET_DNS_SERVERS",
+        "SET_INTERFACE_METRIC",
         "RESET_WINSOCK_CATALOG",
     ]
 }
@@ -2007,6 +2008,17 @@ mod protocol_tests {
 
         validate_request_execution_policy(&request)
             .expect("set dns servers should now be helper-allowlisted");
+    }
+
+    #[test]
+    fn helper_policy_allows_set_interface_metric_with_valid_payload() {
+        let request = signed_request(
+            "SET_INTERFACE_METRIC",
+            Some(json!({ "adapterName": "Ethernet", "metric": 1 })),
+        );
+
+        validate_request_execution_policy(&request)
+            .expect("set interface metric should be helper-allowlisted");
     }
 
     #[test]
