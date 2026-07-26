@@ -19,6 +19,7 @@ import {
   type Announcement,
   type RemoteCommandConfirmationRequest,
 } from "@/services/tauri/agent";
+import type { DiskNearFullInfo } from "@/services/insights";
 
 export type ViewKey = "dashboard" | "telemetry" | "insights" | "controls" | "disk" | "network" | "settings";
 
@@ -33,6 +34,7 @@ const Settings = lazy(() => import("./views/Settings").then((module) => ({ defau
 export function AppShell() {
   const [view, setView] = useState<ViewKey>("dashboard");
   const [focusDiskUsage, setFocusDiskUsage] = useState(false);
+  const [diskNearFullInfo, setDiskNearFullInfo] = useState<DiskNearFullInfo | null>(null);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [remoteConfirmationQueue, setRemoteConfirmationQueue] = useState<RemoteCommandConfirmationRequest[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
@@ -575,6 +577,7 @@ export function AppShell() {
                   user={auth.user}
                   status={auth.status}
                   telemetry={telemetry}
+                  networkActionPending={auth.networkActionPending}
                   onStartAgent={auth.start}
                   onActivateGameMode={async () => {
                     await runConfirmed(
@@ -631,7 +634,9 @@ export function AppShell() {
               <Suspense fallback={<ViewFallback />}>
                 <Insights
                   telemetry={telemetry}
+                  diskNearFullInfo={diskNearFullInfo}
                   onOpenDiskUsage={openDiskUsageDetails}
+                  onOpenNetwork={openNetworkDetails}
                   onApplyInsightActionLocally={applyInsightActionLocally}
                   onRequestAgentApplyInsight={auth.requestAgentApplyInsight}
                 />
@@ -838,6 +843,7 @@ export function AppShell() {
                 <DiskExplorer
                   autoScan={focusDiskUsage}
                   onAutoScanHandled={() => setFocusDiskUsage(false)}
+                  onDiskNearFullDetected={setDiskNearFullInfo}
                 />
               </Suspense>
             ) : view === "network" ? (
@@ -878,15 +884,49 @@ export function AppShell() {
                       auth.resetWinsock,
                     )
                   }
-                  onSetInterfaceMetric={(adapterName, metric) =>
-                    runConfirmed(
+                  onSetAdapterEnabled={async (adapterName, enabled, context) => {
+                    if (context?.riskWarning) {
+                      const acknowledged = await requestConfirmation({
+                        title: "Atencao: essa interface parece estar em uso",
+                        description: context.riskWarning,
+                        risk: "sensivel",
+                        snapshot: false,
+                      });
+                      if (!acknowledged) return false;
+                    }
+                    const baseDescription = enabled
+                      ? "Reativa o adaptador de rede selecionado."
+                      : "Desativa o adaptador de rede selecionado para forcar o trafego a sair por outro adaptador. O agente salva o estado atual em snapshot local para restaurar depois.";
+                    return runConfirmed(
                       {
-                        title: "Priorizar adaptador de rede",
-                        description: "Diminui a prioridade de rota do adaptador selecionado para que o Windows prefira ele sobre os demais adaptadores ativos. O agente salva a configuracao atual em snapshot local para restaurar depois.",
+                        title: enabled ? "Ativar adaptador de rede" : "Desativar adaptador de rede",
+                        description: context?.reason ? `${context.reason}\n\n${baseDescription}` : baseDescription,
                         risk: "sensivel",
                         snapshot: true,
                       },
-                      () => auth.setInterfaceMetric(adapterName, metric),
+                      () => auth.setAdapterEnabled(adapterName, enabled),
+                    );
+                  }}
+                  onApplyNetworkTune={(request) =>
+                    runConfirmed(
+                      {
+                        title: "Aplicar otimizacao de TCP",
+                        description: "Ajusta parametros da pilha TCP do Windows (auto-tuning, ECN, congestionamento ou registro por adaptador). O agente salva a configuracao atual em snapshot local; se ninguem confirmar, e revertido automaticamente.",
+                        risk: "sensivel",
+                        snapshot: true,
+                      },
+                      () => auth.applyNetworkTune(request),
+                    )
+                  }
+                  onRestartWindows={() =>
+                    runConfirmed(
+                      {
+                        title: "Reiniciar o computador",
+                        description: "Fecha todos os programas abertos e reinicia o Windows em alguns segundos. Necessario para aplicar ajustes de registro na rede.",
+                        risk: "sensivel",
+                        snapshot: false,
+                      },
+                      auth.restartWindowsNow,
                     )
                   }
                 />

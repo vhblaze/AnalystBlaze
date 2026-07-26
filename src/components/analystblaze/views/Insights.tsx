@@ -1,11 +1,36 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowRight, Bot, Brain, Cpu, Droplets, ExternalLink, RefreshCw, Sparkles, User, Wind, X, Zap } from "lucide-react";
-import { fetchInsights, type Insight } from "@/services/insights";
+import { fetchInsights, type DiskNearFullInfo, type Insight } from "@/services/insights";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
-import { isTauriRuntime, openAgentInsights, type AgentTelemetrySnapshot } from "@/services/tauri/agent";
+import {
+  getNetworkDiagnostics,
+  isTauriRuntime,
+  openAgentInsights,
+  type AgentTelemetrySnapshot,
+  type NetworkDiagnostics,
+} from "@/services/tauri/agent";
 
 const DISK_USAGE_WARNING_THRESHOLD_PERCENT = 80;
+const NETWORK_LAG_FLAGS = ["packet_loss_detected", "jitter_high", "latency_high"] as const;
+const LATENCY_THRESHOLD_MS = 90;
+const INSIGHT_CONFIDENCE_THRESHOLD = 0.5;
+/** DiskExplorer only reports a volume here once it's already over its own
+ * (higher) threshold - this is just for confidence scaling, not a second
+ * gate. */
+const DISK_NEAR_FULL_BASE_PERCENT = 90;
+
+function formatBytesShort(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 100 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
 const DISMISS_STORAGE_KEY = "analystblaze.dismissedInsights";
 const DISMISS_TTL_MS = 24 * 60 * 60 * 1000;
 /** The server only ever pairs a card with an actionName from its own small
@@ -65,12 +90,20 @@ const meta: Record<Category, { icon: React.ComponentType<{ className?: string }>
 
 export function Insights({
   telemetry,
+  diskNearFullInfo,
   onOpenDiskUsage,
+  onOpenNetwork,
   onApplyInsightActionLocally,
   onRequestAgentApplyInsight,
 }: {
   telemetry?: AgentTelemetrySnapshot | null;
+  /** Set by DiskExplorer, on demand, the moment it detects some individual
+   * volume near capacity - null means either nothing's near full or the
+   * user hasn't opened Disk Explorer yet this session (no background scan
+   * exists to fill this in ahead of time). */
+  diskNearFullInfo?: DiskNearFullInfo | null;
   onOpenDiskUsage?: () => void;
+  onOpenNetwork?: () => void;
   /** "I'll do it myself" - runs the action right now, locally, with the
    * same confirmation dialog its dedicated button elsewhere already uses. */
   onApplyInsightActionLocally?: (actionName: string) => Promise<unknown>;
@@ -86,6 +119,10 @@ export function Insights({
   const [dismissed, setDismissed] = useState<Record<string, number>>(() => loadDismissed());
   const [actionBusyKey, setActionBusyKey] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  // Only fetched here, on demand, for the local VPN+latency insight below -
+  // the passive telemetry sample doesn't probe the adapter/VPN detection
+  // (kept out of the 2s telemetry loop deliberately, see collect_network_sample).
+  const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(null);
 
   const dismissInsight = (insight: Insight) => {
     const key = insightKey(insight);
@@ -157,14 +194,105 @@ export function Insights({
     };
   }, [telemetry?.disk_usage_percent, onOpenDiskUsage, track]);
 
+  const vpnLatencyInsight = useMemo<Insight | null>(() => {
+    const diagnostics = networkDiagnostics;
+    if (!diagnostics || !onOpenNetwork) return null;
+
+    const recommendations = diagnostics.recommendations ?? [];
+    if (!recommendations.includes("vpn_or_virtual_adapter_active")) return null;
+    const activeLagFlags = NETWORK_LAG_FLAGS.filter((flag) => recommendations.includes(flag));
+    if (activeLagFlags.length === 0) return null;
+
+    // More simultaneous symptoms = more confident this isn't just noise.
+    // A single metric barely over its threshold is weak evidence on its
+    // own, so it gets dampened rather than trusted at face value - and if
+    // that drops confidence below the bar, no insight is generated at all.
+    let confidence = 0.4 + activeLagFlags.length * 0.15;
+    if (activeLagFlags.length === 1 && activeLagFlags[0] === "latency_high") {
+      const margin = (diagnostics.external_latency_ms ?? 0) - LATENCY_THRESHOLD_MS;
+      if (margin < 20) confidence -= 0.15;
+    }
+    if (confidence < INSIGHT_CONFIDENCE_THRESHOLD) return null;
+
+    const metricLabel: Record<(typeof NETWORK_LAG_FLAGS)[number], string> = {
+      packet_loss_detected: `perda de pacotes de ${(diagnostics.packet_loss_percent ?? 0).toFixed(1)}% (limite: 2%)`,
+      jitter_high: `jitter de ${Math.round(diagnostics.jitter_ms ?? 0)}ms (limite: 20ms)`,
+      latency_high: `latencia de ${Math.round(diagnostics.external_latency_ms ?? 0)}ms (limite: ${LATENCY_THRESHOLD_MS}ms)`,
+    };
+    const metricsText = activeLagFlags.map((flag) => metricLabel[flag]).join(", ");
+    const adapterLabel = diagnostics.adapter_name || diagnostics.adapter_description || "adaptador de VPN/virtual";
+
+    return {
+      title: "VPN pode estar afetando sua conexao",
+      explanation: `Detectamos ${metricsText}, com uma VPN ou adaptador virtual ativo (${adapterLabel}). A VPN e uma causa provavel, mas nao confirmada - desative-a temporariamente para comparar a conexao antes de decidir.`,
+      impact: activeLagFlags.length > 1 ? "Varios sinais de instabilidade" : "Instabilidade detectada",
+      category: "rede",
+      risk: "baixo",
+      reversible: true,
+      confidence,
+      reason: metricsText,
+      action: {
+        label: "Ver detalhes em Rede",
+        onClick: () => {
+          track("vpn_latency_insight_opened", { confidence: Math.round(confidence * 100), flags: activeLagFlags.join(",") });
+          onOpenNetwork();
+        },
+      },
+    };
+  }, [networkDiagnostics, onOpenNetwork, track]);
+
+  const diskNearFullInsight = useMemo<Insight | null>(() => {
+    const info = diskNearFullInfo;
+    if (!info || !onOpenDiskUsage) return null;
+
+    // A direct measurement (not an inference from correlated symptoms like
+    // the VPN card above), so confidence starts high and just scales with
+    // how far past the threshold it is.
+    const confidence = Math.min(0.95, 0.7 + (info.usedPercent - DISK_NEAR_FULL_BASE_PERCENT) / 40);
+    if (confidence < INSIGHT_CONFIDENCE_THRESHOLD) return null;
+
+    const offendersText = info.topOffenders.length > 0
+      ? info.topOffenders.map((item) => `${item.label} (${formatBytesShort(item.sizeBytes)})`).join(", ")
+      : "nao foi possivel identificar os maiores itens agora";
+
+    return {
+      title: `Disco ${info.label || info.mountPoint} quase cheio`,
+      explanation: `${info.mountPoint} esta com ${Math.round(info.usedPercent)}% de uso. Maiores itens encontrados: ${offendersText}. Abra o Explorador de Disco para revisar e limpar com seguranca (itens vao para quarentena reversivel quando aplicavel).`,
+      impact: `${Math.round(info.usedPercent)}% usado`,
+      category: "limpeza",
+      risk: "medio",
+      reversible: true,
+      confidence,
+      reason: `Uso medido diretamente no volume ${info.mountPoint}: ${Math.round(info.usedPercent)}% (limite: ${DISK_NEAR_FULL_BASE_PERCENT}%).`,
+      action: {
+        label: "Ver detalhes",
+        onClick: () => {
+          track("disk_near_full_insight_opened", { mountPoint: info.mountPoint, usedPercent: Math.round(info.usedPercent) });
+          onOpenDiskUsage();
+        },
+      },
+    };
+  }, [diskNearFullInfo, onOpenDiskUsage, track]);
+
   const visibleInsights = useMemo(() => {
-    const all = diskUsageInsight ? [diskUsageInsight, ...insights] : insights;
+    const local = [diskUsageInsight, vpnLatencyInsight, diskNearFullInsight].filter(
+      (insight): insight is Insight => insight != null,
+    );
+    const all = [...local, ...insights];
     return all.filter((insight) => !(insightKey(insight) in dismissed));
-  }, [diskUsageInsight, insights, dismissed]);
+  }, [diskUsageInsight, vpnLatencyInsight, diskNearFullInsight, insights, dismissed]);
 
   const generate = async () => {
     setLoading(true);
     setError(null);
+    if (isTauriRuntime()) {
+      // Best-effort, independent of the server fetch below - a failure here
+      // just means the local VPN+latency insight stays silent, not that the
+      // whole insights screen errors out.
+      getNetworkDiagnostics()
+        .then(setNetworkDiagnostics)
+        .catch(() => undefined);
+    }
     try {
       const result = await fetchInsights(t, locale);
       setInsights(result.insights);

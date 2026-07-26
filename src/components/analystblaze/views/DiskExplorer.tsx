@@ -5,6 +5,7 @@ import { useTelemetry } from "@/hooks/useTelemetry";
 import {
   cancelDiskTreeScan,
   deleteDiskUsageItem,
+  getDiskUsageSummary,
   isTauriRuntime,
   listDiskDirectory,
   listDiskVolumes,
@@ -13,12 +14,17 @@ import {
   type DiskTreeProgress,
   type DiskVolumeInfo,
 } from "@/services/tauri/agent";
+import type { DiskNearFullInfo } from "@/services/insights";
 import { DiskTreemap, DiskTreemapLegend } from "@/components/analystblaze/DiskTreemap";
 
 /** Mirrors disk_usage.rs's DIRECT_DELETE_THRESHOLD_BYTES - only used here
  * to warn before the click; the backend enforces the real behavior
  * regardless of what this shows. */
 const DIRECT_DELETE_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024;
+/** Per-drive threshold for the "disk near capacity" insight - deliberately
+ * higher than the 80% whole-machine warning already shown elsewhere, since
+ * this points at one specific drive rather than an aggregate. */
+const DISK_NEAR_FULL_THRESHOLD_PERCENT = 90;
 /** How long the fade/collapse plays before the row actually leaves the
  * list - keep in sync with the CSS transition duration below. */
 const DELETE_ANIMATION_MS = 260;
@@ -38,6 +44,64 @@ function formatBytes(bytes: number): string {
     unitIndex += 1;
   }
   return `${value >= 100 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
+}
+
+/** Picks the fullest volume over the threshold (if any) and, only then,
+ * pays for the heavier categorized scan to find its top offenders - cheap
+ * in the common case where nothing is near capacity, since listDiskVolumes()
+ * was already fetched for the volume picker regardless. */
+async function detectDiskNearFull(
+  volumes: DiskVolumeInfo[],
+  onDetected?: (info: DiskNearFullInfo | null) => void,
+): Promise<void> {
+  if (!onDetected) return;
+  const candidates = volumes
+    .filter((volume) => volume.totalBytes > 0)
+    .map((volume) => ({
+      volume,
+      usedPercent: ((volume.totalBytes - volume.availableBytes) / volume.totalBytes) * 100,
+    }))
+    .filter((entry) => entry.usedPercent >= DISK_NEAR_FULL_THRESHOLD_PERCENT)
+    .sort((a, b) => b.usedPercent - a.usedPercent);
+
+  if (candidates.length === 0) {
+    onDetected(null);
+    return;
+  }
+
+  const { volume, usedPercent } = candidates[0];
+  try {
+    const summary = await getDiskUsageSummary();
+    const mount = volume.mountPoint.toLowerCase();
+    const offenders = summary.categories
+      .flatMap((category) => category.items)
+      // Cache-category items carry a cleanup-category id in `path`, not a
+      // real filesystem path, so they can't be matched to a drive letter.
+      .filter((item) => !item.deletesViaCleanupCategory && item.path.toLowerCase().startsWith(mount))
+      .sort((a, b) => b.sizeBytes - a.sizeBytes)
+      .slice(0, 5)
+      .map((item) => ({ label: item.label, sizeBytes: item.sizeBytes }));
+
+    onDetected({
+      mountPoint: volume.mountPoint,
+      label: volume.label,
+      usedPercent,
+      totalBytes: volume.totalBytes,
+      topOffenders: offenders,
+      computedAt: Date.now(),
+    });
+  } catch {
+    // The volume is still genuinely near full even if the offender scan
+    // fails - report it without offenders rather than staying silent.
+    onDetected({
+      mountPoint: volume.mountPoint,
+      label: volume.label,
+      usedPercent,
+      totalBytes: volume.totalBytes,
+      topOffenders: [],
+      computedAt: Date.now(),
+    });
+  }
 }
 
 function parentPath(path: string): string | null {
@@ -63,12 +127,17 @@ function breadcrumbSegments(root: string, current: string): { label: string; pat
 export function DiskExplorer({
   autoScan,
   onAutoScanHandled,
+  onDiskNearFullDetected,
 }: {
   /** Set (transiently) when the user navigated here from an Insights card
    * asking to see disk-usage details - triggers loading the first detected
    * volume's root on arrival. */
   autoScan?: boolean;
   onAutoScanHandled?: () => void;
+  /** Called at most once per volume list load, only when some drive is
+   * actually near capacity - lets Insights show a card without this screen
+   * needing to know anything about how insights are displayed. */
+  onDiskNearFullDetected?: (info: DiskNearFullInfo | null) => void;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("disk_explorer");
@@ -106,8 +175,13 @@ export function DiskExplorer({
       .then((list) => {
         setVolumes(list);
         setSelectedVolume((current) => current || list[0]?.mountPoint || "");
+        void detectDiskNearFull(list, onDiskNearFullDetected);
       })
       .catch((error) => setVolumesError(errorMessage(error)));
+    // Only re-run when the runtime becomes available - onDiskNearFullDetected
+    // is expected to be a stable callback from AppShell, not something that
+    // should re-trigger a fresh scan on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimeAvailable]);
 
   useEffect(() => {

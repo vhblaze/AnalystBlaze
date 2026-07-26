@@ -2,12 +2,31 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::net::UdpSocket;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::process_ext::{decode_console_bytes, CommandExt};
 
 static LAST_AUTO_DNS_CHECK_AT: OnceLock<Mutex<i64>> = OnceLock::new();
+
+// The dashboard's network telemetry sample is cached for 30s (see
+// TelemetryCollector::network_diagnostics) so the 2s telemetry loop doesn't
+// re-probe adapters/gateway/DNS on every tick. That's fine for passive
+// display, but it means the summary card can show stale info for up to 30s
+// after the user actively changes something (enabling/disabling an
+// adapter, DNS servers, TCP tuning, DHCP renewal). Network-changing actions
+// call invalidate_network_cache() on success so the very next telemetry
+// tick re-probes instead of waiting out the cache window.
+static NETWORK_CACHE_INVALIDATED: AtomicBool = AtomicBool::new(false);
+
+pub fn invalidate_network_cache() {
+    NETWORK_CACHE_INVALIDATED.store(true, Ordering::SeqCst);
+}
+
+pub fn take_network_cache_invalidated() -> bool {
+    NETWORK_CACHE_INVALIDATED.swap(false, Ordering::SeqCst)
+}
 
 /// Cheap in-memory throttle so the "best DNS route" local-policy decision
 /// doesn't re-run the live benchmark (real UDP queries) on every tick -
@@ -184,8 +203,34 @@ fn diagnostics_from_probes(probes: Vec<NetworkProbe>) -> NetworkDiagnostics {
 }
 
 fn collect_active_adapter() -> AdapterInfo {
+    // Previously picked the *first* Get-NetIPConfiguration entry that had
+    // any non-null IPv4DefaultGateway object and Status "Up" - but
+    // Get-NetIPConfiguration's enumeration order has nothing to do with
+    // which adapter Windows actually routes internet traffic through, and
+    // some virtual adapters (VPN/LAN-tunnel software) can carry a non-null
+    // but effectively empty IPv4DefaultGateway object, passing that filter
+    // without being a real gateway. That produced misattributed diagnostics
+    // - e.g. reporting "Radmin VPN" as the active adapter with Gateway "--"
+    // while probes to 1.1.1.1/8.8.8.8 were actually leaving through
+    // Ethernet the whole time. Querying the real IPv4 default route
+    // (lowest combined route+interface metric, exactly how Windows itself
+    // picks the outbound adapter) and resolving *that* route's interface
+    // is the correct source of truth instead.
     let Some(value) = powershell_json(
-        "$cfg=Get-NetIPConfiguration | Where-Object {$_.IPv4DefaultGateway -ne $null -and $_.NetAdapter.Status -eq 'Up'} | Select-Object -First 1; $result=if ($null -eq $cfg) { [pscustomobject]@{} } else { $adapter=Get-NetAdapter -InterfaceIndex $cfg.InterfaceIndex -ErrorAction SilentlyContinue; [pscustomobject]@{ Name=$adapter.Name; InterfaceDescription=$adapter.InterfaceDescription; Status=$adapter.Status; MediaType=$adapter.MediaType; PhysicalMediaType=$adapter.PhysicalMediaType; LinkSpeed=$adapter.LinkSpeed; Gateway=($cfg.IPv4DefaultGateway.NextHop | Select-Object -First 1); DnsServers=($cfg.DNSServer.ServerAddresses -join ',') } }; $result | ConvertTo-Json -Compress",
+        r#"$route = Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    Where-Object { $_.DestinationPrefix -eq '0.0.0.0/0' } |
+    Sort-Object -Property @{Expression = { $_.RouteMetric + $_.InterfaceMetric }} |
+    Select-Object -First 1;
+$result = if ($null -eq $route) { [pscustomobject]@{} } else {
+    $adapter = Get-NetAdapter -InterfaceIndex $route.ifIndex -ErrorAction SilentlyContinue;
+    $cfg = Get-NetIPConfiguration -InterfaceIndex $route.ifIndex -ErrorAction SilentlyContinue;
+    [pscustomobject]@{
+        Name = $adapter.Name; InterfaceDescription = $adapter.InterfaceDescription; Status = $adapter.Status;
+        MediaType = $adapter.MediaType; PhysicalMediaType = $adapter.PhysicalMediaType; LinkSpeed = $adapter.LinkSpeed;
+        Gateway = $route.NextHop; DnsServers = ($cfg.DNSServer.ServerAddresses -join ',')
+    }
+};
+$result | ConvertTo-Json -Compress"#,
     ) else {
         return AdapterInfo::default();
     };
@@ -213,6 +258,39 @@ fn collect_active_adapter() -> AdapterInfo {
 pub fn list_network_adapters() -> Vec<NetworkAdapterSummary> {
     let Some(value) = powershell_json(
         "Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object Name,InterfaceDescription,Status | ConvertTo-Json -Compress",
+    ) else {
+        return Vec::new();
+    };
+
+    let items: Vec<Value> = match value {
+        Value::Array(items) => items,
+        Value::Object(_) => vec![value],
+        _ => Vec::new(),
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let name = text_field(item, "Name")?;
+            Some(NetworkAdapterSummary {
+                name,
+                description: text_field(item, "InterfaceDescription"),
+                status: text_field(item, "Status"),
+            })
+        })
+        .collect()
+}
+
+pub fn list_all_network_adapters() -> Vec<NetworkAdapterSummary> {
+    // Get-NetAdapter alone also returns "ghost" virtual mobile-broadband
+    // adapters Windows' WWAN stack leaves behind (a long-standing Windows
+    // quirk, unrelated to this app) - dozens of them can accumulate over
+    // time. They report Status "Not Present" and can't be toggled since
+    // there's no real device backing them, so exclude them here to match
+    // what Settings > Network adapters shows.
+    let Some(value) = powershell_json(
+        "Get-NetAdapter | Where-Object { $_.Status -ne 'Not Present' } | \
+         Select-Object Name,InterfaceDescription,Status | ConvertTo-Json -Compress",
     ) else {
         return Vec::new();
     };

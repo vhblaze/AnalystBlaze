@@ -121,6 +121,12 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: false,
             requires_privileged_helper: false,
         }),
+        "CHECK_ADAPTER_DISABLE_GUARD" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Safe,
+            requires_local_confirmation: false,
+            requires_snapshot: false,
+            requires_privileged_helper: false,
+        }),
         "APPLY_GAME_MODE"
         | "APPLY_ADAPTIVE_OPTIMIZATION"
         | "APPLY_BACKGROUND_QUIET_MODE"
@@ -179,9 +185,21 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: false,
             requires_privileged_helper: true,
         }),
-        "FLUSH_DNS_CACHE" => Some(CommandSafetyProfile {
+        "FLUSH_DNS_CACHE" | "RENEW_DHCP_LEASE" => Some(CommandSafetyProfile {
             risk: RiskLevel::Safe,
             requires_local_confirmation: false,
+            requires_snapshot: false,
+            requires_privileged_helper: false,
+        }),
+        "APPLY_NETWORK_TUNE" | "REVERT_NETWORK_TUNE" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: action_name == "APPLY_NETWORK_TUNE",
+            requires_privileged_helper: true,
+        }),
+        "RESTART_WINDOWS_NOW" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
             requires_snapshot: false,
             requires_privileged_helper: false,
         }),
@@ -192,6 +210,12 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_privileged_helper: true,
         }),
         "SET_INTERFACE_METRIC" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: true,
+            requires_privileged_helper: true,
+        }),
+        "SET_ADAPTER_ENABLED" => Some(CommandSafetyProfile {
             risk: RiskLevel::Sensitive,
             requires_local_confirmation: true,
             requires_snapshot: true,
@@ -238,8 +262,14 @@ pub fn supported_actions() -> &'static [&'static str] {
         "PURGE_CLEANUP_QUARANTINE",
         "CLEAR_STANDBY_LIST",
         "FLUSH_DNS_CACHE",
+        "RENEW_DHCP_LEASE",
+        "APPLY_NETWORK_TUNE",
+        "REVERT_NETWORK_TUNE",
+        "RESTART_WINDOWS_NOW",
         "SET_DNS_SERVERS",
         "SET_INTERFACE_METRIC",
+        "SET_ADAPTER_ENABLED",
+        "CHECK_ADAPTER_DISABLE_GUARD",
         "RESET_WINSOCK_CATALOG",
         "SET_POWER_PLAN_HIGH_PERFORMANCE",
         "SET_POWER_PLAN_BALANCED",
@@ -592,6 +622,88 @@ fn validate_action_payload(
                     Some(profile),
                     json!({ "metric": metric, "allowed_range": [1, 9999] }),
                 ));
+            }
+        }
+        "SET_ADAPTER_ENABLED" => {
+            let adapter_name = payload
+                .and_then(|value| {
+                    value
+                        .get("adapterName")
+                        .or_else(|| value.get("adapter_name"))
+                })
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+
+            if !is_safe_network_target(adapter_name) {
+                return Err(safety_error(
+                    "invalid_adapter_name",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "adapter_name": adapter_name }),
+                ));
+            }
+
+            let enabled = payload.and_then(|value| value.get("enabled")).and_then(Value::as_bool);
+            if enabled.is_none() {
+                return Err(safety_error(
+                    "invalid_adapter_enabled_flag",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "enabled": enabled }),
+                ));
+            }
+        }
+        "APPLY_NETWORK_TUNE" => {
+            const AUTO_TUNING_LEVELS: &[&str] =
+                &["Normal", "Disabled", "Restricted", "HighlyRestricted", "Experimental"];
+            const ECN_VALUES: &[&str] = &["Enabled", "Disabled"];
+
+            let field_str = |key: &str| payload.and_then(|value| value.get(key)).and_then(Value::as_str);
+
+            if let Some(level) = field_str("autoTuningLevel") {
+                if !AUTO_TUNING_LEVELS.contains(&level) {
+                    return Err(safety_error(
+                        "invalid_auto_tuning_level",
+                        action_name,
+                        payload,
+                        context,
+                        Some(profile),
+                        json!({ "value": level, "allowed": AUTO_TUNING_LEVELS }),
+                    ));
+                }
+            }
+            if let Some(ecn) = field_str("ecnCapability") {
+                if !ECN_VALUES.contains(&ecn) {
+                    return Err(safety_error(
+                        "invalid_ecn_capability",
+                        action_name,
+                        payload,
+                        context,
+                        Some(profile),
+                        json!({ "value": ecn, "allowed": ECN_VALUES }),
+                    ));
+                }
+            }
+            let nagle_requested = payload
+                .and_then(|value| value.get("nagleDisabled"))
+                .and_then(Value::as_bool)
+                .is_some();
+            if nagle_requested {
+                let adapter_name = field_str("adapterName").unwrap_or_default();
+                if !is_safe_network_target(adapter_name) {
+                    return Err(safety_error(
+                        "invalid_adapter_name",
+                        action_name,
+                        payload,
+                        context,
+                        Some(profile),
+                        json!({ "adapter_name": adapter_name }),
+                    ));
+                }
             }
         }
         "RESET_WINSOCK_CATALOG" if !winsock_reset_confirmed(payload) => {
@@ -1129,6 +1241,106 @@ mod tests {
         assert_eq!(profile.risk, super::RiskLevel::Sensitive);
         assert!(profile.requires_snapshot);
         assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn set_adapter_enabled_requires_helper_and_valid_payload() {
+        let helper_unavailable = validate_command(
+            "SET_ADAPTER_ENABLED",
+            Some(&json!({ "adapterName": "Ethernet", "enabled": false })),
+            &context(CommandSource::ManualUser, None, true),
+        );
+        assert_eq!(
+            helper_unavailable.unwrap_err().reason,
+            "privileged_helper_unavailable"
+        );
+
+        let missing_adapter = validate_command(
+            "SET_ADAPTER_ENABLED",
+            Some(&json!({ "enabled": false })),
+            &context_with_helper(true),
+        );
+        assert_eq!(missing_adapter.unwrap_err().reason, "invalid_adapter_name");
+
+        let missing_flag = validate_command(
+            "SET_ADAPTER_ENABLED",
+            Some(&json!({ "adapterName": "Ethernet" })),
+            &context_with_helper(true),
+        );
+        assert_eq!(
+            missing_flag.unwrap_err().reason,
+            "invalid_adapter_enabled_flag"
+        );
+
+        let profile = validate_command(
+            "SET_ADAPTER_ENABLED",
+            Some(&json!({ "adapterName": "Ethernet", "enabled": false })),
+            &context_with_helper(true),
+        )
+        .expect("set adapter enabled should be allowed with a valid adapter and flag");
+
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn apply_network_tune_validates_enum_values_and_adapter() {
+        let bad_auto_tuning = validate_command(
+            "APPLY_NETWORK_TUNE",
+            Some(&json!({ "autoTuningLevel": "Yolo" })),
+            &context_with_helper(true),
+        );
+        assert_eq!(
+            bad_auto_tuning.unwrap_err().reason,
+            "invalid_auto_tuning_level"
+        );
+
+        let bad_ecn = validate_command(
+            "APPLY_NETWORK_TUNE",
+            Some(&json!({ "ecnCapability": "Maybe" })),
+            &context_with_helper(true),
+        );
+        assert_eq!(bad_ecn.unwrap_err().reason, "invalid_ecn_capability");
+
+        let missing_adapter_for_nagle = validate_command(
+            "APPLY_NETWORK_TUNE",
+            Some(&json!({ "nagleDisabled": true })),
+            &context_with_helper(true),
+        );
+        assert_eq!(
+            missing_adapter_for_nagle.unwrap_err().reason,
+            "invalid_adapter_name"
+        );
+
+        let helper_unavailable = validate_command(
+            "APPLY_NETWORK_TUNE",
+            Some(&json!({ "autoTuningLevel": "Normal" })),
+            &context(CommandSource::ManualUser, None, true),
+        );
+        assert_eq!(
+            helper_unavailable.unwrap_err().reason,
+            "privileged_helper_unavailable"
+        );
+
+        let profile = validate_command(
+            "APPLY_NETWORK_TUNE",
+            Some(&json!({ "autoTuningLevel": "Normal", "ecnCapability": "Enabled" })),
+            &context_with_helper(true),
+        )
+        .expect("apply network tune should be allowed with valid values");
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
+
+        let revert_profile = validate_command(
+            "REVERT_NETWORK_TUNE",
+            None,
+            &context_with_helper(true),
+        )
+        .expect("revert network tune should be allowed");
+        assert!(!revert_profile.requires_snapshot);
+        assert!(revert_profile.requires_privileged_helper);
     }
 
     #[test]

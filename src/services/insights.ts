@@ -7,6 +7,18 @@ import type { Locale } from "@/i18n";
 
 export type InsightCategory = "performance" | "energia" | "rede" | "limpeza";
 
+/** Computed on-demand by DiskExplorer (when the user opens it / its volume
+ * list loads) and lifted up to AppShell so Insights can turn it into a
+ * card - no background scanning, no server round-trip. */
+export type DiskNearFullInfo = {
+  mountPoint: string;
+  label: string;
+  usedPercent: number;
+  totalBytes: number;
+  topOffenders: { label: string; sizeBytes: number }[];
+  computedAt: number;
+};
+
 export type Insight = {
   title: string;
   explanation: string;
@@ -21,6 +33,16 @@ export type Insight = {
    * ...) - lets the UI offer "let the agent do it" / "I'll do it myself"
    * instead of a purely informational card. */
   actionName?: string;
+  /** Required for locally-generated insights (not the server's, which don't
+   * carry these yet): every local insight must be explicit about how risky
+   * it is, whether it can be undone, how confident the detection is, and
+   * why it's showing at all - no bare recommendations. Insights below the
+   * confidence bar the local generator uses should not be created at all
+   * rather than shown with a low number attached. */
+  risk?: "baixo" | "medio" | "alto";
+  reversible?: boolean;
+  confidence?: number;
+  reason?: string;
 };
 
 export type InsightResult = {

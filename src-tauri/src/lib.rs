@@ -937,6 +937,84 @@ async fn set_interface_metric(
 }
 
 #[tauri::command]
+async fn set_adapter_enabled(
+    adapter_name: String,
+    enabled: bool,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "SET_ADAPTER_ENABLED",
+        Some(serde_json::json!({
+            "adapterName": adapter_name,
+            "enabled": enabled,
+        })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn check_adapter_disable_guard(
+    adapter_name: String,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "CHECK_ADAPTER_DISABLE_GUARD",
+        Some(serde_json::json!({ "adapterName": adapter_name })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn renew_dhcp_lease() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("RENEW_DHCP_LEASE", None).await)
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NetworkTuneRequest {
+    auto_tuning_level: Option<String>,
+    ecn_capability: Option<String>,
+    adapter_name: Option<String>,
+    nagle_disabled: Option<bool>,
+    throttling_disabled: Option<bool>,
+}
+
+#[tauri::command]
+async fn apply_network_tune(
+    request: NetworkTuneRequest,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "APPLY_NETWORK_TUNE",
+        Some(serde_json::json!({
+            "autoTuningLevel": request.auto_tuning_level,
+            "ecnCapability": request.ecn_capability,
+            "adapterName": request.adapter_name,
+            "nagleDisabled": request.nagle_disabled,
+            "throttlingDisabled": request.throttling_disabled,
+        })),
+    )
+    .await)
+}
+
+#[tauri::command]
+fn confirm_network_tune() -> optimizations::ExecutionResult {
+    optimizations::network_tune::confirm_network_tune_session()
+}
+
+#[tauri::command]
+async fn revert_network_tune() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("REVERT_NETWORK_TUNE", None).await)
+}
+
+#[tauri::command]
+async fn pending_network_tune() -> Option<optimizations::network_tune::NetworkTuneSession> {
+    optimizations::network_tune::pending_network_tune_session().await
+}
+
+#[tauri::command]
+async fn restart_windows_now() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("RESTART_WINDOWS_NOW", None).await)
+}
+
+#[tauri::command]
 async fn reset_winsock_catalog() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command(
         "RESET_WINSOCK_CATALOG",
@@ -949,6 +1027,14 @@ async fn reset_winsock_catalog() -> Result<optimizations::ExecutionResult, Strin
 async fn list_network_adapters() -> Result<Vec<telemetry::network::NetworkAdapterSummary>, String>
 {
     tokio::task::spawn_blocking(telemetry::network::list_network_adapters)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+async fn list_all_network_adapters(
+) -> Result<Vec<telemetry::network::NetworkAdapterSummary>, String> {
+    tokio::task::spawn_blocking(telemetry::network::list_all_network_adapters)
         .await
         .map_err(|error| error.to_string())
 }
@@ -1610,10 +1696,19 @@ pub fn run() {
             network_diagnostics,
             energy_diagnostics,
             flush_dns_cache,
+            renew_dhcp_lease,
+            apply_network_tune,
+            confirm_network_tune,
+            revert_network_tune,
+            pending_network_tune,
+            restart_windows_now,
             set_dns_servers,
             set_interface_metric,
+            set_adapter_enabled,
+            check_adapter_disable_guard,
             reset_winsock_catalog,
             list_network_adapters,
+            list_all_network_adapters,
             run_network_traceroute,
             benchmark_dns_servers,
             probe_gateway_identity,

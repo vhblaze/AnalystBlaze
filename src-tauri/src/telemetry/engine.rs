@@ -2075,10 +2075,20 @@ fn find_best_dns_suggestion(
     }
 
     let results = crate::telemetry::network::benchmark_dns_servers(&diagnostics.dns_servers);
+    // An adapter can have several configured DNS servers (e.g. a router
+    // that also forwards DNS, plus separately-assigned IPv6 resolvers) -
+    // Windows tries them in order and uses whichever responds, so the fair
+    // "how fast is DNS actually working right now" baseline is the best
+    // (lowest-latency) response among all of them, not just whichever one
+    // happens to be listed first. Using only the first previously meant an
+    // unresponsive secondary/IPv6 entry ahead of a fast, working one in the
+    // list made the suggestion think DNS wasn't working at all and
+    // recommend a switch that was actually a downgrade.
     let current_latency_ms = results
         .iter()
-        .find(|result| result.is_current)
-        .and_then(|result| result.latency_ms);
+        .filter(|result| result.is_current)
+        .filter_map(|result| result.latency_ms)
+        .min_by(|a, b| a.total_cmp(b));
     let best = results
         .iter()
         .filter(|result| !result.is_current)

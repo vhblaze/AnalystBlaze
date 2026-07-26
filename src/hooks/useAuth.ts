@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   activateAgentGameMode,
   activateFocusMode,
   applyCleanupCategory as applyAgentCleanupCategory,
   applyInsightAction,
+  applyNetworkTune as applyNetworkTuneAction,
   applyPcCleanFastProfile,
   applyVisualPerformanceMode,
   collectAgentTelemetrySample,
@@ -28,8 +29,10 @@ import {
   restoreWindowsService,
   purgeCleanupQuarantine,
   resetWinsockCatalog,
+  restartWindowsNow as restartWindowsNowAction,
   setAgentTelemetryMode,
   setDnsServers as setDnsServersAction,
+  setAdapterEnabled as setAdapterEnabledAction,
   setInterfaceMetric as setInterfaceMetricAction,
   setPowerPlanBalanced,
   setPowerPlanHighPerformance,
@@ -43,6 +46,7 @@ import {
   syncAccountPlan,
   type AgentStatus,
   type AgentTelemetrySample,
+  type NetworkTuneRequest,
   type FocusModeProfile,
 } from "@/services/tauri/agent";
 import { captureTelemetry } from "@/services/telemetry";
@@ -79,6 +83,31 @@ export function useAuth() {
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [syncingPlan, setSyncingPlan] = useState(false);
+  // Network-changing actions (adapter enable/disable, DNS, interface
+  // metric) invalidate the backend's cached telemetry sample so the next
+  // 2s tick re-probes instead of showing up to 30s of stale data - but an
+  // adapter still takes a couple of seconds to actually settle after that.
+  // This flag lets the dashboard show "aplicando..." instead of a
+  // momentarily-stale value in that window, rather than nothing at all.
+  const [networkActionPending, setNetworkActionPending] = useState(false);
+  const networkActionPendingTimer = useRef<number | null>(null);
+  const markNetworkActionApplied = useCallback(() => {
+    setNetworkActionPending(true);
+    if (networkActionPendingTimer.current !== null) {
+      window.clearTimeout(networkActionPendingTimer.current);
+    }
+    networkActionPendingTimer.current = window.setTimeout(() => {
+      setNetworkActionPending(false);
+      networkActionPendingTimer.current = null;
+    }, 4000);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (networkActionPendingTimer.current !== null) {
+        window.clearTimeout(networkActionPendingTimer.current);
+      }
+    };
+  }, []);
 
   const refreshStatus = useCallback(async () => {
     const nextStatus = await getAgentStatus();
@@ -537,6 +566,7 @@ export function useAuth() {
     async (adapterName: string, dnsServers: string[]) => {
       const result = await runAction(async () => {
         const result = await setDnsServersAction(adapterName, dnsServers);
+        if (result.success) markNetworkActionApplied();
         setMessage({
           key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
           params: { message: result.message },
@@ -551,13 +581,36 @@ export function useAuth() {
       if (result && !result.success) throw new Error(result.message);
       return result;
     },
-    [runAction],
+    [runAction, markNetworkActionApplied],
+  );
+
+  const setAdapterEnabled = useCallback(
+    async (adapterName: string, enabled: boolean) => {
+      const result = await runAction(async () => {
+        const result = await setAdapterEnabledAction(adapterName, enabled);
+        if (result.success) markNetworkActionApplied();
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? "adapter_enabled_changed" : "adapter_enabled_change_failed",
+          category: "agent",
+          properties: { adapter: adapterName, enabled },
+        });
+        return result;
+      }, { rethrow: true });
+      if (result && !result.success) throw new Error(result.message);
+      return result;
+    },
+    [runAction, markNetworkActionApplied],
   );
 
   const setInterfaceMetric = useCallback(
     async (adapterName: string, metric: number) => {
       const result = await runAction(async () => {
         const result = await setInterfaceMetricAction(adapterName, metric);
+        if (result.success) markNetworkActionApplied();
         setMessage({
           key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
           params: { message: result.message },
@@ -572,8 +625,47 @@ export function useAuth() {
       if (result && !result.success) throw new Error(result.message);
       return result;
     },
+    [runAction, markNetworkActionApplied],
+  );
+
+  const applyNetworkTune = useCallback(
+    async (request: NetworkTuneRequest) => {
+      const result = await runAction(async () => {
+        const result = await applyNetworkTuneAction(request);
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? "network_tune_applied" : "network_tune_apply_failed",
+          category: "agent",
+          properties: {},
+        });
+        return result;
+      }, { rethrow: true });
+      if (result && !result.success) throw new Error(result.message);
+      return result;
+    },
     [runAction],
   );
+
+  const restartWindowsNow = useCallback(async () => {
+    const result = await runAction(async () => {
+      const result = await restartWindowsNowAction();
+      setMessage({
+        key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+        params: { message: result.message },
+      });
+      captureTelemetry({
+        name: result.success ? "windows_restart_requested" : "windows_restart_failed",
+        category: "agent",
+        properties: {},
+      });
+      return result;
+    }, { rethrow: true });
+    if (result && !result.success) throw new Error(result.message);
+    return result;
+  }, [runAction]);
 
   const resetWinsock = useCallback(async () => {
     const result = await runAction(async () => {
@@ -826,6 +918,7 @@ export function useAuth() {
     sample,
     message,
     busy,
+    networkActionPending,
     syncingPlan,
     syncPlan,
     login,
@@ -849,6 +942,9 @@ export function useAuth() {
     flushDns,
     setDnsServers,
     setInterfaceMetric,
+    setAdapterEnabled,
+    applyNetworkTune,
+    restartWindowsNow,
     resetWinsock,
     applyVisualPerformance,
     restoreVisualPerformance,

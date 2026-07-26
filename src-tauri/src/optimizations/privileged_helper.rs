@@ -398,17 +398,31 @@ pub fn handshake() -> Result<PrivilegedHelperHandshake, String> {
             });
         }
 
-        match handshake_roundtrip() {
-            Ok(result) => Ok(result),
-            Err(error) => Ok(PrivilegedHelperHandshake {
-                ok: false,
-                latency_ms: 0,
-                helper_version: helper_version_file(),
-                message: format!(
-                    "Falha no handshake com o helper: {error}. Reinicie o helper e teste de novo."
-                ),
-            }),
+        // Same benign pipe-instance race execute_once() retries around -
+        // handshake_roundtrip() has its own open/write/read cycle (it has
+        // to run before any action exists to check against), so it needs
+        // the same retry independently rather than inheriting execute()'s.
+        const MAX_ATTEMPTS: u32 = 3;
+        let mut last_error = String::new();
+        for attempt in 1..=MAX_ATTEMPTS {
+            match handshake_roundtrip() {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    last_error = error;
+                    if attempt < MAX_ATTEMPTS {
+                        thread::sleep(Duration::from_millis(300 * attempt as u64));
+                    }
+                }
+            }
         }
+        Ok(PrivilegedHelperHandshake {
+            ok: false,
+            latency_ms: 0,
+            helper_version: helper_version_file(),
+            message: format!(
+                "Falha no handshake com o helper: {last_error}. Reinicie o helper e teste de novo."
+            ),
+        })
     }
 }
 
@@ -488,7 +502,15 @@ pub fn execute(
 
     #[cfg(windows)]
     {
-        if !status().available {
+        // Only the cheap, single sc.exe query gates this upfront - the full
+        // status() also runs Get-AuthenticodeSignature and a second sc.exe
+        // query, spawning several processes before every single action.
+        // Any one of those hiccuping transiently used to fail the whole
+        // call before it ever tried the pipe, outside the retry loop below.
+        // Whether the service is actually reachable is what the pipe
+        // attempt itself proves; status() is now only consulted to word
+        // the error if every attempt still fails.
+        if !service_installed() {
             return Err("Helper privilegiado nao esta instalado e rodando.".to_string());
         }
         if !local_confirmation {
@@ -503,48 +525,77 @@ pub fn execute(
             return Err(format!("Acao nao suportada pelo helper: {action_name}"));
         }
 
-        let signing_key = load_helper_signing_key()?;
-        let request = build_signed_request(
-            action_name,
-            payload,
-            source,
-            local_confirmation,
-            &signing_key,
-        )?;
-        let action_id = request.action_id.clone();
-
-        let mut pipe = open_helper_pipe()?;
-        let request_bytes = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
-        write_pipe_frame(&mut pipe, &request_bytes)?;
-        let response_bytes = read_pipe_frame(&mut pipe)?;
-        let response: HelperCommandResponse =
-            serde_json::from_slice(&response_bytes).map_err(|error| error.to_string())?;
-
-        if response.action_id != action_id {
-            return Err("Helper retornou response com action_id inesperado.".to_string());
+        // The named pipe handshake occasionally loses a benign race (the
+        // client's CreateFile lands on a server instance that gets torn
+        // down a moment later, surfacing as "No process is on the other
+        // end of the pipe" / os error 233) even though the service is
+        // genuinely up and another attempt seconds later succeeds - most
+        // commonly during a helper reinstall/restart (Stop-Service, delete,
+        // recreate, Start-Service), which genuinely leaves no service
+        // reachable for a couple of seconds. Retrying the whole
+        // request/response exchange several times over a longer window
+        // papers over that instead of surfacing a transient blip as a hard
+        // failure - each attempt re-signs with a fresh nonce, so retries
+        // are safe to replay.
+        const MAX_ATTEMPTS: u32 = 6;
+        let mut last_error = String::new();
+        for attempt in 1..=MAX_ATTEMPTS {
+            match execute_once(action_name, payload.clone(), source, local_confirmation) {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    last_error = error;
+                    if attempt < MAX_ATTEMPTS {
+                        thread::sleep(Duration::from_millis(500 * attempt as u64));
+                    }
+                }
+            }
         }
-        if response.request_nonce != request.nonce {
-            return Err("Helper retornou response com nonce inesperado.".to_string());
-        }
-        verify_response_signature(&response, &signing_key)?;
-
-        let mut message = response.message;
-        if !response.success && is_protocol_mismatch_message(&message) {
-            audit_helper_event(
-                "warn",
-                "optimization.helper.protocol_mismatch",
-                "Helper privilegiado recusou request por incompatibilidade de versao de protocolo.",
-                json!({ "action_name": action_name, "helper_message": message.clone() }),
-            );
-            message = degraded_helper_message();
-        }
-
-        Ok(ExecutionResult {
-            success: response.success,
-            message,
-            details: response.details,
-        })
+        Err(last_error)
     }
+}
+
+#[cfg(windows)]
+fn execute_once(
+    action_name: &str,
+    payload: Option<Value>,
+    source: safety::CommandSource,
+    local_confirmation: bool,
+) -> Result<ExecutionResult, String> {
+    let signing_key = load_helper_signing_key()?;
+    let request = build_signed_request(action_name, payload, source, local_confirmation, &signing_key)?;
+    let action_id = request.action_id.clone();
+
+    let mut pipe = open_helper_pipe()?;
+    let request_bytes = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
+    write_pipe_frame(&mut pipe, &request_bytes)?;
+    let response_bytes = read_pipe_frame(&mut pipe)?;
+    let response: HelperCommandResponse =
+        serde_json::from_slice(&response_bytes).map_err(|error| error.to_string())?;
+
+    if response.action_id != action_id {
+        return Err("Helper retornou response com action_id inesperado.".to_string());
+    }
+    if response.request_nonce != request.nonce {
+        return Err("Helper retornou response com nonce inesperado.".to_string());
+    }
+    verify_response_signature(&response, &signing_key)?;
+
+    let mut message = response.message;
+    if !response.success && is_protocol_mismatch_message(&message) {
+        audit_helper_event(
+            "warn",
+            "optimization.helper.protocol_mismatch",
+            "Helper privilegiado recusou request por incompatibilidade de versao de protocolo.",
+            json!({ "action_name": action_name, "helper_message": message.clone() }),
+        );
+        message = degraded_helper_message();
+    }
+
+    Ok(ExecutionResult {
+        success: response.success,
+        message,
+        details: response.details,
+    })
 }
 
 fn is_protocol_mismatch_message(message: &str) -> bool {
@@ -592,9 +643,27 @@ fn run_service_loop() -> windows_service::Result<()> {
         eprintln!("Falha ao preparar chave local do helper: {error}");
     }
 
+    // Loaded once here instead of per-connection: re-reading the key file on
+    // every single pipe connection was one more (small, but real) piece of
+    // per-request disk I/O sitting between "client connected" and "server
+    // ready to read the request", and any failure there used to unwind via
+    // a bare `?` with zero audit trail - indistinguishable, from the
+    // client's side, from the server having vanished mid-handshake.
+    let signing_key = Arc::new(load_helper_signing_key().unwrap_or_else(|error| {
+        eprintln!("Falha ao carregar chave de assinatura do helper: {error}");
+        audit_helper_event(
+            "warn",
+            "optimization.helper.signing_key_load_failed",
+            "Helper iniciou sem conseguir carregar a chave local de assinatura.",
+            json!({ "error": error }),
+        );
+        Vec::new()
+    }));
+
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let pipe_shutdown = Arc::clone(&shutdown_flag);
-    let pipe_thread = thread::spawn(move || run_named_pipe_server(pipe_shutdown));
+    let pipe_signing_key = Arc::clone(&signing_key);
+    let pipe_thread = thread::spawn(move || run_named_pipe_server(pipe_shutdown, pipe_signing_key));
 
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
     let handler_shutdown = Arc::clone(&shutdown_flag);
@@ -642,8 +711,41 @@ fn run_service_loop() -> windows_service::Result<()> {
     Ok(())
 }
 
+// A single sequential listener (create instance, block until a client
+// connects, then create the next one) has a real gap: between "a client just
+// connected to instance A" and "instance B has been created and armed with
+// its own ConnectNamedPipe", there is no instance listening at all. A
+// client whose WaitNamedPipeW+CreateFile lands in that gap can still get a
+// handle back but then fail to write/read with "No process is on the other
+// end of the pipe" (os error 233) - the classic Windows named-pipe server
+// race, worse under any CPU contention that widens the gap. Running several
+// independent listener loops concurrently (the standard multithreaded named
+// pipe server pattern) means there's essentially always at least one
+// instance actively listening, since it now takes *all* of them to be
+// mid-transition at once instead of just the one. 3 was enough to close the
+// gap in isolation, but under a burst of near-simultaneous requests (rapid
+// repeated clicks in the UI, each opening its own connection) it left too
+// little slack - all 3 could be mid-transition at once under real
+// concurrent load. Sized up for headroom under bursts, not just the
+// baseline single-client case.
+const PIPE_LISTENER_COUNT: usize = 8;
+
 #[cfg(windows)]
-fn run_named_pipe_server(shutdown: Arc<AtomicBool>) {
+fn run_named_pipe_server(shutdown: Arc<AtomicBool>, signing_key: Arc<Vec<u8>>) {
+    let listeners: Vec<_> = (0..PIPE_LISTENER_COUNT)
+        .map(|_| {
+            let shutdown = Arc::clone(&shutdown);
+            let signing_key = Arc::clone(&signing_key);
+            thread::spawn(move || run_named_pipe_listener_loop(shutdown, signing_key))
+        })
+        .collect();
+    for listener in listeners {
+        let _ = listener.join();
+    }
+}
+
+#[cfg(windows)]
+fn run_named_pipe_listener_loop(shutdown: Arc<AtomicBool>, signing_key: Arc<Vec<u8>>) {
     loop {
         if shutdown.load(Ordering::SeqCst) {
             break;
@@ -651,7 +753,7 @@ fn run_named_pipe_server(shutdown: Arc<AtomicBool>) {
 
         match create_named_pipe_instance() {
             Ok(handle) => {
-                if let Err(error) = accept_named_pipe_client(handle, &shutdown) {
+                if let Err(error) = accept_named_pipe_client(handle, &shutdown, Arc::clone(&signing_key)) {
                     eprintln!("Falha no named pipe do helper: {error}");
                     audit_helper_event(
                         "warn",
@@ -680,6 +782,7 @@ fn run_named_pipe_server(shutdown: Arc<AtomicBool>) {
 fn accept_named_pipe_client(
     handle: windows::Win32::Foundation::HANDLE,
     shutdown: &AtomicBool,
+    signing_key: Arc<Vec<u8>>,
 ) -> Result<(), String> {
     use windows::core::HRESULT;
     use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_CONNECTED};
@@ -694,7 +797,31 @@ fn accept_named_pipe_client(
         }
     };
 
-    if !connected || shutdown.load(Ordering::SeqCst) {
+    // Both branches below used to disconnect the client silently - no audit
+    // trail at all, indistinguishable from a client that simply never
+    // connected. Logging them closes that diagnostic blind spot: a client
+    // whose CreateFile races a mid-flight service shutdown here would
+    // otherwise look, from the client's perspective, exactly like the
+    // "wrote to a disconnected reader" (os error 233) failure with nothing
+    // server-side to explain it.
+    if !connected {
+        audit_helper_event(
+            "warn",
+            "optimization.helper.pipe_connect_failed",
+            "ConnectNamedPipe nao confirmou conexao do cliente.",
+            json!({}),
+        );
+        let _ = unsafe { DisconnectNamedPipe(handle) };
+        let _ = unsafe { CloseHandle(handle) };
+        return Ok(());
+    }
+    if shutdown.load(Ordering::SeqCst) {
+        audit_helper_event(
+            "warn",
+            "optimization.helper.pipe_client_dropped_for_shutdown",
+            "Cliente conectado durante desligamento do helper foi descartado sem resposta.",
+            json!({}),
+        );
         let _ = unsafe { DisconnectNamedPipe(handle) };
         let _ = unsafe { CloseHandle(handle) };
         return Ok(());
@@ -703,7 +830,7 @@ fn accept_named_pipe_client(
     let raw_handle = handle.0 as usize;
     thread::spawn(move || {
         let handle = windows::Win32::Foundation::HANDLE(raw_handle as _);
-        if let Err(error) = handle_named_pipe_connection(handle) {
+        if let Err(error) = handle_named_pipe_connection(handle, &signing_key) {
             eprintln!("Falha ao processar request do helper: {error}");
             audit_helper_event(
                 "warn",
@@ -717,7 +844,10 @@ fn accept_named_pipe_client(
 }
 
 #[cfg(windows)]
-fn handle_named_pipe_connection(handle: windows::Win32::Foundation::HANDLE) -> Result<(), String> {
+fn handle_named_pipe_connection(
+    handle: windows::Win32::Foundation::HANDLE,
+    signing_key: &[u8],
+) -> Result<(), String> {
     use windows::Win32::Foundation::CloseHandle;
     use windows::Win32::System::Pipes::DisconnectNamedPipe;
 
@@ -737,8 +867,7 @@ fn handle_named_pipe_connection(handle: windows::Win32::Foundation::HANDLE) -> R
     };
 
     let mut pipe = unsafe { fs::File::from_raw_handle(handle.0 as _) };
-    let signing_key = load_helper_signing_key()?;
-    let response = match read_request_from_pipe(&mut pipe, &signing_key) {
+    let response = match read_request_from_pipe(&mut pipe, signing_key) {
         Ok(request) => {
             audit_helper_event(
                 "info",
@@ -752,7 +881,7 @@ fn handle_named_pipe_connection(handle: windows::Win32::Foundation::HANDLE) -> R
                     "client_path": client.path,
                 }),
             );
-            execute_request(request, &signing_key)
+            execute_request(request, signing_key)
         }
         Err(rejection) => {
             audit_helper_event(
@@ -770,7 +899,7 @@ fn handle_named_pipe_connection(handle: windows::Win32::Foundation::HANDLE) -> R
                 &rejection.action_id,
                 &rejection.request_nonce,
                 rejection.message,
-                &signing_key,
+                signing_key,
             )?
         }
     };
@@ -1337,29 +1466,75 @@ fn validate_expected_client_pid(client_pid: u32) -> Result<VerifiedPipeClient, S
     })
 }
 
+/// Resolves the client PID's exe path via the Win32 API directly rather
+/// than shelling out to a fresh powershell.exe per pipe connection - that
+/// was measurably slow (tens to hundreds of ms of process-creation
+/// overhead) and, under load, an intermittent source of "PID real do
+/// cliente nao corresponde a processo ativo" rejections for perfectly
+/// legitimate clients since a transient spawn hiccup made this whole
+/// safety check fail closed.
 #[cfg(all(windows, not(test)))]
 fn process_path_by_pid(pid: u32) -> Option<PathBuf> {
-    let command = format!("$process = Get-Process -Id {pid} -ErrorAction Stop; $process.Path");
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-Command", &command])
-        .no_window()
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let path = decode_console_bytes(&output.stdout).trim().to_string();
-    if path.is_empty() {
-        None
-    } else {
-        Some(PathBuf::from(path))
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buffer = [0u16; 1024];
+        let mut size = buffer.len() as u32;
+        let result = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            windows::core::PWSTR(buffer.as_mut_ptr()),
+            &mut size,
+        );
+        let _ = CloseHandle(handle);
+        result.ok()?;
+
+        let path = String::from_utf16_lossy(&buffer[..size as usize]);
+        if path.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(path))
+        }
     }
 }
 
 #[cfg(windows)]
 fn open_helper_pipe() -> Result<fs::File, String> {
+    use windows::core::PCWSTR;
+    use windows::Win32::System::Pipes::WaitNamedPipeW;
+
+    let pipe_name = wide_null(HELPER_PIPE_NAME);
     let mut last_error = None;
-    for _ in 0..50 {
+    // Capped at ~4s here (not the ~10s this used to allow) so the outer
+    // execute() retry loop gets several shorter, spread-out attempts across
+    // its longer overall window instead of one attempt eating most of the
+    // budget - better odds of landing after a helper reinstall/restart
+    // finishes rather than timing out mid-restart.
+    for _ in 0..20 {
+        // CreateFile (what OpenOptions::open uses under the hood) can
+        // return a handle to a pipe instance that isn't actually ready yet
+        // - the server calls CreateNamedPipeW to make an instance, then
+        // ConnectNamedPipe to arm it, and there's a real window between
+        // those two where a client's CreateFile can still succeed but the
+        // first read/write on that handle then fails with
+        // ERROR_PIPE_NOT_CONNECTED (233), "No process is on the other end
+        // of the pipe" - even though a healthy instance becomes available
+        // a moment later. WaitNamedPipeW is the documented way a Windows
+        // pipe client is supposed to synchronize with an instance actually
+        // being armed before opening it (this is what .NET's
+        // NamedPipeClientStream.Connect() does internally, which is why a
+        // plain connectivity check never reproduced this).
+        if !unsafe { WaitNamedPipeW(PCWSTR(pipe_name.as_ptr()), 100) }.as_bool() {
+            last_error = Some(windows::core::Error::from_thread().to_string());
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
+
         match fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -1367,7 +1542,7 @@ fn open_helper_pipe() -> Result<fs::File, String> {
         {
             Ok(file) => return Ok(file),
             Err(error) => {
-                last_error = Some(error);
+                last_error = Some(error.to_string());
                 thread::sleep(Duration::from_millis(100));
             }
         }
@@ -1375,18 +1550,21 @@ fn open_helper_pipe() -> Result<fs::File, String> {
 
     Err(format!(
         "Nao foi possivel conectar ao named pipe do helper: {}",
-        last_error
-            .map(|error| error.to_string())
-            .unwrap_or_else(|| "timeout".to_string())
+        last_error.unwrap_or_else(|| "timeout".to_string())
     ))
 }
 
 #[cfg(windows)]
 fn wake_named_pipe_server() {
-    let _ = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(HELPER_PIPE_NAME);
+    // One connection attempt only unsticks one of the PIPE_LISTENER_COUNT
+    // blocked ConnectNamedPipe calls - open one per listener so all of them
+    // observe the shutdown flag and exit instead of staying blocked.
+    for _ in 0..PIPE_LISTENER_COUNT {
+        let _ = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(HELPER_PIPE_NAME);
+    }
 }
 
 #[cfg(windows)]
@@ -1565,6 +1743,9 @@ fn supported_actions() -> &'static [&'static str] {
         "RESTORE_SERVICE",
         "SET_DNS_SERVERS",
         "SET_INTERFACE_METRIC",
+        "SET_ADAPTER_ENABLED",
+        "APPLY_NETWORK_TUNE",
+        "REVERT_NETWORK_TUNE",
         "RESET_WINSOCK_CATALOG",
     ]
 }
@@ -2019,6 +2200,44 @@ mod protocol_tests {
 
         validate_request_execution_policy(&request)
             .expect("set interface metric should be helper-allowlisted");
+    }
+
+    #[test]
+    fn helper_policy_allows_set_adapter_enabled_with_valid_payload() {
+        let request = signed_request(
+            "SET_ADAPTER_ENABLED",
+            Some(json!({ "adapterName": "Ethernet", "enabled": false })),
+        );
+
+        validate_request_execution_policy(&request)
+            .expect("set adapter enabled should be helper-allowlisted");
+    }
+
+    #[test]
+    fn helper_policy_allows_apply_and_revert_network_tune() {
+        let apply = signed_request(
+            "APPLY_NETWORK_TUNE",
+            Some(json!({ "autoTuningLevel": "Normal" })),
+        );
+        validate_request_execution_policy(&apply)
+            .expect("apply network tune should be helper-allowlisted");
+
+        let revert = signed_request("REVERT_NETWORK_TUNE", None);
+        validate_request_execution_policy(&revert)
+            .expect("revert network tune should be helper-allowlisted");
+    }
+
+    #[test]
+    fn helper_policy_rejects_network_tune_from_local_policy() {
+        let mut request = signed_request(
+            "APPLY_NETWORK_TUNE",
+            Some(json!({ "autoTuningLevel": "Normal" })),
+        );
+        request.source = safety::CommandSource::LocalPolicy;
+
+        let error = validate_request_execution_policy(&request)
+            .expect_err("local policy must not be able to trigger network tune unattended");
+        assert!(error.contains("politica local"));
     }
 
     #[test]

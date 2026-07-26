@@ -36,6 +36,7 @@ export function Dashboard({
   user,
   status,
   telemetry,
+  networkActionPending,
   onStartAgent,
   onActivateGameMode,
   onRestoreGameMode,
@@ -47,6 +48,12 @@ export function Dashboard({
   user: User | null;
   status: AgentStatus | null;
   telemetry: AgentTelemetrySnapshot | null;
+  /** True for a few seconds right after the user changes something network
+   * related (adapter enable/disable, DNS, interface metric) - the backend
+   * telemetry cache gets invalidated immediately, but the adapter itself
+   * still takes a moment to settle, so this covers that gap with an
+   * "applying" state instead of a card that looks unchanged or stale. */
+  networkActionPending?: boolean;
   onStartAgent: () => Promise<void>;
   onActivateGameMode: () => Promise<void>;
   onRestoreGameMode: () => Promise<void>;
@@ -275,7 +282,19 @@ export function Dashboard({
         <MetricCard icon={Thermometer} label={t("dashboard.gpuTemp")} value={formatTemp(telemetry?.gpu_temperature, telemetry?.gpu_temperature_available)} detail={telemetry ? `${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")} / ${thermalStateLabel(telemetry.thermal_state)}` : t("common.unavailable")} />
         <MetricCard icon={PlugZap} label="Energia" value={formatWatts(telemetry?.watts)} detail={telemetry ? energyDetail(telemetry) : t("common.unavailable")} />
         <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
-        <MetricCard icon={Wifi} label={t("dashboard.latency")} value={telemetry ? formatLatency(telemetry.latency_ms) : "--"} detail={telemetry ? `${networkDetail(telemetry.network)} - ${t("dashboard.openNetwork")}` : t("common.unavailable")} onClick={onOpenNetwork} />
+        <MetricCard
+          icon={Wifi}
+          label={t("dashboard.latency")}
+          value={networkActionPending ? "..." : telemetry ? formatLatency(telemetry.latency_ms) : "--"}
+          detail={
+            networkActionPending
+              ? t("dashboard.networkActionApplying")
+              : telemetry
+                ? `${networkDetail(telemetry.network)} - ${t("dashboard.openNetwork")}`
+                : t("common.unavailable")
+          }
+          onClick={onOpenNetwork}
+        />
         <MetricCard icon={ShieldCheck} label={t("dashboard.optimizationStatus")} value={telemetry ? optimizationLabel(telemetry.optimization_status, t) : "--"} detail={telemetry ? profileLabel(telemetry.active_profile, t) : t("common.unavailable")} />
       </div>
     </div>

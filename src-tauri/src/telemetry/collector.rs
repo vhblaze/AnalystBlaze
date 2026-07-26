@@ -761,7 +761,8 @@ impl TelemetryCollector {
 
     fn network_diagnostics(&mut self) -> NetworkDiagnostics {
         let now = chrono::Utc::now().timestamp();
-        if now.saturating_sub(self.network_refreshed_at) >= 30 {
+        let forced = super::network::take_network_cache_invalidated();
+        if forced || now.saturating_sub(self.network_refreshed_at) >= 30 {
             self.network_cache = collect_network_sample();
             self.network_refreshed_at = now;
         }

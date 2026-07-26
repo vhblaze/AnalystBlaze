@@ -10,6 +10,7 @@ pub mod latency;
 pub mod local_ai_policy;
 pub mod memory;
 pub mod network_admin;
+pub mod network_tune;
 pub mod os_version;
 pub mod performance_suite;
 pub mod privileged_helper;
@@ -138,6 +139,36 @@ async fn execute_command_checked_with_helper(
             ) {
                 Ok(result) => return result,
                 Err(helper_error) => {
+                    let _ = audit::record_event(
+                        "warn",
+                        "optimization.helper.execute_failed",
+                        "Chamada ao helper privilegiado falhou do lado do cliente.",
+                        json!({
+                            "action_name": action_name,
+                            "source": source,
+                            "helper_error": helper_error,
+                        }),
+                    );
+                    // A dropped pipe connection (os error 233, "no process on
+                    // the other end") almost always means the helper service
+                    // was mid-restart/reinstall right when this request
+                    // landed - a real but transient window, not a security
+                    // rejection. Word it as such instead of the generic
+                    // "recusado pela camada de seguranca" message, which
+                    // reads as a hard block when retrying shortly after
+                    // usually just works.
+                    if helper_error.contains("233") || helper_error.contains("other end of the pipe")
+                    {
+                        return ExecutionResult {
+                            success: false,
+                            message: "O helper privilegiado estava reiniciando quando este comando chegou. Tente novamente em alguns segundos.".to_string(),
+                            details: json!({
+                                "action_name": action_name,
+                                "blocked_by": "helper_transiently_unavailable",
+                                "helper_error": helper_error,
+                            }),
+                        };
+                    }
                     return ExecutionResult::rejected(
                         action_name,
                         "privileged_helper_unavailable",
@@ -219,8 +250,14 @@ async fn execute_command_checked_with_helper(
         "PURGE_CLEANUP_QUARANTINE" => cleanup::purge_cleanup_quarantine(payload).await,
         "CLEAR_STANDBY_LIST" => memory::clear_standby_list(payload).await,
         "FLUSH_DNS_CACHE" => network_admin::flush_dns_cache(payload).await,
+        "RENEW_DHCP_LEASE" => network_tune::renew_dhcp_lease(payload).await,
+        "APPLY_NETWORK_TUNE" => network_tune::apply_network_tune(payload).await,
+        "REVERT_NETWORK_TUNE" => network_tune::revert_network_tune(payload).await,
+        "RESTART_WINDOWS_NOW" => network_tune::restart_windows(payload).await,
         "SET_DNS_SERVERS" => network_admin::set_dns_servers(payload).await,
         "SET_INTERFACE_METRIC" => network_admin::set_interface_metric(payload).await,
+        "SET_ADAPTER_ENABLED" => network_admin::set_adapter_enabled(payload).await,
+        "CHECK_ADAPTER_DISABLE_GUARD" => network_admin::check_adapter_disable_guard(payload).await,
         "RESET_WINSOCK_CATALOG" => network_admin::reset_winsock_catalog(payload).await,
         "APPLY_VISUAL_PERFORMANCE_MODE" => {
             visual_effects::apply_visual_performance_mode(payload).await

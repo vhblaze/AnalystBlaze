@@ -106,6 +106,96 @@ pub async fn set_interface_metric(payload: Option<Value>) -> ExecutionResult {
     }
 }
 
+pub async fn set_adapter_enabled(payload: Option<Value>) -> ExecutionResult {
+    let adapter_name = extract_payload_string(payload.as_ref(), &["adapterName", "adapter_name"]);
+    let enabled = payload
+        .as_ref()
+        .and_then(|value| value.get("enabled"))
+        .and_then(Value::as_bool);
+    let fallback_payload = payload.clone();
+
+    let Some(adapter_name) = adapter_name else {
+        return ExecutionResult {
+            success: false,
+            message: "Informe o adaptador de rede.".to_string(),
+            details: json!({ "implemented": true, "payload": fallback_payload }),
+        };
+    };
+
+    if !safety::is_safe_network_target(&adapter_name) {
+        return ExecutionResult {
+            success: false,
+            message: "Nome de adaptador invalido.".to_string(),
+            details: json!({ "implemented": true, "adapter": adapter_name }),
+        };
+    }
+
+    let Some(enabled) = enabled else {
+        return ExecutionResult {
+            success: false,
+            message: "Informe se o adaptador deve ser ativado ou desativado.".to_string(),
+            details: json!({ "implemented": true, "payload": fallback_payload }),
+        };
+    };
+
+    match tokio::task::spawn_blocking(move || set_adapter_enabled_sync(&adapter_name, enabled))
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => ExecutionResult {
+            success: false,
+            message: format!("Falha ao alterar estado do adaptador: {error}"),
+            details: json!({ "implemented": true }),
+        },
+    }
+}
+
+/// Checked before offering to disable an adapter from the network
+/// diagnostics card - adapters like Radmin VPN are routinely used as a
+/// virtual LAN for games in progress, so disabling one out from under an
+/// active session would drop it. Neither signal blocks the action outright;
+/// the frontend uses them to decide whether a second, explicit
+/// confirmation is warranted.
+pub async fn check_adapter_disable_guard(payload: Option<Value>) -> ExecutionResult {
+    let adapter_name = extract_payload_string(payload.as_ref(), &["adapterName", "adapter_name"]);
+    let Some(adapter_name) = adapter_name else {
+        return ExecutionResult {
+            success: false,
+            message: "Informe o adaptador de rede.".to_string(),
+            details: json!({ "implemented": true }),
+        };
+    };
+    if !safety::is_safe_network_target(&adapter_name) {
+        return ExecutionResult {
+            success: false,
+            message: "Nome de adaptador invalido.".to_string(),
+            details: json!({ "implemented": true, "adapter": adapter_name }),
+        };
+    }
+
+    let game = super::detection::detect_game_process();
+    let traffic = tokio::task::spawn_blocking(move || measure_adapter_traffic_kbps(&adapter_name))
+        .await
+        .unwrap_or(None);
+
+    let active_traffic_kbps = traffic.unwrap_or(0.0);
+    // Idle virtual adapters still carry a trickle of keepalive/heartbeat
+    // traffic - this threshold is well above that but well below anything
+    // resembling real game traffic.
+    const ACTIVE_TRAFFIC_THRESHOLD_KBPS: f64 = 15.0;
+
+    ExecutionResult::ok(
+        "Verificacao de contexto concluida.",
+        json!({
+            "implemented": true,
+            "gameInForeground": game.detected,
+            "gameProcessName": game.process_name,
+            "adapterHasActiveTraffic": active_traffic_kbps >= ACTIVE_TRAFFIC_THRESHOLD_KBPS,
+            "adapterTrafficKbps": active_traffic_kbps,
+        }),
+    )
+}
+
 pub async fn reset_winsock_catalog(_payload: Option<Value>) -> ExecutionResult {
     match tokio::task::spawn_blocking(reset_winsock_catalog_sync).await {
         Ok(result) => result,
@@ -218,6 +308,7 @@ fn set_dns_servers_sync(adapter_name: &str, dns_servers: &[String]) -> Execution
 
     match run_powershell(&script) {
         Ok(_) => {
+            crate::telemetry::network::invalidate_network_cache();
             let _ = audit::record_event(
                 "info",
                 "optimization.network.dns_servers_changed",
@@ -312,6 +403,7 @@ fn set_interface_metric_sync(adapter_name: &str, metric: u32) -> ExecutionResult
 
     match run_powershell(&script) {
         Ok(_) => {
+            crate::telemetry::network::invalidate_network_cache();
             let _ = audit::record_event(
                 "info",
                 "optimization.network.interface_metric_changed",
@@ -355,6 +447,140 @@ fn set_interface_metric_sync(adapter_name: &str, _metric: u32) -> ExecutionResul
         message: "Prioridade de rede indisponivel nesta plataforma.".to_string(),
         details: json!({ "implemented": true, "adapter": adapter_name }),
     }
+}
+
+#[cfg(windows)]
+fn set_adapter_enabled_sync(adapter_name: &str, enabled: bool) -> ExecutionResult {
+    let previous_enabled = match query_adapter_enabled(adapter_name) {
+        Ok(value) => value,
+        Err(error) => {
+            return ExecutionResult {
+                success: false,
+                message: "Nao foi possivel consultar o estado atual do adaptador.".to_string(),
+                details: json!({ "implemented": true, "adapter": adapter_name, "error": error }),
+            };
+        }
+    };
+
+    if previous_enabled == enabled {
+        return ExecutionResult::ok(
+            if enabled {
+                "O adaptador ja estava ativado."
+            } else {
+                "O adaptador ja estava desativado."
+            },
+            json!({ "implemented": true, "adapter": adapter_name, "enabled": enabled, "unchanged": true }),
+        );
+    }
+
+    let snapshot = OptimizationSnapshot::new(
+        "SET_ADAPTER_ENABLED",
+        vec![SnapshotEntry::AdapterEnabled {
+            adapter_name: adapter_name.to_string(),
+            previous_enabled,
+        }],
+        json!({
+            "adapter": adapter_name,
+            "previous_enabled": previous_enabled,
+            "target_enabled": enabled,
+        }),
+    );
+
+    if let Err(error) = snapshot::save_snapshot(&snapshot) {
+        return ExecutionResult {
+            success: false,
+            message: "A alteracao foi bloqueada porque o snapshot nao pode ser salvo.".to_string(),
+            details: json!({
+                "implemented": true,
+                "adapter": adapter_name,
+                "snapshot_error": error,
+            }),
+        };
+    }
+
+    let verb = if enabled { "Enable-NetAdapter" } else { "Disable-NetAdapter" };
+    let script = format!(
+        "{verb} -Name '{}' -Confirm:$false -ErrorAction Stop",
+        escape_powershell_literal(adapter_name)
+    );
+
+    match run_powershell(&script) {
+        Ok(_) => {
+            crate::telemetry::network::invalidate_network_cache();
+            let _ = audit::record_event(
+                "info",
+                "optimization.network.adapter_enabled_changed",
+                "Estado do adaptador de rede alterado com snapshot reversivel.",
+                json!({ "adapter": adapter_name, "enabled": enabled }),
+            );
+            ExecutionResult::ok(
+                if enabled {
+                    "Adaptador ativado com snapshot reversivel."
+                } else {
+                    "Adaptador desativado com snapshot reversivel."
+                },
+                json!({
+                    "implemented": true,
+                    "adapter": adapter_name,
+                    "enabled": enabled,
+                    "snapshot": {
+                        "id": snapshot.id,
+                        "entries": snapshot.entries.len(),
+                        "reversible": true,
+                    },
+                }),
+            )
+        }
+        Err(error) => {
+            let _ = snapshot::discard_snapshot(&snapshot.id);
+            ExecutionResult {
+                success: false,
+                message: "O Windows recusou alterar o estado do adaptador.".to_string(),
+                details: json!({
+                    "implemented": true,
+                    "adapter": adapter_name,
+                    "snapshot_discarded": true,
+                    "error": error,
+                }),
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn set_adapter_enabled_sync(adapter_name: &str, _enabled: bool) -> ExecutionResult {
+    ExecutionResult {
+        success: false,
+        message: "Estado de adaptador indisponivel nesta plataforma.".to_string(),
+        details: json!({ "implemented": true, "adapter": adapter_name }),
+    }
+}
+
+/// Two Get-NetAdapterStatistics samples half a second apart, converted to
+/// an approximate combined send+receive kbps. Good enough to distinguish
+/// "idle" from "actively carrying traffic right now" - not meant to be a
+/// precise bandwidth reading.
+#[cfg(windows)]
+fn measure_adapter_traffic_kbps(adapter_name: &str) -> Option<f64> {
+    let script = format!(
+        r#"$a = Get-NetAdapterStatistics -Name '{name}' -ErrorAction SilentlyContinue;
+if (-not $a) {{ exit 1 }}
+$b1 = $a.ReceivedBytes + $a.SentBytes
+Start-Sleep -Milliseconds 500
+$a2 = Get-NetAdapterStatistics -Name '{name}' -ErrorAction SilentlyContinue;
+if (-not $a2) {{ exit 1 }}
+$b2 = $a2.ReceivedBytes + $a2.SentBytes
+[Math]::Max(0, $b2 - $b1)"#,
+        name = escape_powershell_literal(adapter_name)
+    );
+    let output = run_powershell(&script).ok()?;
+    let delta_bytes: f64 = output.trim().parse().ok()?;
+    Some((delta_bytes * 8.0 / 1000.0) / 0.5)
+}
+
+#[cfg(not(windows))]
+fn measure_adapter_traffic_kbps(_adapter_name: &str) -> Option<f64> {
+    None
 }
 
 #[cfg(windows)]
@@ -442,6 +668,20 @@ fn query_adapter_interface_metric(adapter_name: &str) -> Result<(u32, bool), Str
         .and_then(Value::as_bool)
         .unwrap_or(false);
     Ok((metric, automatic))
+}
+
+#[cfg(windows)]
+fn query_adapter_enabled(adapter_name: &str) -> Result<bool, String> {
+    let script = format!(
+        "(Get-NetAdapter -Name '{}' -ErrorAction Stop).Status",
+        escape_powershell_literal(adapter_name)
+    );
+    let output = run_powershell(&script)?;
+    // Status is "Up", "Disconnected", "Degraded" etc. for an administratively
+    // enabled adapter that just has no active link - only "Disabled" means
+    // the adapter itself is off. Treating anything but "Up" as disabled would
+    // misreport e.g. Wi-Fi with no network in range as already off.
+    Ok(!output.trim().eq_ignore_ascii_case("Disabled"))
 }
 
 #[cfg(windows)]

@@ -901,6 +901,11 @@ export async function listNetworkAdapters(): Promise<NetworkAdapterSummary[]> {
   return invoke<NetworkAdapterSummary[]>("list_network_adapters");
 }
 
+export async function listAllNetworkAdapters(): Promise<NetworkAdapterSummary[]> {
+  requireTauriRuntime("Lista de adaptadores de rede");
+  return invoke<NetworkAdapterSummary[]>("list_all_network_adapters");
+}
+
 export async function flushDnsCache(): Promise<OptimizationResult> {
   requireTauriRuntime("Limpeza de cache DNS");
   return invoke<OptimizationResult>("flush_dns_cache");
@@ -922,6 +927,88 @@ export async function resetWinsockCatalog(): Promise<OptimizationResult> {
 export async function setInterfaceMetric(adapterName: string, metric: number): Promise<OptimizationResult> {
   requireTauriRuntime("Prioridade de adaptador de rede");
   return invoke<OptimizationResult>("set_interface_metric", { adapterName, metric });
+}
+
+export async function setAdapterEnabled(
+  adapterName: string,
+  enabled: boolean,
+): Promise<OptimizationResult> {
+  requireTauriRuntime("Ativar/desativar adaptador de rede");
+  return invoke<OptimizationResult>("set_adapter_enabled", { adapterName, enabled });
+}
+
+export type AdapterDisableGuardResult = {
+  gameInForeground: boolean;
+  gameProcessName?: string | null;
+  adapterHasActiveTraffic: boolean;
+  adapterTrafficKbps: number;
+};
+
+export async function checkAdapterDisableGuard(adapterName: string): Promise<AdapterDisableGuardResult> {
+  requireTauriRuntime("Verificacao de contexto antes de desativar adaptador");
+  const result = await invoke<OptimizationResult>("check_adapter_disable_guard", { adapterName });
+  const details = (result.details ?? {}) as Record<string, unknown>;
+  return {
+    gameInForeground: Boolean(details.gameInForeground),
+    gameProcessName: typeof details.gameProcessName === "string" ? details.gameProcessName : null,
+    adapterHasActiveTraffic: Boolean(details.adapterHasActiveTraffic),
+    adapterTrafficKbps: typeof details.adapterTrafficKbps === "number" ? details.adapterTrafficKbps : 0,
+  };
+}
+
+export async function renewDhcpLease(): Promise<OptimizationResult> {
+  requireTauriRuntime("Renovar endereco IP");
+  return invoke<OptimizationResult>("renew_dhcp_lease");
+}
+
+/** Mirrors the Rust `NetworkTuneSession` - a batch of TCP tweaks applied
+ * together with a confirm-or-auto-revert window. `requiresReboot` sessions
+ * only start their countdown once the app relaunches after the reboot. */
+export type NetworkTuneSession = {
+  id: string;
+  label: string;
+  createdAt: number;
+  confirmDeadline: number;
+  status: "pending" | "confirmed" | "reverted" | string;
+  restoreReason?: string | null;
+  restoredAt?: number | null;
+  confirmedAt?: number | null;
+  snapshotIds: string[];
+  requiresReboot: boolean;
+  countdownStarted: boolean;
+};
+
+export type NetworkTuneRequest = {
+  autoTuningLevel?: string | null;
+  ecnCapability?: string | null;
+  adapterName?: string | null;
+  nagleDisabled?: boolean | null;
+  throttlingDisabled?: boolean | null;
+};
+
+export async function applyNetworkTune(request: NetworkTuneRequest): Promise<OptimizationResult> {
+  requireTauriRuntime("Otimizacao de rede");
+  return invoke<OptimizationResult>("apply_network_tune", { request });
+}
+
+export async function confirmNetworkTune(): Promise<OptimizationResult> {
+  requireTauriRuntime("Otimizacao de rede");
+  return invoke<OptimizationResult>("confirm_network_tune");
+}
+
+export async function revertNetworkTune(): Promise<OptimizationResult> {
+  requireTauriRuntime("Otimizacao de rede");
+  return invoke<OptimizationResult>("revert_network_tune");
+}
+
+export async function getPendingNetworkTune(): Promise<NetworkTuneSession | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<NetworkTuneSession | null>("pending_network_tune");
+}
+
+export async function restartWindowsNow(): Promise<OptimizationResult> {
+  requireTauriRuntime("Reiniciar o computador");
+  return invoke<OptimizationResult>("restart_windows_now");
 }
 
 export async function getProtectedApps(): Promise<ProtectedApp[]> {

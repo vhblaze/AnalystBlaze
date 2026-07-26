@@ -100,6 +100,19 @@ pub enum SnapshotEntry {
         previous_metric: u32,
         previous_automatic: bool,
     },
+    AdapterEnabled {
+        adapter_name: String,
+        previous_enabled: bool,
+    },
+    /// Restores one property of the "Internet" Set-NetTCPSetting template
+    /// (AutoTuningLevelLocal, EcnCapability or CongestionProvider).
+    /// `previous_value: None` means the property was already at its system
+    /// default before the change, so restoring it resets to Default rather
+    /// than replaying a captured value.
+    TcpGlobalSetting {
+        property: String,
+        previous_value: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -692,6 +705,44 @@ pub fn restore_snapshot_entries(snapshot: &OptimizationSnapshot) -> SnapshotRest
                     ));
                 }
             },
+            SnapshotEntry::AdapterEnabled {
+                adapter_name,
+                previous_enabled,
+            } => match restore_adapter_enabled(adapter_name, *previous_enabled) {
+                Ok(()) => {
+                    summary.restored_entries += 1;
+                    summary.messages.push(format!(
+                        "Estado do adaptador {adapter_name} restaurado ({}).",
+                        if *previous_enabled { "ativado" } else { "desativado" }
+                    ));
+                }
+                Err(error) => {
+                    summary.failed_entries += 1;
+                    summary.messages.push(format!(
+                        "Falha ao restaurar estado do adaptador {adapter_name}: {error}"
+                    ));
+                }
+            },
+            SnapshotEntry::TcpGlobalSetting {
+                property,
+                previous_value,
+            } => {
+                let restore_value = previous_value.as_deref().unwrap_or("Default");
+                match restore_tcp_global_setting(property, restore_value) {
+                    Ok(()) => {
+                        summary.restored_entries += 1;
+                        summary
+                            .messages
+                            .push(format!("Configuracao de TCP restaurada: {property}."));
+                    }
+                    Err(error) => {
+                        summary.failed_entries += 1;
+                        summary.messages.push(format!(
+                            "Falha ao restaurar configuracao de TCP {property}: {error}"
+                        ));
+                    }
+                }
+            }
         }
     }
 
@@ -1122,6 +1173,78 @@ fn restore_interface_metric(
     _previous_automatic: bool,
 ) -> Result<(), String> {
     Err("Prioridade de rede indisponivel nesta plataforma.".to_string())
+}
+
+#[cfg(windows)]
+fn restore_adapter_enabled(adapter_name: &str, previous_enabled: bool) -> Result<(), String> {
+    let verb = if previous_enabled {
+        "Enable-NetAdapter"
+    } else {
+        "Disable-NetAdapter"
+    };
+    let script = format!(
+        "{verb} -Name '{}' -Confirm:$false -ErrorAction Stop",
+        escape_powershell_literal(adapter_name)
+    );
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .no_window()
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(decode_console_bytes(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(not(windows))]
+fn restore_adapter_enabled(_adapter_name: &str, _previous_enabled: bool) -> Result<(), String> {
+    Err("Estado de adaptador indisponivel nesta plataforma.".to_string())
+}
+
+#[cfg(windows)]
+fn restore_tcp_global_setting(property: &str, value: &str) -> Result<(), String> {
+    let flag = match property {
+        "autoTuningLevelLocal" => "-AutoTuningLevelLocal",
+        "ecnCapability" => "-EcnCapability",
+        other => return Err(format!("Propriedade de TCP desconhecida: {other}")),
+    };
+    if !value.chars().all(|ch| ch.is_ascii_alphanumeric()) {
+        return Err("Valor de configuracao de TCP invalido.".to_string());
+    }
+    let script = format!("Set-NetTCPSetting -SettingName Internet -ErrorAction Stop {flag} {value}");
+
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .no_window()
+        .output()
+        .map_err(|error| error.to_string())?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(decode_console_bytes(&output.stderr).trim().to_string())
+    }
+}
+
+#[cfg(not(windows))]
+fn restore_tcp_global_setting(_property: &str, _value: &str) -> Result<(), String> {
+    Err("Configuracao de TCP indisponivel nesta plataforma.".to_string())
 }
 
 fn notify_user_settings_changed() {
