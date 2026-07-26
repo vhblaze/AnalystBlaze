@@ -119,10 +119,15 @@ files, and re-tag.
    and set `minimumVersion` if this release fixes a security issue or breaks
    compatibility with the server (leave it `null` otherwise - see
    [minimum_version](#minimum_version-semantics) below).
-3. Register it with the server's admin endpoint:
+3. Register it with the server's admin endpoint. Use the direct Railway URL,
+   not `api.analystblaze.com` - that custom domain currently 400s on every
+   request ("Invalid host header", confirmed 2026-07-26) even though the
+   server itself is healthy; the app's own `tauri.conf.json` updater
+   endpoint and `config.rs::PROD_API_BASE_URL` already route around it for
+   this same reason:
 
    ```sh
-   curl -X POST https://api.analystblaze.com/api/v1/admin/updates/releases \
+   curl -X POST https://analystblaze-server-production.up.railway.app/api/v1/admin/updates/releases \
      -H "X-AnalystBlaze-Releases-Token: $DESKTOP_RELEASES_ADMIN_TOKEN" \
      -H "Content-Type: application/json" \
      -d @release-manifest.json
@@ -133,10 +138,12 @@ files, and re-tag.
 4. Confirm it worked:
 
    ```sh
-   curl "https://api.analystblaze.com/api/v1/updates/manifest?target=windows&arch=x86_64&current_version=0.0.0"
+   curl "https://analystblaze-server-production.up.railway.app/api/v1/updates/manifest?target=windows&arch=x86_64&current_version=0.0.0"
    ```
 
-   should return your new release's manifest JSON (not 204).
+   should return your new release's manifest JSON (not 204). (Once the
+   `api.analystblaze.com` custom domain is fixed on Railway, both this step
+   and step 3 should go back to using it instead, and this note removed.)
 
 ### `minimum_version` semantics
 
