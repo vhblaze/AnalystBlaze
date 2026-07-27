@@ -497,27 +497,43 @@ impl TelemetryEngine {
 
         let decisions = std::mem::take(&mut self.batch);
         let privacy = self.telemetry_privacy_policy();
-        let hourly_summary =
-            minimize_decision_for_backend(hourly_summary_decision(&decisions), privacy);
-        let batch = TelemetryBatch {
-            hw_id,
-            app_version: self.config.app_version.clone(),
-            decisions: vec![hourly_summary],
-            timestamp: chrono::Utc::now().timestamp(),
-            nonce: nonce(),
-        };
+        // Sends every sample collected since the last flush individually
+        // (each still minimized for privacy) instead of collapsing the whole
+        // window into one min/avg/max row - the server already persists one
+        // Telemetry row per decision, so this is what actually gives the
+        // dashboard's "hour" chart a continuous curve instead of ~1
+        // point/flush. Chunked defensively in case backoff ever lets more
+        // than 500 samples (the server's per-batch cap) accumulate.
+        const MAX_DECISIONS_PER_REQUEST: usize = 500;
+        for (chunk_index, chunk) in decisions.chunks(MAX_DECISIONS_PER_REQUEST).enumerate() {
+            let minimized: Vec<DecisionRecord> = chunk
+                .iter()
+                .cloned()
+                .map(|decision| minimize_decision_for_backend(decision, privacy))
+                .collect();
+            let batch = TelemetryBatch {
+                hw_id,
+                app_version: self.config.app_version.clone(),
+                decisions: minimized,
+                timestamp: chrono::Utc::now().timestamp(),
+                nonce: nonce(),
+            };
 
-        if let Err(error) = self.api.post_batch(&access_token, &hw_secret, &batch).await {
-            if self.clear_local_session_if_device_inactive(&error) {
+            if let Err(error) = self.api.post_batch(&access_token, &hw_secret, &batch).await {
+                if self.clear_local_session_if_device_inactive(&error) {
+                    return;
+                }
+                if is_batch_cooldown_error(&error) {
+                    self.record_batch_cooldown(&error);
+                } else {
+                    self.record_backend_failure("enviar lote de telemetria", &error);
+                }
+                // Requeue this chunk and everything still unsent after it;
+                // chunks already flushed successfully stay sent.
+                let unsent_start = chunk_index * MAX_DECISIONS_PER_REQUEST;
+                self.batch = decisions[unsent_start..].to_vec();
                 return;
             }
-            if is_batch_cooldown_error(&error) {
-                self.record_batch_cooldown(&error);
-            } else {
-                self.record_backend_failure("enviar lote de telemetria", &error);
-            }
-            self.batch = decisions;
-        } else {
             self.record_backend_success();
         }
     }
@@ -1121,110 +1137,6 @@ impl TelemetrySample {
 
 fn nonce() -> String {
     Uuid::new_v4().simple().to_string()
-}
-
-fn hourly_summary_decision(decisions: &[DecisionRecord]) -> DecisionRecord {
-    let first_timestamp = decisions
-        .first()
-        .map(|decision| decision.event_timestamp)
-        .unwrap_or_else(|| chrono::Utc::now().timestamp());
-    let last_timestamp = decisions
-        .last()
-        .map(|decision| decision.event_timestamp)
-        .unwrap_or(first_timestamp);
-    let last = decisions.last();
-
-    let cpu = metric_summary(decisions.iter().map(|decision| decision.cpu_usage));
-    let gpu = metric_summary(decisions.iter().map(|decision| decision.gpu_usage));
-    let ram = metric_summary(decisions.iter().map(|decision| decision.ram_usage_mb));
-    let ram_percent = details_metric_summary(decisions, "ram_usage_percent");
-    let cpu_temp = details_metric_summary(decisions, "cpu_temperature");
-    let gpu_temp = details_metric_summary(decisions, "gpu_temperature");
-    let disk = details_metric_summary(decisions, "disk_usage_percent");
-    let latency = details_metric_summary(decisions, "latency_ms");
-    let vram = details_metric_summary(decisions, "vram_usage_percent");
-    let processes = details_metric_summary(decisions, "active_processes");
-
-    let cpu_avg = summary_avg(&cpu);
-    let gpu_avg = summary_avg(&gpu);
-    let ram_avg = summary_avg(&ram);
-
-    DecisionRecord {
-        event_timestamp: last_timestamp,
-        cpu_usage: cpu_avg,
-        gpu_usage: gpu_avg,
-        gpu_name: last
-            .map(|decision| decision.gpu_name.clone())
-            .unwrap_or_default(),
-        vram_gb: last.map(|decision| decision.vram_gb).unwrap_or_default(),
-        ram_usage_mb: ram_avg,
-        context_state: json!({
-            "aggregation": "hourly",
-            "bucket_start": first_timestamp,
-            "bucket_end": last_timestamp,
-            "sample_count": decisions.len(),
-            "last_context": last.map(|decision| decision.context_state.clone()),
-        }),
-        action_taken: "hourly_telemetry_summary".to_string(),
-        details: json!({
-            "aggregation": {
-                "kind": "hourly_min_avg_max",
-                "storage_policy": "persist_only_hourly_summary",
-                "sample_count": decisions.len(),
-                "bucket_start": first_timestamp,
-                "bucket_end": last_timestamp,
-            },
-            "hourly_summary": {
-                "cpu_usage": cpu,
-                "gpu_usage": gpu,
-                "ram_usage_mb": ram,
-                "ram_usage_percent": ram_percent,
-                "cpu_temperature": cpu_temp,
-                "gpu_temperature": gpu_temp,
-                "disk_usage_percent": disk,
-                "latency_ms": latency,
-                "vram_usage_percent": vram,
-                "active_processes": processes,
-            },
-            "last_sample_details": last.map(|decision| decision.details.clone()),
-        }),
-        score_delta: 0.0,
-    }
-}
-
-fn metric_summary(values: impl Iterator<Item = f64>) -> Value {
-    let values = values.filter(|value| value.is_finite()).collect::<Vec<_>>();
-    if values.is_empty() {
-        return Value::Null;
-    }
-
-    let min = values.iter().copied().fold(f64::INFINITY, f64::min);
-    let max = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let avg = values.iter().sum::<f64>() / values.len() as f64;
-    json!({
-        "min": round_metric(min),
-        "avg": round_metric(avg),
-        "max": round_metric(max),
-    })
-}
-
-fn details_metric_summary(decisions: &[DecisionRecord], key: &str) -> Value {
-    metric_summary(
-        decisions
-            .iter()
-            .filter_map(|decision| decision.details.get(key).and_then(Value::as_f64)),
-    )
-}
-
-fn summary_avg(summary: &Value) -> f64 {
-    summary
-        .get("avg")
-        .and_then(Value::as_f64)
-        .unwrap_or_default()
-}
-
-fn round_metric(value: f64) -> f64 {
-    (value * 100.0).round() / 100.0
 }
 
 impl From<&TelemetrySample> for OptimizationMetrics {

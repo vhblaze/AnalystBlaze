@@ -65,7 +65,13 @@ impl AgentConfig {
             web_insights_url,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             normal_sample_interval: Duration::from_secs(60),
-            batch_flush_interval: Duration::from_secs(60 * 60),
+            // Each flush now sends every raw sample since the last one (see
+            // TelemetryEngine::flush_batch), not a single collapsed hourly
+            // summary - shortened from 60 min so a failed/delayed flush only
+            // loses ~5 min of samples instead of up to an hour, and the
+            // dashboard's "hour" chart fills in with a live tail instead of
+            // waiting up to an hour for its next point.
+            batch_flush_interval: Duration::from_secs(5 * 60),
             command_poll_interval: Duration::from_secs(30),
             realtime_status_poll_interval: Duration::from_secs(5),
             realtime_push_interval: Duration::from_secs(1),
