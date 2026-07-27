@@ -8,6 +8,14 @@ use crate::process_ext::{decode_console_bytes, CommandExt};
 pub struct AdvancedTelemetry {
     pub battery_percent: Option<f64>,
     pub battery_status: Option<String>,
+    /// Instantaneous battery discharge rate in milliwatts, from
+    /// Win32_Battery.DischargeRate. This is a real measurement of total
+    /// system draw (not an estimate) whenever it's populated - but many
+    /// systems report it as 0/absent even while genuinely discharging, so
+    /// its absence doesn't mean the battery isn't discharging, only that
+    /// this particular WMI property isn't implemented on this hardware.
+    /// Only meaningful when battery_status is "discharging".
+    pub battery_discharge_rate_mw: Option<f64>,
     pub disk_smart_status: Option<String>,
     pub disk_predict_failure: Option<bool>,
     pub disk_smart_devices: Vec<DiskSmartDevice>,
@@ -67,7 +75,7 @@ pub fn collect_advanced_telemetry() -> AdvancedTelemetry {
 
 fn collect_battery(telemetry: &mut AdvancedTelemetry) {
     let Some(value) = powershell_json(
-        "Get-CimInstance Win32_Battery | Select-Object -First 1 EstimatedChargeRemaining,BatteryStatus | ConvertTo-Json -Compress",
+        "Get-CimInstance Win32_Battery | Select-Object -First 1 EstimatedChargeRemaining,BatteryStatus,DischargeRate | ConvertTo-Json -Compress",
     ) else {
         return;
     };
@@ -79,6 +87,60 @@ fn collect_battery(telemetry: &mut AdvancedTelemetry) {
         .get("BatteryStatus")
         .and_then(Value::as_i64)
         .map(battery_status_label);
+    // DischargeRate is frequently 0/unpopulated even while genuinely
+    // discharging (some OEMs never implement the WMI counter) - only trust
+    // it as a real reading when it's positive, plausible for a laptop
+    // battery (upper bound is a generous guess, not a spec value - "not
+    // determined" beyond "clearly not a real discharge rate"), and we're
+    // actually on battery, per the field doc on AdvancedTelemetry. A zero
+    // here rolls back to None either way, which is what pushes
+    // estimate_energy() down to the next tier instead of recording a
+    // fabricated 0W "measurement".
+    let raw_discharge_rate = value.get("DischargeRate").and_then(Value::as_f64);
+    telemetry.battery_discharge_rate_mw = raw_discharge_rate
+        .filter(|rate| is_plausible_discharge_rate_mw(*rate, telemetry.battery_status.as_deref()));
+}
+
+/// A generous upper bound, not a spec value - "not determined" beyond
+/// "clearly not a real discharge rate" for a laptop battery. Zero and
+/// negative readings are rejected the same way whether they come from an
+/// OEM that never implemented the counter or genuinely aren't discharging;
+/// callers only see a real, positive, discharging reading or None.
+fn is_plausible_discharge_rate_mw(rate: f64, battery_status: Option<&str>) -> bool {
+    (0.0..=300_000.0).contains(&rate) && rate > 0.0 && battery_status == Some("discharging")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn discharge_rate_requires_a_positive_value_while_discharging() {
+        assert!(is_plausible_discharge_rate_mw(45_000.0, Some("discharging")));
+    }
+
+    #[test]
+    fn discharge_rate_rejects_zero_whether_charging_or_oem_unimplemented() {
+        assert!(!is_plausible_discharge_rate_mw(0.0, Some("discharging")));
+        assert!(!is_plausible_discharge_rate_mw(0.0, Some("charging")));
+    }
+
+    #[test]
+    fn discharge_rate_is_ignored_while_plugged_in_even_if_wmi_reports_a_value() {
+        // Some systems keep reporting a stale non-zero DischargeRate while charging.
+        assert!(!is_plausible_discharge_rate_mw(15_000.0, Some("charging")));
+        assert!(!is_plausible_discharge_rate_mw(15_000.0, Some("ac")));
+    }
+
+    #[test]
+    fn discharge_rate_rejects_implausibly_large_values() {
+        assert!(!is_plausible_discharge_rate_mw(2_000_000.0, Some("discharging")));
+    }
+
+    #[test]
+    fn discharge_rate_rejects_negative_values() {
+        assert!(!is_plausible_discharge_rate_mw(-500.0, Some("discharging")));
+    }
 }
 
 fn collect_disk_smart(telemetry: &mut AdvancedTelemetry) {

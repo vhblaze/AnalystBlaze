@@ -84,6 +84,12 @@ pub struct TelemetrySample {
     pub energy_confidence: f64,
     pub energy_is_estimated: bool,
     pub energy_source: String,
+    /// Which subsystems energy_watts is a real reading for - see
+    /// EnergyEstimate::components_covered.
+    pub energy_components_covered: Vec<String>,
+    /// Only set when energy_source == "estimated" - see
+    /// EnergyEstimate::margin_note.
+    pub energy_margin_note: Option<String>,
     pub power_profile: String,
     pub latency_ms: f64,
     pub disk_used_gb: f64,
@@ -134,6 +140,17 @@ struct EnergyEstimate {
     confidence: f64,
     is_estimated: bool,
     source: String,
+    /// Which subsystems `watts` reflects a real reading for. Empty when
+    /// `source == "estimated"` (nothing measured). `["system"]` means the
+    /// whole machine was covered by one reading (a system power sensor, or
+    /// the battery discharge rate). `["cpu"]`/`["gpu"]`/`["cpu","gpu"]` means
+    /// only that/those component(s) are real; the rest of `watts` is the
+    /// heuristic fallback for whatever wasn't covered.
+    components_covered: Vec<String>,
+    /// Set only when source == "estimated": there's no calibration data to
+    /// quote a real error margin for the heuristic formula, so this says so
+    /// explicitly instead of implying a precision the number doesn't have.
+    margin_note: Option<String>,
     profile: String,
 }
 
@@ -290,6 +307,7 @@ impl TelemetryCollector {
             active_processes,
             cpu_temperature: cpu_temperature_available.then_some(cpu_temperature),
             gpu_temperature: gpu_temperature_available.then_some(gpu_temperature),
+            gpu_power_watts: nvidia_sensors.as_ref().and_then(|sample| sample.power_watts),
             advanced: &advanced,
             local_context: &local_context,
             hardware_sensors: &hardware_sensors,
@@ -329,6 +347,8 @@ impl TelemetryCollector {
             energy_confidence: energy.confidence,
             energy_is_estimated: energy.is_estimated,
             energy_source: energy.source.clone(),
+            energy_components_covered: energy.components_covered.clone(),
+            energy_margin_note: energy.margin_note.clone(),
             power_profile: energy.profile.clone(),
             latency_ms,
             disk_used_gb,
@@ -823,11 +843,33 @@ struct EnergyEstimateInput<'a> {
     active_processes: usize,
     cpu_temperature: Option<f64>,
     gpu_temperature: Option<f64>,
+    /// Real GPU power draw from nvmlDeviceGetPowerUsage, when the NVML
+    /// reader loaded and the call succeeded. Preferred over an LHM/OHM GPU
+    /// power sensor when both are present - it needs no third-party monitor
+    /// installed.
+    gpu_power_watts: Option<f64>,
     advanced: &'a AdvancedTelemetry,
     local_context: &'a Value,
     hardware_sensors: &'a [HardwareSensorReading],
 }
 
+/// Source hierarchy, highest priority first - measure before estimating:
+///   1. "system"    - a whole-machine power sensor exposed via LHM/OHM.
+///   2. "component"  - CPU package power (RAPL, reached only through LHM/OHM
+///                     - this app has no kernel driver, so it can't read the
+///                     RAPL MSR directly; see ASSUMED_TJMAX_C for the same
+///                     constraint on CPU temperature) and/or real GPU power
+///                     (NVML, direct, no third-party monitor required).
+///   3. "battery"    - the battery's own instantaneous discharge rate, real
+///                     total-system draw, no per-component breakdown.
+///   4. "estimated"  - last resort: the heuristic formula below. Its
+///                     constants (base_watts, the per-metric coefficients,
+///                     activity_extra) are hand-tuned to land in a plausible
+///                     range for typical consumer hardware - NOT sourced
+///                     from any component datasheet or TDP spec. Kept
+///                     unchanged from the original formula so numbers stay
+///                     comparable across app versions; see margin_note on
+///                     EnergyEstimate for why no error bound is claimed.
 fn estimate_energy(input: EnergyEstimateInput<'_>) -> EnergyEstimate {
     let activity = input
         .local_context
@@ -875,8 +917,10 @@ fn estimate_energy(input: EnergyEstimateInput<'_>) -> EnergyEstimate {
     let sensor_cpu_watts = best_power_sensor(input.hardware_sensors, PowerSensorTarget::Cpu);
     let sensor_gpu_watts = best_power_sensor(input.hardware_sensors, PowerSensorTarget::Gpu);
     let sensor_system_watts = best_power_sensor(input.hardware_sensors, PowerSensorTarget::System);
+    let real_gpu_watts = input.gpu_power_watts.or(sensor_gpu_watts);
+
     let cpu_watts = sensor_cpu_watts.unwrap_or(estimated_cpu_watts);
-    let gpu_watts = sensor_gpu_watts.or(estimated_gpu_watts);
+    let gpu_watts = real_gpu_watts.or(estimated_gpu_watts);
     let memory_watts = (input.ram_usage_percent * 0.12).clamp(0.0, 14.0);
     let disk_watts = (input.disk_usage_percent * 0.04).clamp(1.0, 8.0);
     let process_watts = ((input.active_processes as f64 / 80.0).clamp(0.0, 6.0)).round();
@@ -895,54 +939,69 @@ fn estimate_energy(input: EnergyEstimateInput<'_>) -> EnergyEstimate {
         "idle" => -6.0,
         _ => 0.0,
     };
-    let mut watts = sensor_system_watts.unwrap_or_else(|| {
-        base_watts
-            + cpu_watts
-            + gpu_watts.unwrap_or_default()
-            + memory_watts
-            + disk_watts
-            + process_watts
-            + thermal_penalty
-            + activity_extra
-    });
+    let heuristic_total = base_watts
+        + cpu_watts
+        + gpu_watts.unwrap_or_default()
+        + memory_watts
+        + disk_watts
+        + process_watts
+        + thermal_penalty
+        + activity_extra;
+
+    // Tier 3: only reached when neither a system nor a component sensor
+    // covered anything - the discharge rate is a real measurement of total
+    // system draw, so it outranks the pure heuristic even though it can't
+    // be split into a CPU/GPU breakdown.
+    let battery_watts = input
+        .advanced
+        .battery_discharge_rate_mw
+        .filter(|_| sensor_system_watts.is_none() && sensor_cpu_watts.is_none() && real_gpu_watts.is_none())
+        .map(|milliwatts| milliwatts / 1000.0);
+
+    let mut watts = sensor_system_watts.or(battery_watts).unwrap_or(heuristic_total);
     watts = if on_battery {
         watts.clamp(12.0, 180.0)
     } else {
         watts.clamp(28.0, 520.0)
     };
 
-    let sensor_component_count =
-        sensor_cpu_watts.is_some() as u8 + sensor_gpu_watts.is_some() as u8;
-    let confidence = if sensor_system_watts.is_some() {
-        0.90
-    } else if sensor_component_count == 2 {
-        0.84
-    } else if sensor_component_count == 1 {
-        0.76
-    } else if input.gpu_usage_available
-        && (input.cpu_temperature.is_some() || input.gpu_temperature.is_some())
-    {
-        0.68
-    } else if input.gpu_usage_available {
-        0.58
-    } else {
-        0.46
-    };
-    let source = if sensor_system_watts.is_some() {
-        "system_power_sensor"
-    } else if sensor_component_count > 0 {
-        "component_power_sensors"
-    } else {
-        "hybrid_estimate"
-    };
+    let sensor_component_count = sensor_cpu_watts.is_some() as u8 + real_gpu_watts.is_some() as u8;
+    const UNKNOWN_MARGIN: &str = "margem desconhecida (estimativa heurística sem calibração de hardware)";
+    let (confidence, source, components_covered, margin_note): (f64, &str, Vec<&str>, Option<&str>) =
+        if sensor_system_watts.is_some() {
+            (0.90, "system", vec!["system"], None)
+        } else if sensor_component_count == 2 {
+            (0.84, "component", vec!["cpu", "gpu"], None)
+        } else if sensor_component_count == 1 {
+            let covered = if sensor_cpu_watts.is_some() {
+                vec!["cpu"]
+            } else {
+                vec!["gpu"]
+            };
+            (0.76, "component", covered, None)
+        } else if battery_watts.is_some() {
+            // 0.80 is a judgment call, not a calibrated figure: real total-
+            // system draw, but WMI-reported and often coarsely quantized.
+            (0.80, "battery", vec!["system"], None)
+        } else if input.gpu_usage_available
+            && (input.cpu_temperature.is_some() || input.gpu_temperature.is_some())
+        {
+            (0.68, "estimated", vec![], Some(UNKNOWN_MARGIN))
+        } else if input.gpu_usage_available {
+            (0.58, "estimated", vec![], Some(UNKNOWN_MARGIN))
+        } else {
+            (0.46, "estimated", vec![], Some(UNKNOWN_MARGIN))
+        };
 
     EnergyEstimate {
         watts: Some(round1(watts)),
         cpu_watts: Some(round1(cpu_watts)),
         gpu_watts: gpu_watts.map(round1),
         confidence,
-        is_estimated: sensor_system_watts.is_none(),
+        is_estimated: source == "estimated",
         source: source.to_string(),
+        components_covered: components_covered.into_iter().map(String::from).collect(),
+        margin_note: margin_note.map(String::from),
         profile: profile.to_string(),
     }
 }
@@ -1439,6 +1498,12 @@ struct NvidiaSensorSample {
     temperature_c: Option<f32>,
     utilization_percent: Option<f64>,
     vram_used_gb: Option<f64>,
+    /// Real instantaneous GPU power draw from nvmlDeviceGetPowerUsage, in
+    /// watts. Supported on the large majority of GeForce/Quadro/Tesla parts
+    /// (not gated behind NVIDIA's professional-only "field metrics"
+    /// permission the way some other NVML power counters are) - unlike
+    /// temperature/utilization/memory this was never wired up before.
+    power_watts: Option<f64>,
 }
 
 struct NvidiaSensorReader {
@@ -1449,6 +1514,7 @@ struct NvidiaSensorReader {
     device_get_temperature: unsafe extern "C" fn(NvmlDevice, u32, *mut u32) -> u32,
     device_get_utilization_rates: unsafe extern "C" fn(NvmlDevice, *mut NvmlUtilization) -> u32,
     device_get_memory_info: unsafe extern "C" fn(NvmlDevice, *mut NvmlMemory) -> u32,
+    device_get_power_usage: unsafe extern "C" fn(NvmlDevice, *mut u32) -> u32,
 }
 
 unsafe impl Send for NvidiaSensorReader {}
@@ -1487,6 +1553,11 @@ impl NvidiaSensorReader {
                     b"nvmlDeviceGetMemoryInfo\0",
                 )
                 .ok()?;
+            let device_get_power_usage = *library
+                .get::<unsafe extern "C" fn(NvmlDevice, *mut u32) -> u32>(
+                    b"nvmlDeviceGetPowerUsage\0",
+                )
+                .ok()?;
 
             if init() != NVML_SUCCESS {
                 return None;
@@ -1500,6 +1571,7 @@ impl NvidiaSensorReader {
                 device_get_temperature,
                 device_get_utilization_rates,
                 device_get_memory_info,
+                device_get_power_usage,
             })
         }
     }
@@ -1510,6 +1582,13 @@ impl NvidiaSensorReader {
             return None;
         }
         let mut best: Option<(u64, NvidiaSensorSample)> = None;
+        // Power is summed across every GPU that reports a reading this tick -
+        // a system with more than one NVIDIA GPU draws power from all of
+        // them, not just whichever one happens to have the most VRAM (which
+        // is what "best" picks for temperature/utilization/memory, since
+        // those are properties of "the" primary GPU rather than additive
+        // system-wide quantities).
+        let mut total_power_watts: Option<f64> = None;
 
         for index in 0..device_count {
             let mut device = std::ptr::null_mut();
@@ -1543,10 +1622,29 @@ impl NvidiaSensorReader {
             let memory_info =
                 unsafe { (self.device_get_memory_info)(device, &mut memory) } == NVML_SUCCESS;
             let total_memory = if memory_info { memory.total } else { 0 };
+
+            let mut power_mw = 0u32;
+            // Per-call, per-device, every tick - NVML_ERROR_NOT_SUPPORTED
+            // (older cards) or a transient failure (Optimus laptops power
+            // the dGPU down entirely when idle) naturally falls back to None
+            // for just this sample, not a decision baked in at reader
+            // construction time.
+            let power_watts = if unsafe { (self.device_get_power_usage)(device, &mut power_mw) }
+                == NVML_SUCCESS
+            {
+                nvml_milliwatts_to_watts(power_mw).filter(|watts| sane_sensor_value("power", *watts))
+            } else {
+                None
+            };
+            if let Some(watts) = power_watts {
+                total_power_watts = Some(total_power_watts.unwrap_or(0.0) + watts);
+            }
+
             let sample = NvidiaSensorSample {
                 temperature_c,
                 utilization_percent,
                 vram_used_gb: memory_info.then(|| bytes_to_gb(memory.used)),
+                power_watts,
             };
 
             if best
@@ -1558,8 +1656,18 @@ impl NvidiaSensorReader {
             }
         }
 
-        best.map(|(_, sample)| sample)
+        best.map(|(_, mut sample)| {
+            // Overwrite the "best" device's own power reading with the sum
+            // across all devices - see the comment on total_power_watts.
+            sample.power_watts = total_power_watts;
+            sample
+        })
     }
+}
+
+fn nvml_milliwatts_to_watts(power_mw: u32) -> Option<f64> {
+    let watts = power_mw as f64 / 1000.0;
+    watts.is_finite().then_some(watts)
 }
 
 impl Drop for NvidiaSensorReader {
@@ -2072,5 +2180,120 @@ mod tests {
             best_power_sensor(&sensors, PowerSensorTarget::Gpu),
             Some(156.0)
         );
+    }
+
+    fn energy_input<'a>(
+        advanced: &'a AdvancedTelemetry,
+        local_context: &'a Value,
+        hardware_sensors: &'a [HardwareSensorReading],
+        gpu_power_watts: Option<f64>,
+    ) -> EnergyEstimateInput<'a> {
+        EnergyEstimateInput {
+            cpu_usage: 30.0,
+            gpu_usage: 20.0,
+            gpu_usage_available: true,
+            ram_usage_percent: 40.0,
+            disk_usage_percent: 50.0,
+            active_processes: 120,
+            cpu_temperature: Some(60.0),
+            gpu_temperature: Some(55.0),
+            gpu_power_watts,
+            advanced,
+            local_context,
+            hardware_sensors,
+        }
+    }
+
+    fn system_power_sensor(watts: f64) -> HardwareSensorReading {
+        HardwareSensorReading {
+            source: "libre_hardware_monitor".to_string(),
+            sensor_type: "power".to_string(),
+            hardware_type: None,
+            hardware_name: Some("Motherboard".to_string()),
+            identifier: None,
+            label: Some("System Power".to_string()),
+            value: watts,
+            unit: "W".to_string(),
+        }
+    }
+
+    #[test]
+    fn estimate_energy_prefers_system_sensor_over_everything_else() {
+        let advanced = AdvancedTelemetry {
+            battery_percent: Some(80.0),
+            battery_status: Some("discharging".to_string()),
+            battery_discharge_rate_mw: Some(45_000.0),
+            ..AdvancedTelemetry::default()
+        };
+        let context = json!({});
+        let sensors = vec![system_power_sensor(65.0)];
+        let energy = estimate_energy(energy_input(&advanced, &context, &sensors, Some(120.0)));
+
+        assert_eq!(energy.source, "system");
+        assert_eq!(energy.watts, Some(65.0));
+        assert_eq!(energy.confidence, 0.90);
+        assert_eq!(energy.components_covered, vec!["system".to_string()]);
+        assert!(!energy.is_estimated);
+        assert!(energy.margin_note.is_none());
+    }
+
+    #[test]
+    fn estimate_energy_uses_nvml_gpu_power_as_component_tier_when_no_sensor_covers_the_system() {
+        let advanced = AdvancedTelemetry::default();
+        let context = json!({});
+        let energy = estimate_energy(energy_input(&advanced, &context, &[], Some(120.0)));
+
+        assert_eq!(energy.source, "component");
+        assert_eq!(energy.gpu_watts, Some(120.0));
+        assert_eq!(energy.confidence, 0.76);
+        assert_eq!(energy.components_covered, vec!["gpu".to_string()]);
+        assert!(!energy.is_estimated);
+        assert!(energy.margin_note.is_none());
+    }
+
+    #[test]
+    fn estimate_energy_uses_battery_discharge_rate_when_no_sensor_reading_exists() {
+        let advanced = AdvancedTelemetry {
+            battery_percent: Some(55.0),
+            battery_status: Some("discharging".to_string()),
+            battery_discharge_rate_mw: Some(45_000.0),
+            ..AdvancedTelemetry::default()
+        };
+        let context = json!({});
+        let energy = estimate_energy(energy_input(&advanced, &context, &[], None));
+
+        assert_eq!(energy.source, "battery");
+        assert_eq!(energy.watts, Some(45.0));
+        assert_eq!(energy.confidence, 0.80);
+        assert_eq!(energy.components_covered, vec!["system".to_string()]);
+        assert!(!energy.is_estimated);
+        assert!(energy.margin_note.is_none());
+    }
+
+    #[test]
+    fn estimate_energy_falls_back_to_heuristic_with_an_explicit_unknown_margin() {
+        let advanced = AdvancedTelemetry::default();
+        let context = json!({});
+        let energy = estimate_energy(energy_input(&advanced, &context, &[], None));
+
+        assert_eq!(energy.source, "estimated");
+        assert!(energy.is_estimated);
+        assert!(energy.components_covered.is_empty());
+        assert_eq!(
+            energy.margin_note.as_deref(),
+            Some("margem desconhecida (estimativa heurística sem calibração de hardware)")
+        );
+        // Same formula as before this change - still produces a plausible reading, just honestly labeled.
+        assert!(energy.watts.is_some_and(|watts| (28.0..=520.0).contains(&watts)));
+    }
+
+    #[test]
+    fn nvml_milliwatts_to_watts_divides_by_a_thousand_not_by_one() {
+        // Regression guard for the exact bug flagged as a Phase 1 risk: NVML
+        // returns milliwatts, not watts. 125_000 mW is a plausible GPU power
+        // draw once converted (125.0 W); left unconverted it would be
+        // rejected by no downstream check at all, silently reporting 125000W.
+        assert_eq!(nvml_milliwatts_to_watts(125_000), Some(125.0));
+        assert_eq!(nvml_milliwatts_to_watts(0), Some(0.0));
     }
 }
