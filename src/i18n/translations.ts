@@ -12,7 +12,7 @@ export const translations = {
   "pt-BR": {
     app: {
       name: "AnalystBlaze",
-      versionLine: "v0.1.49 - build 2026.07",
+      versionLine: "v0.1.50 - build 2026.07",
       loading: "A carregar...",
     },
     common: {
@@ -496,6 +496,11 @@ export const translations = {
       downloading: "Baixando em segundo plano para deixar a instalacao rapida.",
       badgeAvailable: "atualizacao disponivel",
       errorSignature: "Nao foi possivel validar a atualizacao - nada foi instalado.",
+      elevationNotice: "O Windows vai pedir permissao de administrador para concluir a instalacao - aceite a janela que aparecer.",
+      installSucceededToastTitle: "Atualizado com sucesso",
+      installSucceededToastDesc: "O AnalystBlaze agora esta na versao {{version}}.",
+      installFailedToastTitle: "A atualizacao nao foi concluida",
+      installFailedToastDesc: "O AnalystBlaze continua na versao {{version}}. Se apareceu um pedido de permissao do Windows, tente novamente e aceite a janela.",
     },
     agent: {
       status: {
@@ -538,7 +543,7 @@ export const translations = {
   "en-US": {
     app: {
       name: "AnalystBlaze",
-      versionLine: "v0.1.49 - build 2026.07",
+      versionLine: "v0.1.50 - build 2026.07",
       loading: "Loading...",
     },
     common: {
@@ -1022,6 +1027,11 @@ export const translations = {
       downloading: "Downloading in the background to make install quick.",
       badgeAvailable: "update available",
       errorSignature: "The update couldn't be verified - nothing was installed.",
+      elevationNotice: "Windows will ask for administrator permission to finish installing - accept the prompt when it appears.",
+      installSucceededToastTitle: "Updated successfully",
+      installSucceededToastDesc: "AnalystBlaze is now on version {{version}}.",
+      installFailedToastTitle: "Update didn't finish",
+      installFailedToastDesc: "AnalystBlaze is still on version {{version}}. If a Windows permission prompt appeared, try again and accept it.",
     },
     agent: {
       status: {
