@@ -460,6 +460,7 @@ async fn apply_game_mode(payload: Option<Value>) -> ExecutionResult {
                 session.target_pid,
                 session.target_process_name.clone(),
                 snapshot_ids.clone(),
+                enter_focus_mode && focus.success,
             );
         }
     }
@@ -661,6 +662,7 @@ fn spawn_game_restore_monitor(
     pid: Option<u32>,
     process_name: Option<String>,
     snapshot_ids: Vec<String>,
+    linked_focus_session: bool,
 ) {
     thread::spawn(move || {
         let _ = audit::record_event(
@@ -698,6 +700,15 @@ fn spawn_game_restore_monitor(
                 "Modo Gamer restaurado apos fechamento do jogo detectado.",
                 serde_json::to_value(&report).unwrap_or(Value::Null),
             );
+            // The Modo Foco session this activation started is tracked
+            // separately (its own file, own TTL - see focus.rs) and doesn't
+            // get torn down by restoring game-mode snapshots above. Without
+            // this, effects like delaying telemetry uploads or suppressing
+            // notifications keep applying for up to the session's full TTL
+            // (up to 2h) after the game has already closed.
+            if linked_focus_session {
+                let _ = focus::restore_focus_session(Some("target_process_exit".to_string()));
+            }
             return;
         }
 

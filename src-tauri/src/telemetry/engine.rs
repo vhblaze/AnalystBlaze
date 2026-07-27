@@ -487,7 +487,16 @@ impl TelemetryEngine {
             return;
         }
 
-        if optimizations::focus::should_delay_non_critical_uploads() {
+        // A focus/game-mode session can outlive the load that triggered it
+        // (its own TTL, not the game's lifetime - see focus.rs) or fire on a
+        // false-positive detection, and would otherwise block telemetry
+        // uploads for up to an hour with nothing actually competing for
+        // CPU/GPU. Fall back to the most recent real sample as a safety
+        // valve: if the machine isn't actually under load right now, let the
+        // upload through regardless of the stale session state.
+        if optimizations::focus::should_delay_non_critical_uploads()
+            && !load_is_low_enough_to_upload(self.last_sample.as_ref())
+        {
             return;
         }
 
@@ -2074,6 +2083,21 @@ fn credentials_plan_is_family(credentials: &StoredCredentials) -> bool {
     )
 }
 
+// A focus/game-mode session can outlive the load that triggered it (its own
+// TTL, not the game's lifetime - see focus.rs) or fire on a false-positive
+// detection, and would otherwise block telemetry uploads for up to an hour
+// with nothing actually competing for CPU/GPU. Used as a safety valve to
+// override a stale session's upload delay - not to gate uploads on its own,
+// so a missing sample (e.g. right after startup) must not block sending.
+const LOW_LOAD_UPLOAD_THRESHOLD_PERCENT: f64 = 50.0;
+
+fn load_is_low_enough_to_upload(sample: Option<&TelemetrySample>) -> bool {
+    sample.is_some_and(|sample| {
+        sample.cpu_usage < LOW_LOAD_UPLOAD_THRESHOLD_PERCENT
+            && (!sample.gpu_usage_available || sample.gpu_usage < LOW_LOAD_UPLOAD_THRESHOLD_PERCENT)
+    })
+}
+
 fn ratio(value: f64, baseline: f64) -> f64 {
     if baseline <= 0.0 {
         return 0.0;
@@ -2168,6 +2192,32 @@ mod tests {
             context_state,
             details,
         }
+    }
+
+    #[test]
+    fn load_is_low_enough_to_upload_requires_both_cpu_and_gpu_under_threshold() {
+        assert!(!load_is_low_enough_to_upload(None));
+
+        let mut idle = sample_with_context(json!({}), json!({}));
+        idle.cpu_usage = 12.0;
+        idle.gpu_usage = 8.0;
+        idle.gpu_usage_available = true;
+        assert!(load_is_low_enough_to_upload(Some(&idle)));
+
+        let mut high_cpu = idle.clone();
+        high_cpu.cpu_usage = 51.0;
+        assert!(!load_is_low_enough_to_upload(Some(&high_cpu)));
+
+        let mut high_gpu = idle.clone();
+        high_gpu.gpu_usage = 51.0;
+        assert!(!load_is_low_enough_to_upload(Some(&high_gpu)));
+
+        // A high GPU reading that isn't actually available (e.g. no reader
+        // for this card) must not block the upload.
+        let mut gpu_unavailable = idle.clone();
+        gpu_unavailable.gpu_usage = 99.0;
+        gpu_unavailable.gpu_usage_available = false;
+        assert!(load_is_low_enough_to_upload(Some(&gpu_unavailable)));
     }
 
     fn default_privacy() -> TelemetryPrivacyPolicy {
