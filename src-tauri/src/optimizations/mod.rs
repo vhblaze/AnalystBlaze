@@ -391,7 +391,7 @@ async fn apply_game_mode(payload: Option<Value>) -> ExecutionResult {
         )
     };
     let focus = if enter_focus_mode {
-        focus::enter_focus_mode(payload.clone()).await
+        focus::enter_focus_mode(Some(focus_payload_for_game_mode(payload.as_ref()))).await
     } else {
         ExecutionResult::ok(
             "Modo foco ignorado pela policy local.",
@@ -544,6 +544,25 @@ async fn apply_game_mode(payload: Option<Value>) -> ExecutionResult {
             "pro_agent_note": "Planos Pro poderao aplicar ajustes adaptativos automaticamente por orquestracao.",
         }),
     }
+}
+
+// Neither the manual "Modo Gamer" button nor the local-AI auto-trigger ever
+// set a profile/mode/scenario key on the command payload, so
+// focus::profile_from_payload always fell through to its generic Focus
+// default (1h TTL, looser polling/upload throttles) instead of the Game
+// profile that exists specifically for this (2h TTL, tighter throttles, and
+// a background-app list that doesn't deprioritize the game's own launcher).
+// Default to "game" here, but never override a profile the caller already
+// chose explicitly.
+fn focus_payload_for_game_mode(payload: Option<&Value>) -> Value {
+    let mut merged = payload.cloned().unwrap_or_else(|| json!({}));
+    match merged.as_object_mut() {
+        Some(object) => {
+            object.entry("profile").or_insert_with(|| json!("game"));
+        }
+        None => merged = json!({ "profile": "game" }),
+    }
+    merged
 }
 
 fn payload_bool(payload: Option<&Value>, key: &str, default: bool) -> bool {
@@ -723,4 +742,31 @@ fn spawn_game_restore_monitor(
             }),
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focus_payload_for_game_mode_defaults_profile_to_game() {
+        let merged = focus_payload_for_game_mode(None);
+        assert_eq!(merged.get("profile").and_then(Value::as_str), Some("game"));
+
+        let merged = focus_payload_for_game_mode(Some(&json!({
+            "source": "local_policy",
+            "activity": "gaming",
+        })));
+        assert_eq!(merged.get("profile").and_then(Value::as_str), Some("game"));
+        assert_eq!(
+            merged.get("source").and_then(Value::as_str),
+            Some("local_policy")
+        );
+    }
+
+    #[test]
+    fn focus_payload_for_game_mode_never_overrides_an_explicit_profile() {
+        let merged = focus_payload_for_game_mode(Some(&json!({ "profile": "work" })));
+        assert_eq!(merged.get("profile").and_then(Value::as_str), Some("work"));
+    }
 }
