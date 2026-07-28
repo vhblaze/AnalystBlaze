@@ -396,20 +396,34 @@ impl TelemetryEngine {
     async fn push_realtime_sample(&mut self) {
         let local_realtime =
             *self.manual_mode_override_rx.borrow() == Some(TelemetryMode::Realtime);
-        let sample = self.collector.collect();
+        let now = chrono::Utc::now().timestamp();
+        let latency_session = latency_sensitive_session_active();
+        let within_throttle_window = self
+            .last_realtime_push_at
+            .is_some_and(|last| now.saturating_sub(last) < 5);
+
+        // Collecting a fresh sample every second competes for real CPU with
+        // an active game - TelemetryCollector::collect() refreshes the full
+        // process table/disks every 5th tick and reads hardware sensors
+        // (spawns powershell.exe) / network probes (spawns ping.exe) on
+        // their own timers. The network push below already throttles to
+        // once per 5s during a game/focus/latency session; reuse the same
+        // cached sample here instead of re-collecting on every 1s tick, so
+        // the local collection work is throttled to match.
+        let cached_sample = (latency_session && within_throttle_window)
+            .then(|| self.last_sample.clone())
+            .flatten();
+        let sample = match cached_sample {
+            Some(sample) => sample,
+            None => self.collector.collect().await,
+        };
         self.publish_sample(&sample).await;
 
         if local_realtime || self.backend_in_backoff() {
             return;
         }
 
-        let now = chrono::Utc::now().timestamp();
-        let latency_session = latency_sensitive_session_active();
-        if latency_session
-            && self
-                .last_realtime_push_at
-                .is_some_and(|last| now.saturating_sub(last) < 5)
-        {
+        if latency_session && within_throttle_window {
             self.coalesced_realtime_samples = self.coalesced_realtime_samples.saturating_add(1);
             return;
         }
@@ -588,7 +602,7 @@ impl TelemetryEngine {
             }
         }
 
-        let sample = self.collector.collect();
+        let sample = self.collector.collect().await;
         self.publish_sample(&sample).await;
     }
 
@@ -597,7 +611,7 @@ impl TelemetryEngine {
             return sample;
         }
 
-        let sample = self.collector.collect();
+        let sample = self.collector.collect().await;
         self.publish_sample(&sample).await;
         sample
     }
@@ -693,7 +707,7 @@ impl TelemetryEngine {
                 .await
             };
             sleep(self.config.post_optimization_measurement_delay).await;
-            let after = self.collector.collect();
+            let after = self.collector.collect().await;
             self.publish_sample(&after).await;
 
             let details = json!({
@@ -902,7 +916,7 @@ impl TelemetryEngine {
         )
         .await;
         sleep(self.config.post_optimization_measurement_delay).await;
-        let after = self.collector.collect();
+        let after = self.collector.collect().await;
         self.publish_sample(&after).await;
         self.last_local_action_at = Some(now);
         self.last_local_action_by_name

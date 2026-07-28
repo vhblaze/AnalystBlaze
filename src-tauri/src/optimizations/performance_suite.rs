@@ -673,7 +673,7 @@ fn run_performance_scan_blocking(
 ) -> Result<PerformanceReport, String> {
     let normalized_mode = normalize_scan_mode(mode);
     let mut collector = TelemetryCollector::new();
-    let sample = collector.collect();
+    let sample = collector.collect_blocking();
     let cleanup_categories = scan_cleanup_categories_blocking();
     let startup_impact = scan_startup_impact_blocking();
     let detected_game = detection::detect_game_process_with_payload(None);

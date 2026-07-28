@@ -198,7 +198,30 @@ impl TelemetryCollector {
         }
     }
 
-    pub fn collect(&mut self) -> TelemetrySample {
+    /// Used by the async telemetry engine loop - the network/hardware-sensor
+    /// refreshes run via spawn_blocking so a slow ping.exe/powershell.exe
+    /// spawn never contends with the tokio reactor thread for a game's own
+    /// frame pacing. See `collect_blocking` for callers that are already
+    /// running off the reactor (e.g. inside their own spawn_blocking).
+    pub async fn collect(&mut self) -> TelemetrySample {
+        self.begin_collection_tick();
+        let hardware_sensors = self.hardware_sensors().await;
+        let network = self.network_diagnostics().await;
+        self.collect_with(hardware_sensors, network)
+    }
+
+    /// Fully synchronous equivalent of `collect` for callers that already
+    /// run inside a blocking context (e.g. `tokio::task::spawn_blocking`) -
+    /// wrapping the sub-refreshes in another spawn_blocking there would just
+    /// add overhead without isolating anything further.
+    pub fn collect_blocking(&mut self) -> TelemetrySample {
+        self.begin_collection_tick();
+        let hardware_sensors = self.hardware_sensors_sync();
+        let network = self.network_diagnostics_sync();
+        self.collect_with(hardware_sensors, network)
+    }
+
+    fn begin_collection_tick(&mut self) {
         self.collection_count = self.collection_count.saturating_add(1);
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
@@ -207,7 +230,13 @@ impl TelemetryCollector {
             self.system.refresh_processes(ProcessesToUpdate::All, true);
             self.disks.refresh(false);
         }
+    }
 
+    fn collect_with(
+        &mut self,
+        hardware_sensors: Vec<HardwareSensorReading>,
+        network: NetworkDiagnostics,
+    ) -> TelemetrySample {
         let cpu_usage = self.system.global_cpu_usage() as f64;
         let ram_usage_mb = bytes_to_mb(self.system.used_memory());
         let ram_total_mb = bytes_to_mb(self.system.total_memory());
@@ -216,7 +245,6 @@ impl TelemetryCollector {
         } else {
             0.0
         };
-        let hardware_sensors = self.hardware_sensors();
         let thermal_sensors = limited_sensors_by_type(&hardware_sensors, "temperature", 32);
         let power_sensors = limited_sensors_by_type(&hardware_sensors, "power", 24);
         let fan_sensors = limited_sensors_by_type(&hardware_sensors, "fan", 16);
@@ -280,7 +308,6 @@ impl TelemetryCollector {
         let idle_seconds = idle_seconds();
         let process_names = running_process_names(&self.system);
         let advanced = self.advanced_telemetry();
-        let network = self.network_diagnostics();
         let latency_ms = best_latency_ms(&network);
         let local_context = detect_local_context(
             active_window.as_deref(),
@@ -779,7 +806,45 @@ impl TelemetryCollector {
         self.advanced_cache.clone()
     }
 
-    fn network_diagnostics(&mut self) -> NetworkDiagnostics {
+    // Both refreshes below shell out to a real child process (ping.exe /
+    // powershell.exe) and would otherwise run synchronously on whichever
+    // tokio worker thread is driving the telemetry engine's loop - the one
+    // place in this codebase that didn't already follow the rest of the
+    // app's convention of isolating blocking work via spawn_blocking. Left
+    // unwrapped, a slow PowerShell cold start (100-400ms+) or ping round
+    // trip lands squarely as scheduler contention during a match. Falling
+    // back to the previous cached value on a JoinError (extremely rare -
+    // only on panic) is preferable to propagating an error out of a
+    // telemetry tick.
+    async fn network_diagnostics(&mut self) -> NetworkDiagnostics {
+        let now = chrono::Utc::now().timestamp();
+        let forced = super::network::take_network_cache_invalidated();
+        if forced || now.saturating_sub(self.network_refreshed_at) >= 30 {
+            if let Ok(sample) = tokio::task::spawn_blocking(collect_network_sample).await {
+                self.network_cache = sample;
+                self.network_refreshed_at = now;
+            }
+        }
+
+        self.network_cache.clone()
+    }
+
+    async fn hardware_sensors(&mut self) -> Vec<HardwareSensorReading> {
+        let now = chrono::Utc::now().timestamp();
+        if now.saturating_sub(self.hardware_sensor_refreshed_at) >= 30 {
+            if let Ok(sensors) = tokio::task::spawn_blocking(external_hardware_sensors).await {
+                self.hardware_sensor_cache = sensors;
+                self.hardware_sensor_refreshed_at = now;
+            }
+        }
+
+        self.hardware_sensor_cache.clone()
+    }
+
+    /// Same caching as `network_diagnostics`, called directly instead of via
+    /// spawn_blocking - only for callers that are already running off the
+    /// tokio reactor (see `collect_blocking`).
+    fn network_diagnostics_sync(&mut self) -> NetworkDiagnostics {
         let now = chrono::Utc::now().timestamp();
         let forced = super::network::take_network_cache_invalidated();
         if forced || now.saturating_sub(self.network_refreshed_at) >= 30 {
@@ -790,7 +855,10 @@ impl TelemetryCollector {
         self.network_cache.clone()
     }
 
-    fn hardware_sensors(&mut self) -> Vec<HardwareSensorReading> {
+    /// Same caching as `hardware_sensors`, called directly instead of via
+    /// spawn_blocking - only for callers that are already running off the
+    /// tokio reactor (see `collect_blocking`).
+    fn hardware_sensors_sync(&mut self) -> Vec<HardwareSensorReading> {
         let now = chrono::Utc::now().timestamp();
         if now.saturating_sub(self.hardware_sensor_refreshed_at) >= 30 {
             self.hardware_sensor_cache = external_hardware_sensors();

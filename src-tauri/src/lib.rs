@@ -804,9 +804,28 @@ fn spawn_live_mode_loop(app: AppHandle, cancel: std::sync::Arc<std::sync::atomic
             if cancel.load(std::sync::atomic::Ordering::Relaxed) {
                 break;
             }
-            tokio::time::sleep(LIVE_MODE_SAMPLE_INTERVAL).await;
+            // Modo Live's own ping.exe probes put real ICMP traffic on the
+            // wire every tick - fine at rest, but during a game/focus
+            // session that traffic directly competes with the match's own
+            // UDP packets for the NIC queue (the same self-inflicted
+            // packet-loss risk the telemetry engine's realtime push already
+            // throttles for - see latency_sensitive_session_active in
+            // telemetry/engine.rs). Don't stop sampling outright - streamers
+            // rely on this while actually playing - just probe less often.
+            let sleep_duration = if live_mode_latency_sensitive_session_active() {
+                LIVE_MODE_SAMPLE_INTERVAL * 5
+            } else {
+                LIVE_MODE_SAMPLE_INTERVAL
+            };
+            tokio::time::sleep(sleep_duration).await;
         }
     });
+}
+
+fn live_mode_latency_sensitive_session_active() -> bool {
+    optimizations::latency::active_latency_session().is_some()
+        || optimizations::active_game_mode_session().is_some()
+        || optimizations::focus::active_focus_session().is_some()
 }
 
 #[tauri::command]
@@ -1521,7 +1540,7 @@ fn logout(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
 #[tauri::command]
 fn collect_once() -> telemetry::collector::TelemetrySample {
     let mut collector = TelemetryCollector::new();
-    collector.collect()
+    collector.collect_blocking()
 }
 
 #[tauri::command]
