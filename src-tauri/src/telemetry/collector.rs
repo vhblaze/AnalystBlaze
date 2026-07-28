@@ -8,7 +8,7 @@ use crate::optimizations::detection;
 use crate::process_ext::{decode_console_bytes, CommandExt};
 
 use super::advanced::{collect_advanced_telemetry, AdvancedTelemetry};
-use super::network::{best_latency_ms, collect_network_sample, NetworkDiagnostics};
+use super::network::{best_latency_ms, collect_network_sample_with_adapter_health, NetworkDiagnostics};
 
 /// Typical TjMax for modern (post-~2015) consumer/prosumer Intel and AMD
 /// CPUs. The real per-model value lives in a hardware register (MSR) that
@@ -821,7 +821,9 @@ impl TelemetryCollector {
         let now = chrono::Utc::now().timestamp();
         let forced = super::network::take_network_cache_invalidated();
         if forced || now.saturating_sub(self.network_refreshed_at) >= 30 {
-            if let Ok(sample) = tokio::task::spawn_blocking(collect_network_sample).await {
+            if let Ok(sample) =
+                tokio::task::spawn_blocking(collect_network_sample_with_adapter_health).await
+            {
                 self.network_cache = sample;
                 self.network_refreshed_at = now;
             }
@@ -849,7 +851,7 @@ impl TelemetryCollector {
         let now = chrono::Utc::now().timestamp();
         let forced = super::network::take_network_cache_invalidated();
         if forced || now.saturating_sub(self.network_refreshed_at) >= 30 {
-            self.network_cache = collect_network_sample();
+            self.network_cache = collect_network_sample_with_adapter_health();
             self.network_refreshed_at = now;
         }
 

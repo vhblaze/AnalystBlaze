@@ -199,6 +199,31 @@ pub fn collect_network_sample() -> NetworkDiagnostics {
     diagnostics_from_probes(probes)
 }
 
+/// Same 2-probe latency sample as collect_network_sample, plus this host's
+/// own active adapter name/throughput/error-discard rates - the periodic
+/// (30s-cached, see TelemetryCollector::network_diagnostics) path that
+/// actually feeds the telemetry stream sent to the backend, as opposed to
+/// collect_network_diagnostics's fuller on-demand version (which also does
+/// wifi/gateway/DNS-server enumeration - too much to run every 30s, and
+/// used by manual "check my network"/performance-scan flows instead).
+/// Without this, adapter_error_rate_per_sec/possible_external_congestion
+/// would only ever be computed when a user happens to open that manual
+/// diagnostic, which for most users is close to never.
+pub fn collect_network_sample_with_adapter_health() -> NetworkDiagnostics {
+    let mut diagnostics = collect_network_sample();
+    let adapter = collect_active_adapter();
+    if let Some(name) = adapter.name.as_deref() {
+        diagnostics.adapter_name = Some(name.to_string());
+        if let Some(health) = measure_adapter_health(name) {
+            diagnostics.adapter_throughput_kbps = Some(health.throughput_kbps);
+            diagnostics.adapter_error_rate_per_sec = Some(health.error_rate_per_sec);
+            diagnostics.adapter_discard_rate_per_sec = Some(health.discard_rate_per_sec);
+        }
+    }
+    diagnostics.recommendations = network_recommendations(&diagnostics);
+    diagnostics
+}
+
 fn diagnostics_from_probes(probes: Vec<NetworkProbe>) -> NetworkDiagnostics {
     let dns_probe = probes.iter().find(|probe| probe.label == "dns_cloudflare");
     let external_probe = probes
