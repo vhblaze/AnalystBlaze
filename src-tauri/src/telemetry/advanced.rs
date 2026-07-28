@@ -26,8 +26,35 @@ pub struct AdvancedTelemetry {
     pub latest_event_log_errors: Vec<EventLogIssue>,
     pub driver_inventory: Vec<DriverInfo>,
     pub thermal_throttling_suspected: Option<bool>,
+    /// The GPU driver Windows itself considers "the" display adapter's
+    /// driver (Win32_VideoController), not just any DISPLAY-class entry
+    /// from driver_inventory above - picked by matching gpu_name_hint when
+    /// available, otherwise the controller with the most VRAM (same
+    /// heuristic as TelemetryCollector::primary_gpu). None whenever no
+    /// video controller answers the query at all, never a guess.
+    pub gpu_driver_status: Option<GpuDriverStatus>,
     pub source: String,
     pub refreshed_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GpuDriverStatus {
+    pub device_name: Option<String>,
+    pub driver_version: Option<String>,
+    /// Raw DriverDate as PowerShell's ConvertTo-Json renders a [DateTime] -
+    /// kept as an opaque string (same as DriverInfo.driver_date) rather than
+    /// parsed in Rust; driver_age_days below is computed PowerShell-side
+    /// instead, where real DateTime arithmetic is available.
+    pub driver_date: Option<String>,
+    pub driver_age_days: Option<i64>,
+    /// True once driver_age_days crosses OUTDATED_DRIVER_AGE_DAYS. Age is
+    /// only a proxy for "may be missing recent game-ready fixes/perf
+    /// patches" - it is NOT a comparison against the vendor's actual latest
+    /// release (that would need a live NVIDIA/AMD/Intel API call, out of
+    /// scope here), so this can be wrong in either direction: a driver
+    /// could be old but still the newest available for that card, or a
+    /// fresh install could still be missing a same-week hotfix.
+    pub possibly_outdated: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -56,7 +83,7 @@ pub struct DriverInfo {
     pub manufacturer: Option<String>,
 }
 
-pub fn collect_advanced_telemetry() -> AdvancedTelemetry {
+pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTelemetry {
     let mut telemetry = AdvancedTelemetry {
         source: "windows_low_frequency".to_string(),
         refreshed_at: Some(chrono::Utc::now().timestamp()),
@@ -69,8 +96,80 @@ pub fn collect_advanced_telemetry() -> AdvancedTelemetry {
     collect_windows_update(&mut telemetry);
     collect_event_log(&mut telemetry);
     collect_driver_inventory(&mut telemetry);
+    telemetry.gpu_driver_status = collect_gpu_driver_status(gpu_name_hint);
 
     telemetry
+}
+
+/// Age past which a GPU driver is flagged as possibly outdated. Not a
+/// vendor-sourced value - a conservative round number (most GPU vendors
+/// ship at least a couple of driver updates a year) chosen so this only
+/// fires on drivers that are genuinely stale, not merely a few months old.
+const OUTDATED_DRIVER_AGE_DAYS: i64 = 365;
+
+fn collect_gpu_driver_status(gpu_name_hint: Option<&str>) -> Option<GpuDriverStatus> {
+    let values = powershell_json_array(
+        r#"Get-CimInstance Win32_VideoController | Select-Object Name,DriverVersion,DriverDate,AdapterRAM | ForEach-Object {
+    $ageDays = if ($_.DriverDate) { [math]::Round(((Get-Date) - $_.DriverDate).TotalDays) } else { $null }
+    [pscustomobject]@{ Name = $_.Name; DriverVersion = $_.DriverVersion; DriverDate = $_.DriverDate; DriverAgeDays = $ageDays; AdapterRAM = $_.AdapterRAM }
+} | ConvertTo-Json -Compress"#,
+    )?;
+
+    let controller = select_primary_video_controller(&values, gpu_name_hint)?;
+    let driver_age_days = controller.get("DriverAgeDays").and_then(Value::as_i64);
+
+    Some(GpuDriverStatus {
+        device_name: controller.get("Name").and_then(Value::as_str).map(clean_string),
+        driver_version: controller
+            .get("DriverVersion")
+            .and_then(Value::as_str)
+            .map(clean_string),
+        driver_date: controller
+            .get("DriverDate")
+            .and_then(Value::as_str)
+            .map(clean_string),
+        driver_age_days,
+        possibly_outdated: is_driver_possibly_outdated(driver_age_days),
+    })
+}
+
+fn is_driver_possibly_outdated(driver_age_days: Option<i64>) -> bool {
+    driver_age_days.is_some_and(|age| age >= OUTDATED_DRIVER_AGE_DAYS)
+}
+
+/// Prefers the entry whose Name matches gpu_name_hint (the GPU
+/// TelemetryCollector::primary_gpu already picked, by max VRAM) so the
+/// reported driver is for the same card the rest of telemetry talks about,
+/// not just whichever WMI happened to return first. Falls back to the
+/// controller with the most AdapterRAM - the same "biggest VRAM wins"
+/// heuristic primary_gpu itself uses - when there's no hint or no name
+/// match (e.g. WMI's Name string doesn't line up with the DXGI-sourced name
+/// primary_gpu uses).
+fn select_primary_video_controller(values: &[Value], gpu_name_hint: Option<&str>) -> Option<Value> {
+    if let Some(hint) = gpu_name_hint {
+        let hint_lower = hint.to_ascii_lowercase();
+        if let Some(matched) = values.iter().find(|value| {
+            value
+                .get("Name")
+                .and_then(Value::as_str)
+                .map(|name| {
+                    let name_lower = name.to_ascii_lowercase();
+                    name_lower.contains(&hint_lower) || hint_lower.contains(&name_lower)
+                })
+                .unwrap_or(false)
+        }) {
+            return Some(matched.clone());
+        }
+    }
+
+    values
+        .iter()
+        .max_by(|left, right| {
+            let left_ram = left.get("AdapterRAM").and_then(Value::as_i64).unwrap_or(0);
+            let right_ram = right.get("AdapterRAM").and_then(Value::as_i64).unwrap_or(0);
+            left_ram.cmp(&right_ram)
+        })
+        .cloned()
 }
 
 fn collect_battery(telemetry: &mut AdvancedTelemetry) {
@@ -140,6 +239,62 @@ mod tests {
     #[test]
     fn discharge_rate_rejects_negative_values() {
         assert!(!is_plausible_discharge_rate_mw(-500.0, Some("discharging")));
+    }
+
+    fn controller(name: &str, adapter_ram: i64) -> Value {
+        json!({ "Name": name, "AdapterRAM": adapter_ram })
+    }
+
+    #[test]
+    fn video_controller_selection_prefers_a_name_matching_the_hint() {
+        let values = vec![
+            controller("Intel(R) UHD Graphics", 1_073_741_824),
+            controller("NVIDIA GeForce RTX 4070", 8_589_934_592),
+        ];
+        let selected = select_primary_video_controller(&values, Some("GeForce RTX 4070"))
+            .expect("a match should be found");
+        assert_eq!(
+            selected.get("Name").and_then(Value::as_str),
+            Some("NVIDIA GeForce RTX 4070")
+        );
+    }
+
+    #[test]
+    fn video_controller_selection_falls_back_to_most_vram_without_a_matching_hint() {
+        let values = vec![
+            controller("Intel(R) UHD Graphics", 1_073_741_824),
+            controller("NVIDIA GeForce RTX 4070", 8_589_934_592),
+        ];
+        let selected = select_primary_video_controller(&values, Some("Some Unrelated Name"))
+            .expect("should fall back instead of returning None");
+        assert_eq!(
+            selected.get("Name").and_then(Value::as_str),
+            Some("NVIDIA GeForce RTX 4070")
+        );
+
+        let selected =
+            select_primary_video_controller(&values, None).expect("no hint should still pick one");
+        assert_eq!(
+            selected.get("Name").and_then(Value::as_str),
+            Some("NVIDIA GeForce RTX 4070")
+        );
+    }
+
+    #[test]
+    fn video_controller_selection_returns_none_for_an_empty_list() {
+        assert!(select_primary_video_controller(&[], Some("anything")).is_none());
+    }
+
+    #[test]
+    fn driver_age_below_threshold_is_not_flagged() {
+        assert!(!is_driver_possibly_outdated(Some(OUTDATED_DRIVER_AGE_DAYS - 1)));
+        assert!(!is_driver_possibly_outdated(None));
+    }
+
+    #[test]
+    fn driver_age_at_or_above_threshold_is_flagged() {
+        assert!(is_driver_possibly_outdated(Some(OUTDATED_DRIVER_AGE_DAYS)));
+        assert!(is_driver_possibly_outdated(Some(OUTDATED_DRIVER_AGE_DAYS + 400)));
     }
 }
 

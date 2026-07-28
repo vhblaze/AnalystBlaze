@@ -799,7 +799,8 @@ impl TelemetryCollector {
     fn advanced_telemetry(&mut self) -> AdvancedTelemetry {
         let now = chrono::Utc::now().timestamp();
         if now.saturating_sub(self.advanced_refreshed_at) >= 300 {
-            self.advanced_cache = collect_advanced_telemetry();
+            let gpu_name = self.primary_gpu().name;
+            self.advanced_cache = collect_advanced_telemetry(Some(&gpu_name));
             self.advanced_refreshed_at = now;
         }
 

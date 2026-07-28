@@ -63,6 +63,26 @@ pub struct NetworkDiagnostics {
     pub external_latency_ms: Option<f64>,
     pub jitter_ms: Option<f64>,
     pub packet_loss_percent: Option<f64>,
+    /// This host's own current send+receive throughput on the active
+    /// adapter, sampled the same way as the fields below (two
+    /// Get-NetAdapterStatistics reads 500ms apart). Only meaningful as "is
+    /// this PC busy on the network right now" - see
+    /// possible_external_congestion in network_recommendations for how it's
+    /// used, and its doc comment for why this can't identify *which* other
+    /// device (if any) is responsible.
+    pub adapter_throughput_kbps: Option<f64>,
+    /// New ReceivedPacketErrors+OutboundPacketErrors counted *during* the
+    /// same 500ms sample window above - not the adapter's lifetime total
+    /// (which could be old and no longer relevant). A nonzero value here
+    /// means the NIC/cable/driver is actively erroring right now, the
+    /// closest software-only proxy for "bad cable or bad port" available
+    /// without a link-layer diagnostic tool.
+    pub adapter_error_rate_per_sec: Option<f64>,
+    /// Same idea as adapter_error_rate_per_sec but for discarded packets -
+    /// more often a sign of buffer/driver pressure (which overlaps with
+    /// congestion) than physical damage, so it's surfaced separately rather
+    /// than folded into the error count.
+    pub adapter_discard_rate_per_sec: Option<f64>,
     pub probes: Vec<NetworkProbe>,
     pub recommendations: Vec<String>,
     pub refreshed_at: i64,
@@ -111,6 +131,7 @@ struct WifiInfo {
 pub fn collect_network_diagnostics() -> NetworkDiagnostics {
     let adapter = collect_active_adapter();
     let wifi = collect_wifi_info();
+    let health = adapter.name.as_deref().and_then(measure_adapter_health);
     let mut probes = Vec::new();
 
     if let Some(gateway) = adapter.gateway.as_deref().and_then(sanitize_target) {
@@ -159,6 +180,9 @@ pub fn collect_network_diagnostics() -> NetworkDiagnostics {
         external_latency_ms: external_probe.and_then(|probe| probe.avg_ms),
         jitter_ms,
         packet_loss_percent,
+        adapter_throughput_kbps: health.as_ref().map(|health| health.throughput_kbps),
+        adapter_error_rate_per_sec: health.as_ref().map(|health| health.error_rate_per_sec),
+        adapter_discard_rate_per_sec: health.as_ref().map(|health| health.discard_rate_per_sec),
         probes,
         recommendations: Vec::new(),
         refreshed_at: chrono::Utc::now().timestamp(),
@@ -253,6 +277,60 @@ $result | ConvertTo-Json -Compress"#,
             })
             .unwrap_or_default(),
     }
+}
+
+struct AdapterHealthSample {
+    throughput_kbps: f64,
+    error_rate_per_sec: f64,
+    discard_rate_per_sec: f64,
+}
+
+/// Two Get-NetAdapterStatistics samples half a second apart - same
+/// call+wait+call pattern as optimizations::network_admin's
+/// measure_adapter_traffic_kbps, just extended to also diff the
+/// error/discard counters instead of only bytes, so a single PowerShell
+/// round trip covers both throughput and health. New*/500ms rather than the
+/// adapter's lifetime totals: a NIC can carry a handful of errors from
+/// months ago that say nothing about right now, so only errors that show up
+/// *during this live sample* count.
+fn measure_adapter_health(adapter_name: &str) -> Option<AdapterHealthSample> {
+    let script = format!(
+        r#"$a1 = Get-NetAdapterStatistics -Name '{name}' -ErrorAction SilentlyContinue;
+if (-not $a1) {{ exit 1 }}
+$bytes1 = $a1.ReceivedBytes + $a1.SentBytes
+$errors1 = $a1.ReceivedPacketErrors + $a1.OutboundPacketErrors
+$discards1 = $a1.ReceivedDiscardedPackets + $a1.OutboundDiscardedPackets
+Start-Sleep -Milliseconds 500
+$a2 = Get-NetAdapterStatistics -Name '{name}' -ErrorAction SilentlyContinue;
+if (-not $a2) {{ exit 1 }}
+$bytes2 = $a2.ReceivedBytes + $a2.SentBytes
+$errors2 = $a2.ReceivedPacketErrors + $a2.OutboundPacketErrors
+$discards2 = $a2.ReceivedDiscardedPackets + $a2.OutboundDiscardedPackets
+[pscustomobject]@{{
+    ThroughputBytes = [Math]::Max(0, $bytes2 - $bytes1)
+    NewErrors = [Math]::Max(0, $errors2 - $errors1)
+    NewDiscards = [Math]::Max(0, $discards2 - $discards1)
+}} | ConvertTo-Json -Compress"#,
+        name = escape_powershell_literal(adapter_name)
+    );
+    let value = powershell_json(&script)?;
+    let throughput_bytes = value.get("ThroughputBytes").and_then(Value::as_f64)?;
+    let new_errors = value.get("NewErrors").and_then(Value::as_f64).unwrap_or(0.0);
+    let new_discards = value.get("NewDiscards").and_then(Value::as_f64).unwrap_or(0.0);
+
+    Some(AdapterHealthSample {
+        throughput_kbps: (throughput_bytes * 8.0 / 1000.0) / 0.5,
+        error_rate_per_sec: new_errors / 0.5,
+        discard_rate_per_sec: new_discards / 0.5,
+    })
+}
+
+/// Mirrors optimizations::network_admin::escape_powershell_literal - kept as
+/// a local copy rather than a cross-module dependency since telemetry
+/// (read-only observation) and optimizations (privileged actions) are
+/// deliberately kept separate in this codebase.
+fn escape_powershell_literal(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 pub fn list_network_adapters() -> Vec<NetworkAdapterSummary> {
@@ -445,11 +523,39 @@ fn network_recommendations(diagnostics: &NetworkDiagnostics) -> Vec<String> {
     if adapter_text.contains("vpn") || adapter_text.contains("virtual") {
         recommendations.push("vpn_or_virtual_adapter_active".to_string());
     }
+    if diagnostics
+        .adapter_error_rate_per_sec
+        .is_some_and(|rate| rate > 0.0)
+    {
+        recommendations.push("network_adapter_errors_detected".to_string());
+    }
+    if possible_external_congestion(diagnostics) {
+        recommendations.push("possible_external_network_congestion".to_string());
+    }
     if recommendations.is_empty() {
         recommendations.push("network_stable".to_string());
     }
 
     recommendations
+}
+
+/// This host has no visibility into what other devices on the LAN are
+/// doing (no router/ARP/UPnP integration - see measure_adapter_health's
+/// doc comment) and can't distinguish "another device is saturating the
+/// link" from "the ISP's own route is degraded" - both look the same from
+/// here. This is only a proxy: jitter/loss is already elevated (the same
+/// thresholds as jitter_high/packet_loss_detected above) while this PC's
+/// *own* measured throughput is close to idle, meaning whatever is causing
+/// the degradation almost certainly isn't this machine's own traffic.
+const LOW_OWN_THROUGHPUT_KBPS_THRESHOLD: f64 = 50.0;
+
+fn possible_external_congestion(diagnostics: &NetworkDiagnostics) -> bool {
+    let degraded = diagnostics.packet_loss_percent.unwrap_or_default() >= 2.0
+        || diagnostics.jitter_ms.unwrap_or_default() >= 20.0;
+    degraded
+        && diagnostics
+            .adapter_throughput_kbps
+            .is_some_and(|kbps| kbps < LOW_OWN_THROUGHPUT_KBPS_THRESHOLD)
 }
 
 fn powershell_json(script: &str) -> Option<Value> {
@@ -815,7 +921,9 @@ fn build_dns_query(id: u16, qname: &str) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ping_latencies, parse_traceroute_line};
+    use super::{
+        network_recommendations, parse_ping_latencies, parse_traceroute_line, NetworkDiagnostics,
+    };
 
     #[test]
     fn parses_traceroute_hop_with_three_replies() {
@@ -864,5 +972,47 @@ mod tests {
         );
 
         assert_eq!(values, vec![13.0, 15.0]);
+    }
+
+    fn stable_diagnostics() -> NetworkDiagnostics {
+        NetworkDiagnostics {
+            connected: true,
+            external_latency_ms: Some(20.0),
+            ..NetworkDiagnostics::default()
+        }
+    }
+
+    #[test]
+    fn flags_adapter_errors_only_when_a_live_error_rate_was_measured() {
+        let mut diagnostics = stable_diagnostics();
+        assert!(!network_recommendations(&diagnostics)
+            .contains(&"network_adapter_errors_detected".to_string()));
+
+        diagnostics.adapter_error_rate_per_sec = Some(0.0);
+        assert!(!network_recommendations(&diagnostics)
+            .contains(&"network_adapter_errors_detected".to_string()));
+
+        diagnostics.adapter_error_rate_per_sec = Some(2.0);
+        assert!(network_recommendations(&diagnostics)
+            .contains(&"network_adapter_errors_detected".to_string()));
+    }
+
+    #[test]
+    fn flags_external_congestion_only_when_degraded_and_this_host_is_idle() {
+        let mut diagnostics = stable_diagnostics();
+        diagnostics.jitter_ms = Some(35.0);
+        diagnostics.adapter_throughput_kbps = Some(20_000.0); // this PC is busy itself
+        assert!(!network_recommendations(&diagnostics)
+            .contains(&"possible_external_network_congestion".to_string()));
+
+        diagnostics.adapter_throughput_kbps = Some(5.0); // this PC is basically idle
+        assert!(network_recommendations(&diagnostics)
+            .contains(&"possible_external_network_congestion".to_string()));
+
+        // Idle but network quality is fine - no false positive.
+        let mut healthy_idle = stable_diagnostics();
+        healthy_idle.adapter_throughput_kbps = Some(5.0);
+        assert!(!network_recommendations(&healthy_idle)
+            .contains(&"possible_external_network_congestion".to_string()));
     }
 }
