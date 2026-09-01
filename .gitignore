@@ -35,3 +35,9 @@ src-tauri/target
 *.njsproj
 *.sln
 *.sw?
+
+# Chave privada que assina as atualizacoes. Um `~` que nao expandiu deixou uma
+# copia dentro do repo (`~/.tauri/`); ela nunca entrou no historico e nao pode
+# entrar - quem tiver essa chave assina um update que todo mundo instala.
+~/
+*.tauri/*.key
