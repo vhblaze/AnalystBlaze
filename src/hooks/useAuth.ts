@@ -57,6 +57,12 @@ export type User = {
   plan: string;
   hasPaidPlan: boolean;
   sessionId: string;
+  /** `false` só quando o servidor afirma que não está verificado. Ausente/null
+   * (backend antigo, status ainda não sincronizado) conta como verificado, pra
+   * nunca avisar falsamente que a conta vai ser desativada. */
+  emailVerified: boolean;
+  /** Dias até a conta ser desativada por falta de verificação. */
+  emailVerificationDaysRemaining: number | null;
 };
 export type AgentMessage = { key: string; params?: Record<string, string | number | boolean> };
 
@@ -908,6 +914,8 @@ export function useAuth() {
       plan: status.plan || "starter",
       hasPaidPlan: status.has_paid_plan,
       sessionId: status.hw_id ?? "desktop-session",
+      emailVerified: status.email_verified !== false,
+      emailVerificationDaysRemaining: status.email_verification_days_remaining ?? null,
     };
   }, [status]);
 

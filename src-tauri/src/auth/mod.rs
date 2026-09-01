@@ -34,6 +34,12 @@ pub struct StoredCredentials {
     /// `None` means it has never been actively confirmed since pairing -
     /// see sync_account_plan in lib.rs.
     pub plan_synced_at: Option<i64>,
+    /// Verificação de e-mail, persistida para o aviso continuar aparecendo
+    /// mesmo antes do primeiro sync da sessão.
+    #[serde(default)]
+    pub email_verified: Option<bool>,
+    #[serde(default)]
+    pub email_verification_days_remaining: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -55,6 +61,11 @@ pub struct AuthProfile {
     pub user_email: Option<String>,
     pub plan: Option<String>,
     pub has_paid_plan: Option<bool>,
+    /// Verificação de e-mail. `None` = o servidor não informou (build antiga
+    /// do backend) — a UI trata como verificado nesse caso, para nunca
+    /// acusar falsamente que a conta será desativada.
+    pub email_verified: Option<bool>,
+    pub email_verification_days_remaining: Option<i64>,
 }
 
 impl AuthProfile {
@@ -70,6 +81,10 @@ impl AuthProfile {
             user_email: self.user_email.or(fallback.user_email),
             plan,
             has_paid_plan,
+            email_verified: self.email_verified.or(fallback.email_verified),
+            email_verification_days_remaining: self
+                .email_verification_days_remaining
+                .or(fallback.email_verification_days_remaining),
         }
     }
 }
@@ -174,6 +189,8 @@ pub fn profile_from_credentials(credentials: &StoredCredentials) -> AuthProfile 
         user_email: credentials.user_email.as_deref().and_then(non_empty),
         plan,
         has_paid_plan,
+        email_verified: credentials.email_verified,
+        email_verification_days_remaining: credentials.email_verification_days_remaining,
     }
 }
 
@@ -342,12 +359,42 @@ fn profile_from_claims(params: &[(String, String)], claims: &Option<Value>) -> A
     .or_else(|| subscription_active(params, &text_sources, subscription_claims))
     .or_else(|| plan.as_ref().map(|plan| is_paid_plan(plan)));
 
+    let email_verified = first_bool_param(params, &["email_verified"])
+        .or_else(|| first_bool_claim_from_sources(&text_sources, &["email_verified"]));
+    let email_verification_days_remaining =
+        first_i64_param(params, &["email_verification_days_remaining"]).or_else(|| {
+            first_i64_claim_from_sources(&text_sources, &["email_verification_days_remaining"])
+        });
+
     AuthProfile {
         user_name,
         user_email,
         plan,
         has_paid_plan,
+        email_verified,
+        email_verification_days_remaining,
     }
+}
+
+fn first_i64_param(params: &[(String, String)], names: &[&str]) -> Option<i64> {
+    names
+        .iter()
+        .find_map(|name| find_param(params, name))
+        .and_then(|value| value.trim().parse::<i64>().ok())
+}
+
+fn first_i64_claim_from_sources(sources: &[Option<&JsonObject>], names: &[&str]) -> Option<i64> {
+    sources.iter().find_map(|object| {
+        object.and_then(|object| {
+            names.iter().find_map(|name| {
+                object.get(*name).and_then(|value| match value {
+                    Value::Number(number) => number.as_i64(),
+                    Value::String(text) => text.trim().parse::<i64>().ok(),
+                    _ => None,
+                })
+            })
+        })
+    })
 }
 
 fn first_object<'a>(object: Option<&'a JsonObject>, names: &[&str]) -> Option<&'a JsonObject> {

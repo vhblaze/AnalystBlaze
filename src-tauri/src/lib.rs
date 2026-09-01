@@ -99,6 +99,11 @@ struct AgentStatus {
     /// Set when the most recent background/manual sync attempt failed, so
     /// the UI can show "not synced" instead of silently implying freshness.
     plan_sync_error: Option<String>,
+    /// Verificação de e-mail. `None` = servidor não informou (backend antigo);
+    /// a UI trata como verificado para nunca acusar falsamente.
+    email_verified: Option<bool>,
+    /// Dias restantes até a conta ser desativada por falta de verificação.
+    email_verification_days_remaining: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1243,6 +1248,14 @@ fn credentials_from_registration(
         // Not yet actively confirmed via refresh_account_profile_if_needed -
         // the background sync loop populates this on its first tick.
         plan_synced_at: None,
+        email_verified: tokens
+            .profile
+            .email_verified
+            .or(existing_profile.email_verified),
+        email_verification_days_remaining: tokens
+            .profile
+            .email_verification_days_remaining
+            .or(existing_profile.email_verification_days_remaining),
     }
 }
 
@@ -1342,6 +1355,8 @@ fn credentials_with_profile(
         user_email: merged.user_email,
         plan: merged.plan.or_else(|| Some("starter".to_string())),
         has_paid_plan: merged.has_paid_plan.or(Some(false)),
+        email_verified: merged.email_verified,
+        email_verification_days_remaining: merged.email_verification_days_remaining,
         ..credentials
     }
 }
@@ -1954,6 +1969,8 @@ fn status(state: &AgentState) -> Result<AgentStatus, String> {
         focus_session: optimizations::focus::active_focus_session(),
         plan_synced_at: credentials.plan_synced_at,
         plan_sync_error,
+        email_verified: account_profile.email_verified,
+        email_verification_days_remaining: account_profile.email_verification_days_remaining,
     })
 }
 

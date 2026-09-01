@@ -24,6 +24,12 @@ export type AgentStatus = {
   /** Set when the most recent sync attempt failed: "network" | "tls" |
    * "timeout" | "dns" | "unavailable" | "empty_profile" | "unknown". */
   plan_sync_error?: string | null;
+  /** Verificacao de e-mail. `null`/ausente = o servidor nao informou (backend
+   * antigo) - a UI trata como verificado, pra nunca acusar falsamente que a
+   * conta vai ser desativada. */
+  email_verified?: boolean | null;
+  /** Dias ate a conta ser desativada por falta de verificacao. */
+  email_verification_days_remaining?: number | null;
 };
 
 export type AgentTelemetrySample = {

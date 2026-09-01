@@ -477,6 +477,16 @@ export const translations = {
       reduceMotion: "Reduzir movimento",
       reduceMotionDesc: "Desativa animacões longas e transicoes visuais.",
     },
+    emailVerification: {
+      bellTitle: "Verifique seu e-mail",
+      bellDescription: "Sua conta sera desativada se o e-mail nao for verificado.",
+      bellDescriptionWithDays: "Faltam {{days}} dias para sua conta ser desativada.",
+      popupTitle: "Verifique seu e-mail",
+      popupBody: "Clique em verificar para receber um codigo de 6 digitos no seu e-mail. Sem isso, sua conta e desativada quando o prazo acabar.",
+      popupBodyWithDays: "Clique em verificar para receber um codigo de 6 digitos no seu e-mail. Faltam {{days}} dias antes da conta ser desativada.",
+      verifyAction: "Verificar e-mail",
+      laterAction: "Agora nao",
+    },
     update: {
       eyebrow: "atualizacoes",
       title: "Atualizacoes",
@@ -1007,6 +1017,16 @@ export const translations = {
       highContrastDesc: "Increases visual contrast and reduces decorative effects.",
       reduceMotion: "Reduce motion",
       reduceMotionDesc: "Disables long animations and visual transitions.",
+    },
+    emailVerification: {
+      bellTitle: "Verify your email",
+      bellDescription: "Your account will be deactivated if the email is not verified.",
+      bellDescriptionWithDays: "{{days}} days left before your account is deactivated.",
+      popupTitle: "Verify your email",
+      popupBody: "Click verify to get a 6-digit code by email. Without it, your account is deactivated once the deadline passes.",
+      popupBodyWithDays: "Click verify to get a 6-digit code by email. {{days}} days left before the account is deactivated.",
+      verifyAction: "Verify email",
+      laterAction: "Not now",
     },
     update: {
       eyebrow: "updates",

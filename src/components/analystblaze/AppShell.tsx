@@ -38,6 +38,9 @@ export function AppShell() {
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [remoteConfirmationQueue, setRemoteConfirmationQueue] = useState<RemoteCommandConfirmationRequest[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  // Fecha o popup so por esta sessao do app - o item no sininho continua, e o
+  // aviso volta na proxima abertura enquanto o e-mail nao for verificado.
+  const [emailNoticeDismissed, setEmailNoticeDismissed] = useState(false);
   const [dismissedAnnouncementIds, setDismissedAnnouncementIds] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem("analystblaze.dismissedAnnouncements") ?? "[]");
@@ -197,6 +200,18 @@ export function AppShell() {
         description: request.description,
         tone: "warning",
       }));
+      if (!auth.user?.emailVerified) {
+        const days = auth.user?.emailVerificationDaysRemaining ?? null;
+        items.unshift({
+          id: "email-verification",
+          title: t("emailVerification.bellTitle"),
+          description:
+            typeof days === "number"
+              ? t("emailVerification.bellDescriptionWithDays", { days })
+              : t("emailVerification.bellDescription"),
+          tone: typeof days === "number" && days <= 7 ? "danger" : "warning",
+        });
+      }
       const update = updater.status;
       if (update?.available && (update.mandatory || !isUpdateDismissedNow(update))) {
         items.unshift({
@@ -221,7 +236,7 @@ export function AppShell() {
         });
       return items;
     },
-    [remoteConfirmationQueue, updater.status, announcements, dismissedAnnouncementIds, t],
+    [remoteConfirmationQueue, updater.status, announcements, dismissedAnnouncementIds, auth.user, t],
   );
 
   const searchItems = useMemo<TopBarSearchItem[]>(
@@ -956,6 +971,16 @@ export function AppShell() {
           onConfirm={() => closeConfirmation(true)}
         />
       )}
+      {auth.user && !auth.user.emailVerified && !emailNoticeDismissed && (
+        <EmailVerificationNotice
+          daysRemaining={auth.user.emailVerificationDaysRemaining}
+          onVerify={() => {
+            setEmailNoticeDismissed(true);
+            void auth.openAccountSettings();
+          }}
+          onLater={() => setEmailNoticeDismissed(true)}
+        />
+      )}
       <UpdateNotice
         status={updater.status}
         busy={auth.busy}
@@ -993,6 +1018,70 @@ function RemoteConfirmationNotice({
       <p className="mt-1 max-w-3xl text-xs leading-relaxed text-amber-100/80">
         O dashboard pediu permissao para aplicar esta acao neste computador. A janela principal foi trazida para frente; confirme ou recuse no pop-up local.
       </p>
+    </div>
+  );
+}
+
+/**
+ * Aviso de e-mail nao verificado. A verificacao em si (pedir o codigo e
+ * digitar os 6 digitos) acontece no site: os endpoints sao publicos e a conta
+ * pode ate estar desativada, entao o navegador e o caminho que funciona nos
+ * dois casos - aqui o app so avisa e leva pra la.
+ *
+ * "Agora nao" fecha por esta sessao do app, nao dispensa o aviso: o item no
+ * sininho continua la, e o popup volta na proxima abertura enquanto o e-mail
+ * nao for verificado. Esconder isso de vez seria esconder a desativacao.
+ */
+function EmailVerificationNotice({
+  daysRemaining,
+  onVerify,
+  onLater,
+}: {
+  daysRemaining: number | null;
+  onVerify: () => void;
+  onLater: () => void;
+}) {
+  const { t } = useI18n();
+  const isUrgent = typeof daysRemaining === "number" && daysRemaining <= 7;
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("emailVerification.popupTitle")}
+        className={`w-full max-w-lg rounded-2xl border bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)] ${
+          isUrgent ? "border-rose-400/40" : "border-amber-400/30"
+        }`}
+      >
+        <div
+          className={`font-mono text-[10px] uppercase tracking-[0.25em] ${
+            isUrgent ? "text-rose-300" : "text-amber-300"
+          }`}
+        >
+          {t("emailVerification.bellTitle")}
+        </div>
+        <h2 className="mt-2 text-xl font-semibold text-slate-50">{t("emailVerification.popupTitle")}</h2>
+        <p className="mt-2 text-sm leading-relaxed text-slate-400">
+          {typeof daysRemaining === "number"
+            ? t("emailVerification.popupBodyWithDays", { days: daysRemaining })
+            : t("emailVerification.popupBody")}
+        </p>
+        <div className="mt-6 flex justify-end gap-2">
+          <button
+            onClick={onLater}
+            className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70"
+          >
+            {t("emailVerification.laterAction")}
+          </button>
+          <button
+            onClick={onVerify}
+            className="rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15"
+          >
+            {t("emailVerification.verifyAction")}
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
