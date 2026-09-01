@@ -52,6 +52,18 @@ fn state_path() -> std::path::PathBuf {
     app_data_dir().join("updater-state.json")
 }
 
+/// What happened to the update the user consented to install last session,
+/// discovered by comparing versions at this startup. In-memory only (not
+/// persisted) - it exists purely so the very first status the frontend reads
+/// after launch can carry an honest one-shot notice instead of the update
+/// dialog just silently reappearing with no explanation.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum InstallOutcome {
+    Succeeded { version: String },
+    DidNotApply { expected_version: String, running_version: String },
+}
+
 struct UpdaterRuntimeState {
     persisted: PersistedAgentUpdaterState,
     pending_update: Option<Update>,
@@ -60,6 +72,7 @@ struct UpdaterRuntimeState {
     installing: bool,
     last_checked_at: Option<i64>,
     last_error: Option<String>,
+    last_install_outcome: Option<InstallOutcome>,
 }
 
 pub struct AgentUpdaterState(Mutex<UpdaterRuntimeState>);
@@ -80,6 +93,7 @@ pub struct UpdateStatus {
     pub last_checked_at: Option<i64>,
     pub last_error: Option<String>,
     pub dismissed_until: Option<i64>,
+    pub last_install_outcome: Option<InstallOutcome>,
 }
 
 pub fn new_shared_updater_state() -> AgentUpdaterState {
@@ -91,21 +105,35 @@ pub fn new_shared_updater_state() -> AgentUpdaterState {
         installing: false,
         last_checked_at: None,
         last_error: None,
+        last_install_outcome: None,
     }))
 }
 
 /// Runs once at startup, before any check. Compares the version we expected to
 /// be running after the last user-consented install against what's actually
-/// running now, so a successful update (or a silent failure to apply one)
-/// shows up in the local audit trail without the user having to ask.
-pub fn reconcile_startup_outcome() {
-    let mut persisted = PersistedAgentUpdaterState::load();
-    let Some(pending_version) = persisted.pending_installed_version.take() else {
+/// running now, so a successful update (or a silent failure to apply one) is
+/// both logged AND surfaced to the user via `last_install_outcome` on the
+/// first status the frontend reads - previously this only wrote to the local
+/// audit trail, so a failed install just silently re-showed the same "update
+/// available" prompt next cycle with no explanation.
+///
+/// Goes through the same managed `AgentUpdaterState` every other updater
+/// function uses (rather than an independent disk load+save) so a later
+/// `runtime.persisted.save()` call elsewhere (e.g. `dismiss_update`) can't
+/// overwrite the disk file with a stale in-memory copy taken before this ran.
+pub async fn reconcile_startup_outcome(app: &AppHandle) {
+    let state = app.state::<AgentUpdaterState>();
+    let mut runtime = state.0.lock().await;
+
+    let Some(pending_version) = runtime.persisted.pending_installed_version.take() else {
         return;
     };
-    let previous_version = persisted.previous_version.take();
+    let previous_version = runtime.persisted.previous_version.take();
 
     if pending_version == APP_VERSION {
+        runtime.last_install_outcome = Some(InstallOutcome::Succeeded {
+            version: APP_VERSION.to_string(),
+        });
         let _ = audit::record_event(
             "info",
             "update.installed_successfully",
@@ -116,6 +144,10 @@ pub fn reconcile_startup_outcome() {
             }),
         );
     } else {
+        runtime.last_install_outcome = Some(InstallOutcome::DidNotApply {
+            expected_version: pending_version.clone(),
+            running_version: APP_VERSION.to_string(),
+        });
         let _ = audit::record_event(
             "warn",
             "update.install_did_not_apply",
@@ -129,7 +161,7 @@ pub fn reconcile_startup_outcome() {
         );
     }
 
-    persisted.save();
+    runtime.persisted.save();
 }
 
 fn build_manifest_endpoint(api_base_url: &str) -> Result<Url, String> {
@@ -225,6 +257,7 @@ async fn build_status(_app: &AppHandle, runtime: &UpdaterRuntimeState) -> Update
         last_checked_at: runtime.last_checked_at,
         last_error: runtime.last_error.clone(),
         dismissed_until,
+        last_install_outcome: runtime.last_install_outcome.clone(),
     }
 }
 
@@ -359,10 +392,16 @@ async fn download_in_background(app: AppHandle, update: Update) {
     emit_status_changed(&app, &status);
 }
 
+/// The one status read that consumes `last_install_outcome` - after this,
+/// later `get_status`/`update-status-changed` reads see `None`, so the
+/// startup notice surfaces exactly once (this is the call `useUpdater`'s
+/// initial mount effect makes) instead of nagging on every subsequent poll.
 pub async fn get_status(app: AppHandle) -> UpdateStatus {
     let state = app.state::<AgentUpdaterState>();
-    let runtime = state.0.lock().await;
-    build_status(&app, &runtime).await
+    let mut runtime = state.0.lock().await;
+    let status = build_status(&app, &runtime).await;
+    runtime.last_install_outcome = None;
+    status
 }
 
 /// User pressed "Atualizar agora": installs from the already-downloaded bytes

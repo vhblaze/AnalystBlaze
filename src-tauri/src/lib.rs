@@ -1700,7 +1700,10 @@ pub fn run() {
                 let _ = optimizations::autostart::set_autostart_enabled(policy.autostart_enabled);
             });
 
-            updater::reconcile_startup_outcome();
+            let reconcile_app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                updater::reconcile_startup_outcome(&reconcile_app_handle).await;
+            });
             updater::spawn_background_checks(app.handle().clone(), updater_api_base_url.clone());
 
             Ok(())

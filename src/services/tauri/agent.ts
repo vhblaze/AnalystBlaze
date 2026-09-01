@@ -269,6 +269,10 @@ export type AuditEvent = {
   details: unknown;
 };
 
+export type InstallOutcome =
+  | { kind: "succeeded"; version: string }
+  | { kind: "didNotApply"; expectedVersion: string; runningVersion: string };
+
 export type UpdateStatus = {
   currentVersion: string;
   checking: boolean;
@@ -283,6 +287,7 @@ export type UpdateStatus = {
   lastCheckedAt?: number | null;
   lastError?: string | null;
   dismissedUntil?: number | null;
+  lastInstallOutcome?: InstallOutcome | null;
 };
 
 export type OptimizationSnapshot = {

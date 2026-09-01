@@ -46,6 +46,9 @@ export function UpdateNotice({
         {status.lastError && (
           <p className="mt-2 text-xs font-medium text-rose-300">{status.lastError}</p>
         )}
+        {!status.installing && (
+          <p className="mt-2 text-xs text-slate-500">{t("update.elevationNotice")}</p>
+        )}
         <div className="mt-6 flex justify-end gap-2">
           {!mandatory && (
             <button
