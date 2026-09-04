@@ -1544,11 +1544,14 @@ fn set_telemetry_mode(mode: String, state: State<'_, AgentState>) -> Result<Agen
 }
 
 #[tauri::command]
-fn logout(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
+fn logout(app: AppHandle, state: State<'_, AgentState>) -> Result<AgentStatus, String> {
     state.store.clear()?;
     if let Ok(mut telemetry_state) = state.telemetry_state.try_write() {
         *telemetry_state = None;
     }
+    // A logged-out window has nothing useful to do minimized in the tray -
+    // surface it so the user sees the login prompt right away.
+    show_main_window(&app);
     status(&state)
 }
 
@@ -1681,22 +1684,31 @@ pub fn run() {
             }
 
             let state = app.state::<AgentState>();
-            if state
+            let is_authenticated = state
                 .store
                 .load()
                 .map(|credentials| credentials_complete(&credentials))
-                .unwrap_or(false)
-            {
+                .unwrap_or(false);
+            if is_authenticated {
                 let _ = ensure_agent_running(&state, app.handle());
             }
             spawn_plan_sync_loop(app.handle().clone());
             optimizations::performance_suite::spawn_delayed_startup_runner();
 
+            // The window starts hidden (see tauri.conf.json) regardless of how
+            // it was launched, so this is the single place that decides
+            // whether to reveal it: logged-out always wins (there's nothing
+            // useful to do minimized without an account), otherwise it
+            // follows the user's own "start minimized" preference.
+            let policy = optimizations::local_ai_policy::load_local_ai_policy();
+            if !is_authenticated || !policy.start_minimized {
+                show_main_window(app.handle());
+            }
+
             // Syncs the Run-key entry to match the saved preference (default
             // enabled for new installs) on every launch, so it self-heals if
             // the registry entry was ever removed some other way.
-            std::thread::spawn(|| {
-                let policy = optimizations::local_ai_policy::load_local_ai_policy();
+            std::thread::spawn(move || {
                 let _ = optimizations::autostart::set_autostart_enabled(policy.autostart_enabled);
             });
 
@@ -1864,7 +1876,7 @@ fn configure_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
-fn show_main_window(app: &AppHandle) {
+pub(crate) fn show_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
         let _ = window.unminimize();

@@ -309,6 +309,11 @@ export function Settings({
             description={t("settings.autostartDesc")}
             control={<Switch checked={aiPolicy.autostart_enabled} onCheckedChange={(autostart_enabled) => updateAiPolicy({ autostart_enabled })} />}
           />
+          <Row
+            label={t("settings.startMinimized")}
+            description={t("settings.startMinimizedDesc")}
+            control={<Switch checked={aiPolicy.start_minimized} onCheckedChange={(start_minimized) => updateAiPolicy({ start_minimized })} />}
+          />
         </div>
       </section>
 
@@ -830,6 +835,7 @@ const DEFAULT_LOCAL_AI_POLICY: LocalAiPolicy = {
   cleanup_system_min_age_minutes: 1440,
   adaptive_idle_eco_threshold_seconds: 600,
   autostart_enabled: true,
+  start_minimized: true,
 };
 
 function PolicyGroup({

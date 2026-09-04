@@ -1144,6 +1144,10 @@ impl TelemetryEngine {
             *state = None;
         }
         let _ = self.app_handle.emit(AGENT_SESSION_INVALIDATED_EVENT, ());
+        // The server just kicked this device out from under a possibly
+        // minimized/background window - surface it immediately rather than
+        // leaving the user unknowingly logged out.
+        crate::show_main_window(&self.app_handle);
         true
     }
 }

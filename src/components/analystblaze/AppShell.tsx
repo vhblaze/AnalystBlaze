@@ -1,6 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar, type TopBarNotification, type TopBarSearchItem } from "./TopBar";
+import { LoggedOutNotice } from "./LoggedOutNotice";
 import { UpdateNotice } from "./UpdateNotice";
 import { useAgentTelemetry } from "@/hooks/useAgentTelemetry";
 import { canUseAutomaticGameMode, useAuth } from "@/hooks/useAuth";
@@ -981,12 +982,22 @@ export function AppShell() {
           onLater={() => setEmailNoticeDismissed(true)}
         />
       )}
-      <UpdateNotice
-        status={updater.status}
+      <LoggedOutNotice
+        visible={auth.ready && !auth.status?.authenticated}
         busy={auth.busy}
-        onUpdateNow={handleUpdateNow}
-        onLater={handleUpdateLater}
+        onLogin={() => void auth.login()}
       />
+      {/* Suppressed while logged out - stacking it with LoggedOutNotice would
+          overlap two full-screen dialogs, and there's nothing to update to
+          right now anyway without a session. */}
+      {(!auth.ready || auth.status?.authenticated) && (
+        <UpdateNotice
+          status={updater.status}
+          busy={auth.busy}
+          onUpdateNow={handleUpdateNow}
+          onLater={handleUpdateLater}
+        />
+      )}
     </div>
   );
 }

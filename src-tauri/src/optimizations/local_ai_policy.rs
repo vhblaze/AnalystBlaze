@@ -65,6 +65,11 @@ pub struct LocalAiPolicy {
     /// every startup, so this field is the source of truth even if the
     /// registry entry was removed some other way.
     pub autostart_enabled: bool,
+    /// Whether the main window starts hidden in the tray instead of visible.
+    /// Overridden regardless of this setting whenever there's something the
+    /// user needs to see right away - logged out, or an update available
+    /// (see lib.rs::run's setup and updater::should_surface_update_window).
+    pub start_minimized: bool,
 }
 
 impl Default for LocalAiPolicy {
@@ -103,6 +108,7 @@ impl Default for LocalAiPolicy {
             cleanup_system_min_age_minutes: 24 * 60,
             adaptive_idle_eco_threshold_seconds: 10 * 60,
             autostart_enabled: true,
+            start_minimized: true,
         }
     }
 }
@@ -169,6 +175,7 @@ pub fn save_local_ai_policy(policy: LocalAiPolicy) -> Result<LocalAiPolicy, Stri
             "cleanup_system_min_age_minutes": policy.cleanup_system_min_age_minutes,
             "adaptive_idle_eco_threshold_seconds": policy.adaptive_idle_eco_threshold_seconds,
             "autostart_enabled": policy.autostart_enabled,
+            "start_minimized": policy.start_minimized,
         }),
     );
     Ok(policy)

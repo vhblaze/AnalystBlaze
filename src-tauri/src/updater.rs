@@ -263,6 +263,27 @@ async fn build_status(_app: &AppHandle, runtime: &UpdaterRuntimeState) -> Update
 
 fn emit_status_changed(app: &AppHandle, status: &UpdateStatus) {
     let _ = app.emit("update-status-changed", status.clone());
+    if should_surface_update_window(status) {
+        crate::show_main_window(app);
+    }
+}
+
+/// An update the user hasn't already dismissed (mandatory ones can't be
+/// dismissed at all) is important enough to interrupt "start minimized" and
+/// bring the window forward - matches UpdateNotice.tsx's own gating
+/// (`isUpdateDismissedNow`) so the window only pops up when that popup would
+/// actually have something new to show.
+fn should_surface_update_window(status: &UpdateStatus) -> bool {
+    if !status.available {
+        return false;
+    }
+    if status.mandatory {
+        return true;
+    }
+    match status.dismissed_until {
+        Some(until) => now_ts() >= until,
+        None => true,
+    }
 }
 
 /// Checks the manifest endpoint and, if a newer build is available, kicks off
@@ -522,6 +543,61 @@ pub fn spawn_background_checks(app: AppHandle, api_base_url: String) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn status_stub(available: bool, mandatory: bool, dismissed_until: Option<i64>) -> UpdateStatus {
+        UpdateStatus {
+            current_version: "1.0.0".to_string(),
+            checking: false,
+            installing: false,
+            available,
+            version: available.then(|| "1.1.0".to_string()),
+            notes: None,
+            pub_date: None,
+            minimum_version: None,
+            mandatory,
+            downloaded: false,
+            last_checked_at: None,
+            last_error: None,
+            dismissed_until,
+            last_install_outcome: None,
+        }
+    }
+
+    #[test]
+    fn does_not_surface_the_window_when_no_update_is_available() {
+        assert!(!should_surface_update_window(&status_stub(false, false, None)));
+    }
+
+    #[test]
+    fn surfaces_the_window_for_an_undismissed_optional_update() {
+        assert!(should_surface_update_window(&status_stub(true, false, None)));
+    }
+
+    #[test]
+    fn stays_quiet_while_an_optional_update_is_still_within_its_dismiss_window() {
+        let far_future = now_ts() + DISMISS_COOLDOWN_SECONDS;
+        assert!(!should_surface_update_window(&status_stub(
+            true,
+            false,
+            Some(far_future)
+        )));
+    }
+
+    #[test]
+    fn surfaces_again_once_the_dismiss_window_has_elapsed() {
+        let past = now_ts() - 60;
+        assert!(should_surface_update_window(&status_stub(true, false, Some(past))));
+    }
+
+    #[test]
+    fn always_surfaces_a_mandatory_update_even_if_marked_dismissed() {
+        let far_future = now_ts() + DISMISS_COOLDOWN_SECONDS;
+        assert!(should_surface_update_window(&status_stub(
+            true,
+            true,
+            Some(far_future)
+        )));
+    }
 
     #[test]
     fn version_tuple_parses_plain_semver() {

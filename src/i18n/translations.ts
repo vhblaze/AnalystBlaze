@@ -346,6 +346,8 @@ export const translations = {
       languageDesc: "Idioma usado em toda a aplicacao.",
       autostart: "Iniciar com o Windows",
       autostartDesc: "Abre o AnalystBlaze automaticamente quando voce liga o computador.",
+      startMinimized: "Iniciar minimizado",
+      startMinimizedDesc: "Abre em segundo plano, so na bandeja do sistema, em vez de mostrar a janela na tela.",
       adaptive: "modo adaptativo - regras automaticas",
       adaptiveActive: "ativo",
       adaptiveDecision: "Permitir IA tomar decisoes",
@@ -511,6 +513,12 @@ export const translations = {
       installSucceededToastDesc: "O AnalystBlaze agora esta na versao {{version}}.",
       installFailedToastTitle: "A atualizacao nao foi concluida",
       installFailedToastDesc: "O AnalystBlaze continua na versao {{version}}. Se apareceu um pedido de permissao do Windows, tente novamente e aceite a janela.",
+    },
+    loggedOut: {
+      eyebrow: "sessao encerrada",
+      title: "Voce esta desconectado",
+      description: "Faca login novamente para o AnalystBlaze continuar monitorando e otimizando este computador.",
+      login: "Fazer login",
     },
     agent: {
       status: {
@@ -887,6 +895,8 @@ export const translations = {
       languageDesc: "Language used across the application.",
       autostart: "Start with Windows",
       autostartDesc: "Opens AnalystBlaze automatically when you turn on your computer.",
+      startMinimized: "Start minimized",
+      startMinimizedDesc: "Opens in the background, only in the system tray, instead of showing the window.",
       adaptive: "adaptive mode - automated rules",
       adaptiveActive: "active",
       adaptiveDecision: "Allow AI to make decisions",
@@ -1052,6 +1062,12 @@ export const translations = {
       installSucceededToastDesc: "AnalystBlaze is now on version {{version}}.",
       installFailedToastTitle: "Update didn't finish",
       installFailedToastDesc: "AnalystBlaze is still on version {{version}}. If a Windows permission prompt appeared, try again and accept it.",
+    },
+    loggedOut: {
+      eyebrow: "session ended",
+      title: "You're logged out",
+      description: "Log in again for AnalystBlaze to keep monitoring and optimizing this computer.",
+      login: "Log in",
     },
     agent: {
       status: {
