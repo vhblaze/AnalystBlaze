@@ -41,6 +41,12 @@ pub struct PerformanceReport {
     pub deltas: Vec<PerformanceDelta>,
     pub actions: Vec<PerformanceActionSummary>,
     pub bottlenecks: Vec<PerformanceBottleneck>,
+    /// Full per-app startup impact list, including `last_seen_days_ago` from
+    /// optimizations::app_usage - unlike `metrics.startup_apps` (just a
+    /// count), this is what lets the backend eventually learn "this specific
+    /// app hasn't been used in N days" instead of only an aggregate number.
+    #[serde(default)]
+    pub startup_apps: Vec<StartupImpact>,
     pub restore_session: Option<RestoreSessionSummary>,
     pub source: String,
     pub metrics_version: String,
@@ -666,6 +672,7 @@ pub fn performance_summary_payload(report: &PerformanceReport) -> Value {
         "deltas": report.deltas,
         "actions": report.actions.iter().take(12).collect::<Vec<_>>(),
         "bottlenecks": report.bottlenecks.iter().take(8).collect::<Vec<_>>(),
+        "startupApps": report.startup_apps.iter().take(30).collect::<Vec<_>>(),
         "restoreSession": report.restore_session,
         "source": report.source,
         "metricsVersion": report.metrics_version,
@@ -759,6 +766,7 @@ fn run_performance_scan_blocking(
         deltas,
         actions: Vec::new(),
         bottlenecks: score.bottlenecks,
+        startup_apps: startup_impact,
         restore_session: None,
         source: "local_performance_scan".to_string(),
         metrics_version: "performance-suite-v1".to_string(),

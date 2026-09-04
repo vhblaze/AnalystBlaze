@@ -498,6 +498,7 @@ export type PerformanceReport = {
     metric?: string | null;
     recommendedAction?: string | null;
   }>;
+  startupApps: StartupImpact[];
   restoreSession?: {
     id: string;
     snapshotIds: string[];
@@ -599,6 +600,7 @@ export type StartupImpact = {
   risk: string;
   recommendation: string;
   availableActions: string[];
+  lastSeenDaysAgo?: number | null;
 };
 
 export type PcCleanFastOptions = {
