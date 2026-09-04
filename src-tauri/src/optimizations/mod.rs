@@ -1,4 +1,5 @@
 pub mod adaptive;
+pub mod app_usage;
 pub mod autostart;
 pub mod cleanup;
 pub mod detection;

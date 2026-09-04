@@ -324,6 +324,13 @@ impl TelemetryEngine {
                     if *self.mode_rx.borrow() == TelemetryMode::Normal {
                         let sample = self.latest_or_collect().await;
                         self.batch.push(sample.into_decision("normal_observation"));
+                        // Piggybacks on the 60s normal cadence rather than the 2s
+                        // dashboard one - a registry scan + process enumeration on
+                        // every dashboard tick would be wasteful, and usage-recency
+                        // doesn't need second-level resolution.
+                        let _ = tokio::task::spawn_blocking(
+                            optimizations::app_usage::record_startup_app_sightings_blocking,
+                        );
                     }
                 }
                 _ = batch_flush_tick.tick() => {

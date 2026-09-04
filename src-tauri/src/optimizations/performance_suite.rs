@@ -10,7 +10,7 @@ use sysinfo::System;
 use uuid::Uuid;
 
 use super::{
-    cleanup, detection,
+    app_usage, cleanup, detection,
     local_ai_policy::{self, LocalAiPolicy},
     processes,
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
@@ -148,6 +148,11 @@ pub struct StartupImpact {
     pub risk: String,
     pub recommendation: String,
     pub available_actions: Vec<String>,
+    /// Days since this app was last observed actually running, from the
+    /// local usage store (see optimizations::app_usage). None means either
+    /// never observed since tracking started, or usage tracking hasn't run
+    /// yet on this install - not the same as "unused".
+    pub last_seen_days_ago: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1479,7 +1484,7 @@ fn startup_impact_from_app(app: windows_inventory::StartupApp) -> StartupImpact 
     if app.risk != "safe" {
         score = score.min(38.0);
     }
-    let recommendation = if app.risk != "safe" {
+    let base_recommendation = if app.risk != "safe" {
         "keep"
     } else if score >= 40.0 {
         "delay"
@@ -1488,6 +1493,8 @@ fn startup_impact_from_app(app: windows_inventory::StartupApp) -> StartupImpact 
     } else {
         "keep"
     };
+    let (recommendation, last_seen_days_ago) =
+        app_usage::last_used_recommendation(&app.command, &app.name, &app.risk, base_recommendation);
     let mut available_actions = vec!["keep".to_string()];
     if app.risk == "safe" {
         available_actions.push("delay".to_string());
@@ -1501,8 +1508,9 @@ fn startup_impact_from_app(app: windows_inventory::StartupApp) -> StartupImpact 
         command_preview: app.command.chars().take(220).collect(),
         impact_score: round1(clamp_score(score)),
         risk: app.risk,
-        recommendation: recommendation.to_string(),
+        recommendation,
         available_actions,
+        last_seen_days_ago,
     }
 }
 
