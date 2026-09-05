@@ -723,6 +723,16 @@ export async function getAgentStatus() {
   return invoke<AgentStatus>("agent_status");
 }
 
+/** Tells the Rust side which locale the UI is currently in, so it can send
+ * Accept-Language on requests that can surface a server error straight to
+ * the user (e.g. hardware registration during login) - see
+ * set_agent_locale in lib.rs. Best-effort: nothing user-visible depends on
+ * this succeeding immediately. */
+export async function setAgentLocale(locale: string) {
+  if (!isTauriRuntime()) return;
+  await invoke("set_agent_locale", { locale });
+}
+
 /** Explicitly asks the backend to re-confirm the plan against the server
  * right now (bounded by a 15s network timeout) - used by the "Sincronizar
  * plano" button. Passive freshness otherwise comes from a background loop;

@@ -519,6 +519,7 @@ export const translations = {
       title: "Voce esta desconectado",
       description: "Faca login novamente para o AnalystBlaze continuar monitorando e otimizando este computador.",
       login: "Fazer login",
+      manageDevices: "Gerenciar dispositivos",
     },
     agent: {
       status: {
@@ -1068,6 +1069,7 @@ export const translations = {
       title: "You're logged out",
       description: "Log in again for AnalystBlaze to keep monitoring and optimizing this computer.",
       login: "Log in",
+      manageDevices: "Manage devices",
     },
     agent: {
       status: {

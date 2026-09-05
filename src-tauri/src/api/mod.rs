@@ -239,15 +239,18 @@ impl ApiClient {
         &self,
         access_token: &str,
         profile: &HardwareProfile,
+        accept_language: Option<&str>,
     ) -> Result<HardwareRegistration, String> {
-        let response = self
+        let mut request = self
             .http
             .post(self.url("/api/v1/hardware/register"))
             .bearer_auth(access_token)
-            .json(profile)
-            .send()
-            .await
-            .map_err(|error| error.to_string())?;
+            .json(profile);
+        if let Some(language) = accept_language.filter(|value| !value.trim().is_empty()) {
+            request = request.header("Accept-Language", language);
+        }
+
+        let response = request.send().await.map_err(|error| error.to_string())?;
 
         ok_json::<HardwareRegistration>(response).await
     }

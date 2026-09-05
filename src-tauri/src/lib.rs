@@ -74,6 +74,14 @@ struct AgentState {
     /// so a manual restore can signal it to stop immediately instead of
     /// waiting for its own ~60s self-check. See spawn_game_mode_usage_checkpoint_loop.
     game_mode_usage_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    /// The frontend's currently selected UI locale (e.g. "pt-BR"), pushed
+    /// down via set_agent_locale on mount and on every locale change - sent
+    /// as Accept-Language on requests that can surface a server error
+    /// straight to the user (see register_hardware's caller), so that text
+    /// comes back in the language the person is actually reading the app
+    /// in instead of whatever the server's own default is. Defaults to
+    /// pt-BR (this app's default locale) until the frontend's first call.
+    locale: Mutex<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1119,6 +1127,16 @@ async fn set_power_plan_power_saver() -> Result<optimizations::ExecutionResult, 
 }
 
 #[tauri::command]
+fn set_agent_locale(locale: String, state: State<'_, AgentState>) -> Result<(), String> {
+    let mut guard = state
+        .locale
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?;
+    *guard = locale;
+    Ok(())
+}
+
+#[tauri::command]
 async fn agent_status(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
     // Deliberately does NOT block on a network call: on some Windows 10
     // machines a TLS/cert-store hiccup can make that request hang, which
@@ -1185,9 +1203,14 @@ async fn complete_auth_tokens(
         let collector = TelemetryCollector::new();
         collector.hardware_profile(state.config.telemetry_include_hostname)
     };
+    let locale = state
+        .locale
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| "pt-BR".to_string());
     let registration = state
         .api
-        .register_hardware(&tokens.access_token, &profile)
+        .register_hardware(&tokens.access_token, &profile, Some(&locale))
         .await?;
     let api_profile = state
         .api
@@ -1652,6 +1675,7 @@ pub fn run() {
         weekly_ai_usage: Mutex::new(None),
         announcements: Mutex::new(Vec::new()),
         game_mode_usage_cancel: Mutex::new(None),
+        locale: Mutex::new("pt-BR".to_string()),
     };
 
     let updater_api_base_url = state.config.api_base_url.clone();
@@ -1728,6 +1752,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             agent_status,
+            set_agent_locale,
             sync_account_plan,
             open_login,
             open_account_settings,

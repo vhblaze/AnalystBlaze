@@ -5,11 +5,15 @@ export function LoggedOutNotice({
   busy,
   onLogin,
   errorMessage,
+  showManageDevices,
+  onManageDevices,
 }: {
   visible: boolean;
   busy: boolean;
   onLogin: () => void;
   errorMessage?: string | null;
+  showManageDevices?: boolean;
+  onManageDevices?: () => void;
 }) {
   const { t } = useI18n();
   if (!visible) return null;
@@ -33,6 +37,15 @@ export function LoggedOutNotice({
           </p>
         )}
         <div className="mt-6 flex justify-end gap-2">
+          {showManageDevices && onManageDevices && (
+            <button
+              disabled={busy}
+              onClick={onManageDevices}
+              className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70 disabled:opacity-40"
+            >
+              {t("loggedOut.manageDevices")}
+            </button>
+          )}
           <button
             disabled={busy}
             onClick={onLogin}

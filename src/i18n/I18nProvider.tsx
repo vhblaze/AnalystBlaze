@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, type Locale, translations } from "./translations";
+import { setAgentLocale } from "@/services/tauri/agent";
 
 type Params = Record<string, string | number | boolean | null | undefined>;
 
@@ -47,6 +48,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
     } catch {
       // Non-critical preference persistence.
     }
+    void setAgentLocale(locale).catch(() => undefined);
   }, [locale]);
 
   const setLocale = useCallback((nextLocale: Locale) => {

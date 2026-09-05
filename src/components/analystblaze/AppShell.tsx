@@ -72,6 +72,19 @@ export function AppShell() {
     void updater.dismiss();
   }, [updater]);
 
+  // The backend prefixes a handful of auth/hardware errors with a stable,
+  // language-independent code (e.g. "DEVICE_LIMIT_REACHED::<translated
+  // message>") specifically so this can strip it for display and react to
+  // it (offer a way to fix it) without pattern-matching on prose that
+  // changes per locale. Errors without a known prefix pass through as-is.
+  const loggedOutError = useMemo(() => {
+    if (auth.message.key !== "agent.messages.error") return null;
+    const raw = t(auth.message.key, auth.message.params);
+    const match = raw.match(/(HARDWARE_INACTIVE|DEVICE_LIMIT_REACHED|HARDWARE_ALREADY_LINKED)::(.+)$/);
+    if (!match) return { code: null as string | null, message: raw };
+    return { code: match[1], message: match[2].trim() };
+  }, [auth.message, t]);
+
   const titles = useMemo<Record<ViewKey, string>>(
     () => ({
       dashboard: t("nav.dashboard"),
@@ -986,9 +999,9 @@ export function AppShell() {
         visible={auth.ready && !auth.status?.authenticated}
         busy={auth.busy}
         onLogin={() => void auth.login()}
-        errorMessage={
-          auth.message.key === "agent.messages.error" ? t(auth.message.key, auth.message.params) : null
-        }
+        errorMessage={loggedOutError?.message ?? null}
+        showManageDevices={loggedOutError?.code === "DEVICE_LIMIT_REACHED"}
+        onManageDevices={() => void auth.openAccountSettings()}
       />
       {/* Suppressed while logged out - stacking it with LoggedOutNotice would
           overlap two full-screen dialogs, and there's nothing to update to
