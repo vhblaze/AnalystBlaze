@@ -226,7 +226,13 @@ impl TelemetryCollector {
         self.system.refresh_cpu_usage();
         self.system.refresh_memory();
         self.components.refresh(false);
-        if self.collection_count == 1 || self.collection_count.is_multiple_of(5) {
+        // Full process/disk enumeration is heavier than the per-tick refreshes
+        // above - safe to sit on the cached list while a Focus/Game session is
+        // already active (a game already detected doesn't need this to keep
+        // re-confirming itself every ~10s), but never skip the very first
+        // tick, which is what actually populates process_names at all.
+        let due = self.collection_count == 1 || self.collection_count.is_multiple_of(5);
+        if due && (self.collection_count == 1 || !crate::optimizations::focus::should_pause_heavy_scans()) {
             self.system.refresh_processes(ProcessesToUpdate::All, true);
             self.disks.refresh(false);
         }
@@ -798,7 +804,9 @@ impl TelemetryCollector {
 
     fn advanced_telemetry(&mut self) -> AdvancedTelemetry {
         let now = chrono::Utc::now().timestamp();
-        if now.saturating_sub(self.advanced_refreshed_at) >= 300 {
+        if now.saturating_sub(self.advanced_refreshed_at) >= 300
+            && !crate::optimizations::focus::should_pause_heavy_scans()
+        {
             let gpu_name = self.primary_gpu().name;
             self.advanced_cache = collect_advanced_telemetry(Some(&gpu_name));
             self.advanced_refreshed_at = now;
@@ -819,8 +827,15 @@ impl TelemetryCollector {
     // telemetry tick.
     async fn network_diagnostics(&mut self) -> NetworkDiagnostics {
         let now = chrono::Utc::now().timestamp();
+        // A forced refresh (the user just changed a network setting) always
+        // wins even mid-game - the user is actively waiting on that result.
+        // The routine 30s poll does not: it spawns real ping.exe/powershell.exe
+        // child processes (see the module doc above on why those aren't
+        // isolated further), and a 100-400ms scheduler burst from that is
+        // exactly the kind of hitch a CPU-bound game has no headroom for.
         let forced = super::network::take_network_cache_invalidated();
-        if forced || now.saturating_sub(self.network_refreshed_at) >= 30 {
+        let due = now.saturating_sub(self.network_refreshed_at) >= 30;
+        if forced || (due && !crate::optimizations::focus::should_pause_heavy_scans()) {
             if let Ok(sample) =
                 tokio::task::spawn_blocking(collect_network_sample_with_adapter_health).await
             {
@@ -834,7 +849,9 @@ impl TelemetryCollector {
 
     async fn hardware_sensors(&mut self) -> Vec<HardwareSensorReading> {
         let now = chrono::Utc::now().timestamp();
-        if now.saturating_sub(self.hardware_sensor_refreshed_at) >= 30 {
+        if now.saturating_sub(self.hardware_sensor_refreshed_at) >= 30
+            && !crate::optimizations::focus::should_pause_heavy_scans()
+        {
             if let Ok(sensors) = tokio::task::spawn_blocking(external_hardware_sensors).await {
                 self.hardware_sensor_cache = sensors;
                 self.hardware_sensor_refreshed_at = now;
@@ -850,7 +867,8 @@ impl TelemetryCollector {
     fn network_diagnostics_sync(&mut self) -> NetworkDiagnostics {
         let now = chrono::Utc::now().timestamp();
         let forced = super::network::take_network_cache_invalidated();
-        if forced || now.saturating_sub(self.network_refreshed_at) >= 30 {
+        let due = now.saturating_sub(self.network_refreshed_at) >= 30;
+        if forced || (due && !crate::optimizations::focus::should_pause_heavy_scans()) {
             self.network_cache = collect_network_sample_with_adapter_health();
             self.network_refreshed_at = now;
         }
@@ -1509,7 +1527,17 @@ fn detect_local_context(
         .iter()
         .any(|name| detection::looks_like_game_process(name));
     let gpu_cpu_co_activation = gpu_usage >= 65.0 && cpu_usage >= 25.0 && idle_seconds < 120;
-    let gaming = known_game_process || gaming_process || gaming_window || gpu_cpu_co_activation;
+    // Catches CPU-bound titles the GPU-gated heuristic above misses entirely -
+    // a game that's bottlenecked on its CPU-side render-submission thread
+    // (common on DirectX 11, but not specific to it - any API, Vulkan/OpenGL/
+    // DX12 included, can be CPU-bound depending on the title) may never push
+    // GPU usage past 65%. Requiring *some* GPU activity (not just near-zero)
+    // alongside sustained heavy CPU is what distinguishes "playing a
+    // CPU-heavy game" from "compiling/encoding in the background", which
+    // typically barely touches the GPU at all.
+    let cpu_dominant_activation = cpu_usage >= 70.0 && gpu_usage >= 15.0 && idle_seconds < 120;
+    let gaming =
+        known_game_process || gaming_process || gaming_window || gpu_cpu_co_activation || cpu_dominant_activation;
     let (game_confidence, game_detection_reason) = if known_game_process {
         (0.85, "known_game_process_running")
     } else if gaming_process {
@@ -1518,6 +1546,8 @@ fn detect_local_context(
         (0.45, "active_window_heuristic_match")
     } else if gpu_cpu_co_activation {
         (0.30, "gpu_cpu_co_activation")
+    } else if cpu_dominant_activation {
+        (0.25, "cpu_dominant_activation")
     } else {
         (0.0, "no_game_signal")
     };
@@ -2182,6 +2212,40 @@ mod tests {
     fn throttle_distance_goes_negative_past_the_assumed_ceiling() {
         let (distance, _) = throttle_distance(Some(104.0));
         assert_eq!(distance, Some(-4.0));
+    }
+
+    fn signal<'a>(value: &'a Value, key: &str) -> &'a Value {
+        value.get("signals").unwrap().get(key).unwrap()
+    }
+
+    #[test]
+    fn detects_a_cpu_bound_game_even_without_heavy_gpu_usage() {
+        // e.g. a DirectX 11 title bottlenecked on the driver's CPU-side
+        // render-submission thread - never crosses the 65% GPU co-activation
+        // threshold, but is clearly not idle background CPU load either
+        // (some real GPU engagement, unlike a compile/encode job).
+        let context = detect_local_context(None, &[], 45.0, 75.0, 0);
+        assert_eq!(context.get("activity").unwrap(), "gaming");
+        assert_eq!(signal(&context, "game_detected"), true);
+        assert_eq!(signal(&context, "game_detection_reason"), "cpu_dominant_activation");
+    }
+
+    #[test]
+    fn does_not_flag_a_cpu_heavy_background_task_with_no_gpu_engagement_as_gaming() {
+        // A compile/encode job: CPU pegged, GPU essentially untouched - the
+        // cpu_dominant_activation path requires *some* GPU activity
+        // specifically to avoid misclassifying this as a game.
+        let context = detect_local_context(None, &[], 5.0, 90.0, 0);
+        assert_eq!(context.get("activity").unwrap(), "general");
+        assert_eq!(signal(&context, "game_detected"), false);
+        assert_eq!(signal(&context, "game_detection_reason"), "no_game_signal");
+    }
+
+    #[test]
+    fn gpu_bound_co_activation_path_still_works_unchanged() {
+        let context = detect_local_context(None, &[], 80.0, 30.0, 0);
+        assert_eq!(signal(&context, "game_detected"), true);
+        assert_eq!(signal(&context, "game_detection_reason"), "gpu_cpu_co_activation");
     }
 
     #[test]
