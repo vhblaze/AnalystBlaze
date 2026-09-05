@@ -194,6 +194,22 @@ export function useAuth() {
     };
   }, [handleDeepLink, refreshStatus]);
 
+  // `status` only ever updates in response to a specific event (deep-link
+  // pairing, the invalidated-session signal, plan sync, logout) - if the
+  // window was minimized when re-pairing actually completed, or the
+  // invalidated-session event was somehow missed, there is otherwise no way
+  // for a stale `authenticated: false` to self-correct even though the
+  // agent is already working again (status() is a cheap local credential
+  // read, never a network call, so polling it while logged out costs
+  // nothing and can't itself cause a false negative).
+  useEffect(() => {
+    if (!ready || status?.authenticated) return;
+    const timer = window.setInterval(() => {
+      void refreshStatus().catch(() => undefined);
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [ready, status?.authenticated, refreshStatus]);
+
   const runAction = useCallback(async <T,>(action: () => Promise<T>, options?: { rethrow?: boolean }): Promise<T | undefined> => {
     setBusy(true);
     try {

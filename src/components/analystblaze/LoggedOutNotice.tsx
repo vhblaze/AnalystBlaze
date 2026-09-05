@@ -4,10 +4,12 @@ export function LoggedOutNotice({
   visible,
   busy,
   onLogin,
+  errorMessage,
 }: {
   visible: boolean;
   busy: boolean;
   onLogin: () => void;
+  errorMessage?: string | null;
 }) {
   const { t } = useI18n();
   if (!visible) return null;
@@ -25,6 +27,11 @@ export function LoggedOutNotice({
         </div>
         <h2 className="mt-2 text-xl font-semibold text-slate-50">{t("loggedOut.title")}</h2>
         <p className="mt-2 text-sm leading-relaxed text-slate-400">{t("loggedOut.description")}</p>
+        {errorMessage && (
+          <p className="mt-2 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200">
+            {errorMessage}
+          </p>
+        )}
         <div className="mt-6 flex justify-end gap-2">
           <button
             disabled={busy}

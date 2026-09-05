@@ -986,6 +986,9 @@ export function AppShell() {
         visible={auth.ready && !auth.status?.authenticated}
         busy={auth.busy}
         onLogin={() => void auth.login()}
+        errorMessage={
+          auth.message.key === "agent.messages.error" ? t(auth.message.key, auth.message.params) : null
+        }
       />
       {/* Suppressed while logged out - stacking it with LoggedOutNotice would
           overlap two full-screen dialogs, and there's nothing to update to
