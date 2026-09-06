@@ -1864,24 +1864,27 @@ fn exe_path_is_trusted_service_source_with_roots(path: &Path, roots: &[PathBuf])
     path_is_under_any_root(path, roots)
 }
 
+/// Reads the service's registered binary path from the registry instead of
+/// parsing `sc.exe qc`'s console output - `sc.exe` localizes its field
+/// labels (confirmed in the field: a pt-BR Windows install prints
+/// `NOME_DO_CAMINHO_BINÁRIO` instead of `BINARY_PATH_NAME`), so matching the
+/// English label here silently failed on every non-English Windows install,
+/// permanently showing the helper as "running (attention)" - untrusted
+/// source - even with a perfectly correct per-machine install. Registry
+/// value NAMES are never localized (only `sc.exe`'s own text rendering is),
+/// so `ImagePath` under the service's own registry key is the same data
+/// with no locale risk.
 #[cfg(windows)]
 fn service_binary_path() -> Option<PathBuf> {
-    let output = Command::new("sc.exe")
-        .args(["qc", SERVICE_NAME])
-        .no_window()
-        .output()
+    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
+    use winreg::RegKey;
+
+    let services = RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey_with_flags(r"SYSTEM\CurrentControlSet\Services", KEY_READ)
         .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let stdout = decode_console_bytes(&output.stdout);
-    stdout.lines().find_map(|line| {
-        if !line.contains("BINARY_PATH_NAME") {
-            return None;
-        }
-        line.split_once(':')
-            .and_then(|(_, value)| extract_service_exe_path(value.trim()))
-    })
+    let service_key = services.open_subkey_with_flags(SERVICE_NAME, KEY_READ).ok()?;
+    let image_path: String = service_key.get_value("ImagePath").ok()?;
+    extract_service_exe_path(image_path.trim())
 }
 
 #[cfg(windows)]
