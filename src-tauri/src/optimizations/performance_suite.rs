@@ -433,6 +433,37 @@ pub async fn apply_pc_clean_fast_profile(options: PcCleanFastOptions) -> Executi
             "APPLY_CLEANUP_CATEGORY",
             &cleanup,
         );
+
+        // Routed through execute_command_checked (not called directly, unlike
+        // this function's other steps) because CLEAR_STANDBY_LIST needs the
+        // privileged helper - this call is what triggers the automatic
+        // client -> signed pipe -> elevated helper handoff
+        // (execute_command_checked_with_helper's "privileged_helper_unavailable"
+        // branch) instead of failing outright, since PC Limpo Fast itself
+        // always runs from the main, unprivileged app process. The fuller
+        // working-sets sweep (not just a standby purge) is deliberate here:
+        // this is a one-off manual "clean everything now" click, not the
+        // lighter automatic pass Modo Gamer takes mid-session, so there's no
+        // frame-time sensitivity to protect.
+        // Boxed: apply_pc_clean_fast_profile is itself reachable through
+        // execute_command_checked's own dispatch table
+        // (APPLY_PC_CLEAN_FAST_PROFILE), so calling execute_command_checked
+        // from here is a structural async-fn cycle even though it never
+        // actually recurses at runtime (different action name each time) -
+        // Box::pin gives the compiler the indirection it needs to size the
+        // resulting future.
+        let memory = Box::pin(super::execute_command_checked(
+            super::safety::CommandSource::ManualUser,
+            "CLEAR_STANDBY_LIST",
+            Some(json!({ "emptyWorkingSets": true })),
+            None,
+            true,
+        ))
+        .await;
+        // No /snapshot/id in this action's details (it's a one-way memory
+        // reclaim, nothing to restore), so append_action_result correctly
+        // records it as non-reversible without needing a special case here.
+        append_action_result(&mut actions, &mut snapshot_ids, "CLEAR_STANDBY_LIST", &memory);
     }
 
     if options.include_background {
