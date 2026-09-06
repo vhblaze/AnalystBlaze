@@ -235,6 +235,7 @@ export const translations = {
       bulkConfirmSummary: "{{folders}} pastas e {{files}} arquivos - {{size}} no total.",
       bulkPermanentWarning: "{{count}} destes itens sao grandes e serao apagados direto, sem passar pela quarentena. Nao da pra desfazer.",
       bulkDeleteSuccess: "{{count}} itens apagados.",
+      removeFromSelection: "Tirar da selecao",
     },
     network: {
       eyebrow: "conexao local",
@@ -785,6 +786,7 @@ export const translations = {
       bulkConfirmSummary: "{{folders}} folders and {{files}} files - {{size}} total.",
       bulkPermanentWarning: "{{count}} of these are large and will be deleted directly, skipping quarantine. This can't be undone.",
       bulkDeleteSuccess: "{{count}} items deleted.",
+      removeFromSelection: "Remove from selection",
     },
     network: {
       eyebrow: "local connection",

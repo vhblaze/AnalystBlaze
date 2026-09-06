@@ -232,13 +232,22 @@ fn summarize_entry(scanner: &Scanner, path: &Path) -> Option<DiskTreeNodeSummary
     let is_dir = metadata.is_dir() && !metadata.file_type().is_symlink();
     let modified_at = metadata_modified_at(&metadata);
     let name = path.file_name()?.to_string_lossy().to_string();
-    let protected = is_protected_app(&name);
+    let self_protected = is_protected_app(&name);
 
-    let size_bytes = if is_dir {
-        compute_dir_size(scanner, path)
+    // For a directory, `has_protected_descendant` folds in the SAME walk
+    // that already computes size - a folder whose own name is completely
+    // harmless can still recursively contain something that must never be
+    // deleted (a security tool's data directory nested a few levels down,
+    // say), and this is what surfaces that in the listing before the user
+    // ever tries to delete it. disk_usage.rs's validate_deletable_path runs
+    // the equivalent check again at actual delete time (the real
+    // enforcement point, not just this UI hint) via find_protected_descendant.
+    let (size_bytes, has_protected_descendant) = if is_dir {
+        scan_subtree(scanner, path)
     } else {
-        metadata.len()
+        (metadata.len(), false)
     };
+    let protected = self_protected || has_protected_descendant;
 
     Some(DiskTreeNodeSummary {
         path: path.display().to_string(),
@@ -251,15 +260,17 @@ fn summarize_entry(scanner: &Scanner, path: &Path) -> Option<DiskTreeNodeSummary
     })
 }
 
-/// Total size of `path`'s subtree, computed fresh (no persistent tree) -
-/// parallelized on the bounded scan_pool so a big folder still overlaps
-/// I/O wait across a few threads without competing for every core.
-fn compute_dir_size(scanner: &Scanner, path: &Path) -> u64 {
+/// Total size of `path`'s subtree AND whether it contains anything
+/// is_protected_app/is_system_critical_path would refuse to delete on its
+/// own - computed together in one walk (parallelized on the bounded
+/// scan_pool, same as before) rather than two separate passes over
+/// potentially the same few hundred thousand files.
+fn scan_subtree(scanner: &Scanner, path: &Path) -> (u64, bool) {
     if !scanner.should_continue(&path.display().to_string()) {
-        return 0;
+        return (0, false);
     }
     let Ok(entries) = fs::read_dir(path) else {
-        return 0;
+        return (0, false);
     };
     let children: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
 
@@ -268,21 +279,27 @@ fn compute_dir_size(scanner: &Scanner, path: &Path) -> u64 {
         .into_par_iter()
         .map(|child_path| {
             if scanner.canceled.load(Ordering::Relaxed) || scanner.capped.load(Ordering::Relaxed) {
-                return 0;
+                return (0, false);
             }
             let Ok(metadata) = fs::symlink_metadata(&child_path) else {
-                return 0;
+                return (0, false);
             };
             if metadata.file_type().is_symlink() {
-                return 0;
+                return (0, false);
             }
+            let name = child_path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let child_protected = is_protected_app(&name) || is_system_critical_path(&child_path);
             if metadata.is_dir() {
-                compute_dir_size(scanner, &child_path)
+                let (size, descendant_protected) = scan_subtree(scanner, &child_path);
+                (size, child_protected || descendant_protected)
             } else {
-                metadata.len()
+                (metadata.len(), child_protected)
             }
         })
-        .sum()
+        .reduce(|| (0, false), |a, b| (a.0 + b.0, a.1 || b.1))
 }
 
 fn metadata_modified_at(metadata: &fs::Metadata) -> Option<i64> {

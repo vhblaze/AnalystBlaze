@@ -107,7 +107,17 @@ async function detectDiskNearFull(
 function parentPath(path: string): string | null {
   const trimmed = path.replace(/[\\/]+$/, "");
   const lastSep = Math.max(trimmed.lastIndexOf("\\"), trimmed.lastIndexOf("/"));
-  if (lastSep <= 2) return null; // hit a bare drive root like "C:\"
+  // No separator left at all means `path` was already a bare root like "C:"
+  // - nothing above that to navigate to.
+  if (lastSep < 0) return null;
+  // The separator sits right after the drive letter (e.g. "C:\Users"): the
+  // parent IS the drive root itself, "C:\" - keep its trailing separator so
+  // this matches rootPath's own stored format (openPath("C:\") is what
+  // loadRoot uses to open a volume, and currentPath === rootPath is what
+  // disables the Up button once there). Previously this branch returned
+  // null instead, which silently broke "Up" for any top-level folder -
+  // C:\Users, C:\Windows, C:\Program Files - the most common ones to browse.
+  if (lastSep <= 2) return trimmed.slice(0, lastSep + 1);
   return trimmed.slice(0, lastSep);
 }
 
@@ -164,7 +174,14 @@ export function DiskExplorer({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
+  // Keyed by path, but the VALUE (not just membership) matters: once the
+  // user navigates elsewhere, that folder's `children` are gone from state,
+  // so this is the only place a selected item's name/size/isDir survive to
+  // be shown in the final confirmation list - deliberately not a Set<string>
+  // for that reason. Never cleared on navigation (see openPath) - marking
+  // something for deletion in one folder and then browsing elsewhere is
+  // exactly the flow this is for.
+  const [selectedPaths, setSelectedPaths] = useState<Map<string, DiskTreeNodeSummary>>(new Map());
   const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
   const [bulkDeleteBusy, setBulkDeleteBusy] = useState(false);
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
@@ -213,7 +230,6 @@ export function DiskExplorer({
     setBrowseBusy(true);
     setBrowseError(null);
     setBrowseProgress(null);
-    setSelectedPaths(new Set());
     try {
       const kids = await listDiskDirectory(path);
       setCurrentPath(path);
@@ -292,18 +308,30 @@ export function DiskExplorer({
     }
   };
 
-  const toggleSelected = (path: string) => {
+  const toggleSelected = (item: DiskTreeNodeSummary) => {
     setSelectedPaths((current) => {
-      const next = new Set(current);
-      if (next.has(path)) next.delete(path);
-      else next.add(path);
+      const next = new Map(current);
+      if (next.has(item.path)) next.delete(item.path);
+      else next.set(item.path, item);
+      return next;
+    });
+  };
+
+  const removeFromSelection = (path: string) => {
+    setSelectedPaths((current) => {
+      const next = new Map(current);
+      next.delete(path);
       return next;
     });
   };
 
   const deleteSelected = async () => {
     setConfirmingBulkDelete(false);
-    const items = sortedChildren.filter((item) => selectedPaths.has(item.path));
+    // From the persisted map, not sortedChildren - items marked in a folder
+    // the user has since navigated away from are no longer part of
+    // sortedChildren at all, and deleting only what's still visible in the
+    // CURRENT folder would silently drop the rest of the selection.
+    const items = Array.from(selectedPaths.values());
     if (items.length === 0) return;
     setBulkDeleteBusy(true);
     setActionMessage(null);
@@ -337,7 +365,7 @@ export function DiskExplorer({
     }
     setPendingDeletePath(null);
     setBulkProgress(null);
-    setSelectedPaths(new Set());
+    setSelectedPaths(new Map());
     setBulkDeleteBusy(false);
     track("disk_tree_bulk_deleted", { count: successCount, failed: failures.length });
     if (successCount > 0) {
@@ -356,13 +384,26 @@ export function DiskExplorer({
   const selectableChildren = sortedChildren.filter((item) => item.actionable && !deletingPaths.has(item.path));
   const allSelected = selectableChildren.length > 0 && selectableChildren.every((item) => selectedPaths.has(item.path));
   const toggleSelectAll = () => {
-    setSelectedPaths(allSelected ? new Set() : new Set(selectableChildren.map((item) => item.path)));
+    // Adds/removes only the CURRENT folder's items - selections made in
+    // other folders (no longer part of selectableChildren) must survive
+    // this, same as they survive plain navigation.
+    setSelectedPaths((current) => {
+      const next = new Map(current);
+      for (const item of selectableChildren) {
+        if (allSelected) next.delete(item.path);
+        else next.set(item.path, item);
+      }
+      return next;
+    });
   };
-  const selectedItems = sortedChildren.filter((item) => selectedPaths.has(item.path));
+  // From the persisted map (spans every folder visited this session), not
+  // sortedChildren (only the current folder) - see the state's own comment.
+  const selectedItems = Array.from(selectedPaths.values());
+  // Folder/file/permanent breakdown for the sticky bar's summary text moved
+  // into BulkDeleteConfirmDialog itself, computed from live `items` there -
+  // only selectedTotalBytes is still needed here, for the sticky bar shown
+  // while still browsing (before the confirm dialog opens at all).
   const selectedTotalBytes = selectedItems.reduce((sum, item) => sum + item.sizeBytes, 0);
-  const selectedFolderCount = selectedItems.filter((item) => item.isDir).length;
-  const selectedFileCount = selectedItems.length - selectedFolderCount;
-  const selectedPermanentCount = selectedItems.filter((item) => item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES).length;
 
   if (!runtimeAvailable) {
     return <Notice tone="info" message={t("diskExplorer.desktopOnly")} />;
@@ -545,7 +586,7 @@ export function DiskExplorer({
                   <div className="flex items-center gap-2">
                     <button
                       disabled={bulkDeleteBusy}
-                      onClick={() => setSelectedPaths(new Set())}
+                      onClick={() => setSelectedPaths(new Map())}
                       className="rounded-lg border border-white/15 bg-slate-950/40 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:text-white disabled:opacity-40"
                     >
                       {t("diskExplorer.clearSelection")}
@@ -584,7 +625,7 @@ export function DiskExplorer({
                       <input
                         type="checkbox"
                         checked={selectedPaths.has(item.path)}
-                        onChange={() => toggleSelected(item.path)}
+                        onChange={() => toggleSelected(item)}
                         disabled={bulkDeleteBusy || pending || deleting}
                         aria-label={t("diskExplorer.selectItem", { name: item.name })}
                         className="h-4 w-4 shrink-0 accent-cyan-400"
@@ -666,10 +707,8 @@ export function DiskExplorer({
 
       {confirmingBulkDelete && (
         <BulkDeleteConfirmDialog
-          folderCount={selectedFolderCount}
-          fileCount={selectedFileCount}
-          totalBytes={selectedTotalBytes}
-          permanentCount={selectedPermanentCount}
+          items={selectedItems}
+          onRemoveItem={removeFromSelection}
           onConfirm={() => void deleteSelected()}
           onCancel={() => setConfirmingBulkDelete(false)}
           t={t}
@@ -683,34 +722,49 @@ export function DiskExplorer({
   );
 }
 
+/** Shown right before a bulk delete actually runs - the one place the user
+ * sees everything they've marked at once, since items can now come from
+ * several different folders visited over the course of browsing (see
+ * DiskExplorer's selectedPaths comment). Lets them drop individual items
+ * from here too, in case reviewing the full list changes their mind about
+ * one of them, without having to go find it again in its original folder. */
 function BulkDeleteConfirmDialog({
-  folderCount,
-  fileCount,
-  totalBytes,
-  permanentCount,
+  items,
+  onRemoveItem,
   onConfirm,
   onCancel,
   t,
 }: {
-  folderCount: number;
-  fileCount: number;
-  totalBytes: number;
-  permanentCount: number;
+  items: DiskTreeNodeSummary[];
+  onRemoveItem: (path: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
   t: (key: string, params?: Record<string, string | number>) => string;
 }) {
+  // Removing the last item leaves nothing to confirm - close rather than
+  // leave an empty dialog with a confirm button that would have nothing to do.
+  useEffect(() => {
+    if (items.length === 0) onCancel();
+  }, [items.length, onCancel]);
+
+  if (items.length === 0) return null;
+
+  const folderCount = items.filter((item) => item.isDir).length;
+  const fileCount = items.length - folderCount;
+  const totalBytes = items.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const permanentCount = items.filter((item) => item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES).length;
+
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
       <section
         role="alertdialog"
         aria-modal="true"
-        aria-label={t("diskExplorer.bulkConfirmTitle", { count: folderCount + fileCount })}
-        className="w-full max-w-md rounded-2xl border border-rose-400/30 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(350_90%_55%/0.6)]"
+        aria-label={t("diskExplorer.bulkConfirmTitle", { count: items.length })}
+        className="flex w-full max-w-lg flex-col rounded-2xl border border-rose-400/30 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(350_90%_55%/0.6)]"
       >
         <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-rose-300">
           <AlertTriangle className="h-3.5 w-3.5" />
-          {t("diskExplorer.bulkConfirmTitle", { count: folderCount + fileCount })}
+          {t("diskExplorer.bulkConfirmTitle", { count: items.length })}
         </div>
         <p className="mt-3 text-sm leading-relaxed text-slate-200">
           {t("diskExplorer.bulkConfirmSummary", { folders: folderCount, files: fileCount, size: formatBytes(totalBytes) })}
@@ -721,6 +775,43 @@ function BulkDeleteConfirmDialog({
             {t("diskExplorer.bulkPermanentWarning", { count: permanentCount })}
           </div>
         )}
+
+        <ul className="mt-4 max-h-64 overflow-y-auto rounded-xl border border-white/10 bg-slate-900/40">
+          {items.map((item) => {
+            const permanent = item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES;
+            const parent = parentPath(item.path);
+            return (
+              <li
+                key={item.path}
+                className="flex items-center gap-2.5 border-b border-white/5 px-3 py-2 text-sm last:border-b-0"
+              >
+                {item.isDir ? (
+                  <Folder className="h-3.5 w-3.5 shrink-0 text-cyan-300" />
+                ) : (
+                  <File className="h-3.5 w-3.5 shrink-0 text-violet-300" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-slate-100" title={item.path}>
+                    {item.name}
+                  </div>
+                  {parent && <div className="truncate font-mono text-[10px] text-slate-500">{parent}</div>}
+                </div>
+                {permanent && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-300" />}
+                <span className="w-16 shrink-0 text-right font-mono text-xs text-slate-400">
+                  {formatBytes(item.sizeBytes)}
+                </span>
+                <button
+                  onClick={() => onRemoveItem(item.path)}
+                  title={t("diskExplorer.removeFromSelection")}
+                  className="shrink-0 rounded-md p-1 text-slate-500 transition hover:text-rose-200"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+
         <div className="mt-6 flex justify-end gap-2">
           <button
             onClick={onCancel}

@@ -734,6 +734,19 @@ pub fn validate_deletable_path(raw_path: &str) -> Result<PathBuf, String> {
         return Err("system_protected".to_string());
     }
 
+    // The checks above only ever look at `canonical` itself - a folder
+    // whose own name and path are both harmless can still recursively
+    // contain something that must never be deleted. Only worth paying for
+    // on directories; a single file has no subtree to hide anything in.
+    if canonical.is_dir() {
+        if let Some(offender) = find_protected_descendant(&canonical) {
+            return Err(format!(
+                "contains_protected_item: {}",
+                offender.display()
+            ));
+        }
+    }
+
     Ok(canonical)
 }
 
@@ -773,6 +786,50 @@ pub(crate) fn is_system_critical_path(canonical: &Path) -> bool {
     }
 
     false
+}
+
+/// Walks `root`'s entire subtree looking for anything is_protected_app or
+/// is_system_critical_path would refuse on its own. Both of those checks
+/// above only ever look at the item being deleted itself - a folder whose
+/// own name is completely harmless can still recursively contain something
+/// that must never be deleted (a security tool's data directory nested a
+/// few levels down, say), and `fs::remove_dir_all` does not re-check names
+/// as it recurses. This is the only thing that actually stops that case,
+/// so it's called from validate_deletable_path itself (the real
+/// enforcement point), not just used to gray out a checkbox in the UI -
+/// disk_tree.rs's tree browser calls it too, so what a folder shows before
+/// deletion matches what deleting it would actually refuse.
+///
+/// Parallelized the same way compute_dir_size already is (disk_tree.rs),
+/// with `find_map_any` for early exit - the common case (nothing
+/// protected) still has to visit every entry, but the moment one is found
+/// this stops recursing into siblings instead of finishing the whole tree.
+pub(crate) fn find_protected_descendant(path: &Path) -> Option<PathBuf> {
+    let Ok(entries) = fs::read_dir(path) else {
+        return None;
+    };
+    let children: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+
+    use rayon::prelude::*;
+    children.into_par_iter().find_map_any(|child_path| {
+        let metadata = fs::symlink_metadata(&child_path).ok()?;
+        // Reparse points (symlinks/junctions) are skipped rather than
+        // followed, same as disk_tree.rs's size walk - avoids cycles, and
+        // whatever they point at gets its own independent check if it's
+        // ever browsed/deleted directly.
+        if metadata.file_type().is_symlink() {
+            return None;
+        }
+        let name = child_path.file_name()?.to_string_lossy().to_string();
+        if is_protected_app(&name) || is_system_critical_path(&child_path) {
+            return Some(child_path);
+        }
+        if metadata.is_dir() {
+            find_protected_descendant(&child_path)
+        } else {
+            None
+        }
+    })
 }
 
 pub async fn delete_item(path: String) -> ExecutionResult {
