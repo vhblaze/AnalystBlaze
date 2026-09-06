@@ -1,0 +1,54 @@
+AnalystBlaze - Termos e Servicos
+Atualizado em 12 de maio de 2026
+
+Estes termos resumem como a dashboard web do AnalystBlaze e o aplicativo
+para Windows trabalham juntos para telemetria, insights e otimizacoes
+autorizadas. Ao clicar em "Concordo" voce aceita os termos abaixo antes
+de instalar o AnalystBlaze neste computador.
+
+
+1. USO AUTORIZADO
+
+- Instale o AnalystBlaze apenas em computadores que voce possui ou tem
+  autorizacao para gerenciar.
+- Voce e responsavel por manter as credenciais da sua conta em seguranca.
+- Um dispositivo pode ser removido da dashboard e o AnalystBlaze pode ser
+  desinstalado do Windows a qualquer momento.
+
+
+2. TELEMETRIA TECNICA
+
+- O AnalystBlaze envia metricas tecnicas como CPU, GPU, RAM, disco, rede,
+  temperatura e estimativas de energia.
+- O AnalystBlaze pode enviar identidade do dispositivo, sistema
+  operacional, resumo de hardware, versao do app, status de conexao e
+  historico de acoes.
+- O AnalystBlaze nao precisa de arquivos pessoais, senhas, historico do
+  navegador, mensagens privadas ou documentos para prestar o servico.
+
+
+3. ACOES AUTORIZADAS
+
+- Acoes desktop rodam a partir das permissoes da sua conta, regras de
+  automacao escolhidas ou fluxos de confirmacao explicita.
+- Acoes suportadas podem incluir perfis de performance, Modo Gamer,
+  prioridade de processos, pausas de sincronizacao e politicas seguras
+  de servicos do Windows.
+- Servicos criticos ou sensiveis do Windows permanecem protegidos pela
+  politica do AnalystBlaze e podem exigir revisao manual.
+
+
+4. DISPONIBILIDADE DO SERVICO
+
+- Builds do instalador, notas de release, checksums e recursos desktop
+  podem mudar conforme o produto evolui.
+- Mantenha o AnalystBlaze atualizado para receber correcoes de
+  seguranca, ajustes de compatibilidade e melhorias de telemetria.
+- O AnalystBlaze pode limitar ou suspender acessos que abusem do
+  servico ou tentem contornar controles de seguranca.
+
+
+A versao completa e sempre atualizada destes termos, junto com a
+Politica de Privacidade, esta disponivel em:
+https://analystblaze.com/terms
+https://analystblaze.com/privacy

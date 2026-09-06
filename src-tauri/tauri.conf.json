@@ -29,6 +29,7 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
+    "licenseFile": "installer/TERMOS_DE_USO.txt",
     "resources": {
       "installer/helper-service.ps1": "helper-service.ps1",
       "installer/vendor/PresentMon-2.5.1-x64.exe": "PresentMon.exe"
