@@ -11,6 +11,11 @@ use super::disk_usage::is_system_critical_path;
 use super::protected_apps::is_protected_app;
 
 pub const DISK_TREE_PROGRESS_EVENT: &str = "disk-tree-scan-progress";
+/// Emitted once per directory child after its real recursive size (and
+/// protected-descendant check) finishes in the background - see
+/// `list_directory`'s docs for why that's no longer computed before the
+/// listing itself is returned.
+pub const DISK_TREE_ITEM_READY_EVENT: &str = "disk-tree-item-ready";
 
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(250);
 /// Safety valve for pathological folders (millions of tiny files) - stops
@@ -99,6 +104,21 @@ pub struct DiskTreeProgress {
     pub done: bool,
 }
 
+/// The final, authoritative size/protection state for one directory child,
+/// replacing the placeholder `list_directory` returned for it. Carries the
+/// full DiskTreeNodeSummary contract (self name/descendant protection
+/// already folded together, same as `protected`/`actionable` everywhere
+/// else) rather than a raw byte count, so the frontend can just overwrite
+/// that row's fields wholesale instead of merging partial state.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskTreeItemUpdate {
+    pub path: String,
+    pub size_bytes: u64,
+    pub protected: bool,
+    pub actionable: bool,
+}
+
 /// Filesystem walks are I/O-bound (mostly waiting on `stat`/`read_dir`
 /// syscalls, not CPU), so splitting work across threads overlaps that wait
 /// time instead of doing it serially. `should_continue` is called
@@ -165,6 +185,10 @@ impl Scanner {
         true
     }
 
+    fn emit_item_ready(&self, update: DiskTreeItemUpdate) {
+        let _ = self.app.emit(DISK_TREE_ITEM_READY_EVENT, update);
+    }
+
     fn emit_done(&self) {
         let _ = self.app.emit(
             DISK_TREE_PROGRESS_EVENT,
@@ -177,12 +201,30 @@ impl Scanner {
     }
 }
 
-/// Lists the immediate children of `path`, sorted by size descending, with
-/// each directory's total computed on the spot. Deliberately not cached
-/// anywhere: nothing about a listing survives past this call, so browsing
-/// away (or the scan finishing) can't leak memory the way holding a
-/// whole-drive tree in AgentState did - every navigation just re-asks the
-/// filesystem for whatever it's currently showing.
+/// Lists the immediate children of `path` instantly - one non-recursive
+/// `read_dir` plus a single `stat` per entry, no descending into any
+/// subfolder - then resolves each directory child's real recursive size
+/// (and whether it hides a protected item deep inside) in the background,
+/// emitting one `DISK_TREE_ITEM_READY_EVENT` per directory as its result
+/// lands.
+///
+/// This used to compute every visible directory's full recursive size
+/// before returning anything at all, which meant opening a folder with
+/// even one huge subfolder (AppData, Program Files, node_modules) blocked
+/// the ENTIRE listing - including the cheap file entries sitting right
+/// next to it - on however long the slowest subfolder's whole subtree took
+/// to walk. On a folder like a drive root, where every visible entry is
+/// itself a huge subtree, that meant the screen could show nothing at all
+/// for a long time while burning CPU on stat() calls across most of the
+/// drive. Returning the listing after only the fast phase means the user
+/// sees names and file sizes immediately; directory sizes fill in as they
+/// finish instead of gating the whole screen.
+///
+/// Deliberately not cached anywhere beyond that in-flight background
+/// resolution: nothing about a listing survives past this call, so
+/// browsing away (or the scan finishing) can't leak memory the way holding
+/// a whole-drive tree in AgentState did - every navigation just re-asks
+/// the filesystem for whatever it's currently showing.
 pub async fn list_directory(
     app: AppHandle,
     cancel: Arc<AtomicBool>,
@@ -192,18 +234,37 @@ pub async fn list_directory(
     if !dir_path.is_dir() {
         return Err("not_a_directory".to_string());
     }
-    tokio::task::spawn_blocking(move || list_directory_blocking(app, cancel, dir_path))
+    let scanner = Arc::new(Scanner::new(app, cancel));
+
+    let fast_scanner = scanner.clone();
+    let fast_dir_path = dir_path.clone();
+    let items = tokio::task::spawn_blocking(move || list_directory_fast(&fast_scanner, &fast_dir_path))
         .await
-        .map_err(|error| format!("scan_join_error: {error}"))
+        .map_err(|error| format!("scan_join_error: {error}"))?;
+
+    let pending_dirs: Vec<PathBuf> = items
+        .iter()
+        .filter(|item| item.is_dir)
+        .map(|item| PathBuf::from(&item.path))
+        .collect();
+
+    if pending_dirs.is_empty() {
+        // Nothing to resolve in the background (an empty folder, or one
+        // holding only files) - the listing above is already the final
+        // state, so signal "done" right away instead of leaving the
+        // progress indicator waiting on a background phase that was never
+        // going to run.
+        scanner.emit_done();
+    } else {
+        let bg_scanner = scanner.clone();
+        tokio::task::spawn_blocking(move || resolve_pending_sizes(&bg_scanner, pending_dirs));
+    }
+
+    Ok(items)
 }
 
-fn list_directory_blocking(
-    app: AppHandle,
-    cancel: Arc<AtomicBool>,
-    dir_path: PathBuf,
-) -> Vec<DiskTreeNodeSummary> {
-    let scanner = Scanner::new(app, cancel);
-    let entries: Vec<PathBuf> = fs::read_dir(&dir_path)
+fn list_directory_fast(scanner: &Scanner, dir_path: &Path) -> Vec<DiskTreeNodeSummary> {
+    let entries: Vec<PathBuf> = fs::read_dir(dir_path)
         .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
         .unwrap_or_default();
 
@@ -215,17 +276,23 @@ fn list_directory_blocking(
                 if scanner.canceled.load(Ordering::Relaxed) || scanner.capped.load(Ordering::Relaxed) {
                     return None;
                 }
-                summarize_entry(&scanner, &child_path)
+                summarize_entry_fast(&child_path)
             })
             .collect()
     });
 
     items.sort_by_key(|item| std::cmp::Reverse(item.size_bytes));
-    scanner.emit_done();
     items
 }
 
-fn summarize_entry(scanner: &Scanner, path: &Path) -> Option<DiskTreeNodeSummary> {
+/// Top-level-only: never descends into a directory, so this is always just
+/// the cost of one `stat` regardless of how big the entry's own subtree
+/// is. A directory's `size_bytes` is a "still calculating" placeholder
+/// (`0`) and `protected`/`actionable` only reflect its own name/path here.
+/// `resolve_pending_sizes` fills in the authoritative version once its
+/// subtree walk finishes, which can only ever add protection, never
+/// remove it.
+fn summarize_entry_fast(path: &Path) -> Option<DiskTreeNodeSummary> {
     let metadata = fs::symlink_metadata(path).ok()?;
     // Reparse points (symlinks and NTFS junctions/mount points) are
     // treated as non-directories to avoid cycles.
@@ -233,21 +300,7 @@ fn summarize_entry(scanner: &Scanner, path: &Path) -> Option<DiskTreeNodeSummary
     let modified_at = metadata_modified_at(&metadata);
     let name = path.file_name()?.to_string_lossy().to_string();
     let self_protected = is_protected_app(&name);
-
-    // For a directory, `has_protected_descendant` folds in the SAME walk
-    // that already computes size - a folder whose own name is completely
-    // harmless can still recursively contain something that must never be
-    // deleted (a security tool's data directory nested a few levels down,
-    // say), and this is what surfaces that in the listing before the user
-    // ever tries to delete it. disk_usage.rs's validate_deletable_path runs
-    // the equivalent check again at actual delete time (the real
-    // enforcement point, not just this UI hint) via find_protected_descendant.
-    let (size_bytes, has_protected_descendant) = if is_dir {
-        scan_subtree(scanner, path)
-    } else {
-        (metadata.len(), false)
-    };
-    let protected = self_protected || has_protected_descendant;
+    let size_bytes = if is_dir { 0 } else { metadata.len() };
 
     Some(DiskTreeNodeSummary {
         path: path.display().to_string(),
@@ -255,9 +308,49 @@ fn summarize_entry(scanner: &Scanner, path: &Path) -> Option<DiskTreeNodeSummary
         size_bytes,
         is_dir,
         modified_at,
-        protected,
-        actionable: !protected && !is_system_critical_path(path),
+        protected: self_protected,
+        actionable: !self_protected && !is_system_critical_path(path),
     })
+}
+
+/// The expensive part: one full recursive subtree walk per pending
+/// directory, parallelized across the same bounded pool as everything else
+/// here. Runs after `list_directory` has already returned the listing, so
+/// it never blocks the screen from showing up - only these size numbers
+/// arrive late, via one `DISK_TREE_ITEM_READY_EVENT` per directory as its
+/// own walk finishes (not batched, since the immediate-children count this
+/// runs over is always small - tens, not millions).
+fn resolve_pending_sizes(scanner: &Scanner, dirs: Vec<PathBuf>) {
+    use rayon::prelude::*;
+    scan_pool().install(|| {
+        dirs.into_par_iter().for_each(|dir_path| {
+            if scanner.canceled.load(Ordering::Relaxed) {
+                return;
+            }
+            // For a directory, `has_protected_descendant` folds in the SAME
+            // walk that already computes size - a folder whose own name is
+            // completely harmless can still recursively contain something
+            // that must never be deleted (a security tool's data directory
+            // nested a few levels down, say), and this is what surfaces
+            // that in the listing before the user ever tries to delete it.
+            // disk_usage.rs's validate_deletable_path runs the equivalent
+            // check again at actual delete time (the real enforcement
+            // point, not just this UI hint) via find_protected_descendant.
+            let (size_bytes, has_protected_descendant) = scan_subtree(scanner, &dir_path);
+            let name = dir_path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let protected = is_protected_app(&name) || has_protected_descendant;
+            scanner.emit_item_ready(DiskTreeItemUpdate {
+                path: dir_path.display().to_string(),
+                size_bytes,
+                protected,
+                actionable: !protected && !is_system_critical_path(&dir_path),
+            });
+        });
+    });
+    scanner.emit_done();
 }
 
 /// Total size of `path`'s subtree AND whether it contains anything

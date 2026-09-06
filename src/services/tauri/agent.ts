@@ -591,6 +591,13 @@ export type DiskTreeProgress = {
   done: boolean;
 };
 
+export type DiskTreeItemUpdate = {
+  path: string;
+  sizeBytes: number;
+  protected: boolean;
+  actionable: boolean;
+};
+
 export type StartupImpact = {
   name: string;
   location: string;
@@ -1189,6 +1196,14 @@ export async function cancelDiskTreeScan(): Promise<boolean> {
 export async function listenToDiskTreeProgress(onProgress: (progress: DiskTreeProgress) => void) {
   if (!isTauriRuntime()) return () => undefined;
   return listen<DiskTreeProgress>("disk-tree-scan-progress", (event) => onProgress(event.payload));
+}
+
+/** Fires once per directory child listed by listDiskDirectory, once its
+ * real recursive size (and protected-descendant check) finishes resolving
+ * in the background - see disk_tree.rs's list_directory docs. */
+export async function listenToDiskTreeItemReady(onItemReady: (item: DiskTreeItemUpdate) => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen<DiskTreeItemUpdate>("disk-tree-item-ready", (event) => onItemReady(event.payload));
 }
 
 export async function scanStartupImpact(): Promise<StartupImpact[]> {

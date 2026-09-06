@@ -542,11 +542,24 @@ fn list_disk_volumes() -> Vec<optimizations::disk_tree::DiskVolumeInfo> {
     optimizations::disk_tree::list_volumes()
 }
 
-/// Lists `path`'s immediate children with sizes computed on the spot (D6
-/// "Explorador de Disco"). Deliberately not cached in AgentState - a
-/// whole-drive tree held in memory for the app's lifetime is what made the
-/// feature keep eating RAM after the scan finished and even after leaving
-/// the screen. Every navigation re-asks the filesystem instead.
+/// Lists `path`'s immediate children instantly; each directory child's
+/// real recursive size keeps resolving in the background afterwards (D6
+/// "Explorador de Disco" - see disk_tree::list_directory's docs). Because
+/// of that, this command returning is NOT the end of the associated scan
+/// activity - the cancel flag stored below has to keep pointing at it
+/// until the background phase finishes on its own or is told to stop, so
+/// it's deliberately left in place here rather than cleared back to `None`
+/// once this `await` resolves (clearing it right away would leave the
+/// still-running background size resolution with no way for
+/// cancel_disk_tree_scan to reach it - e.g. the moment the user opens
+/// another folder or leaves the screen). The next call simply overwrites
+/// it with a fresh cancel flag; flipping a stale one that nothing is
+/// listening to anymore afterwards is harmless.
+///
+/// Deliberately not cached in AgentState otherwise - a whole-drive tree
+/// held in memory for the app's lifetime is what made the feature keep
+/// eating RAM after the scan finished and even after leaving the screen.
+/// Every navigation re-asks the filesystem instead.
 #[tauri::command]
 async fn list_disk_directory(
     path: String,
@@ -562,13 +575,7 @@ async fn list_disk_directory(
         *guard = Some(cancel.clone());
     }
 
-    let result = optimizations::disk_tree::list_directory(app, cancel, path).await;
-
-    if let Ok(mut guard) = state.disk_tree_cancel.lock() {
-        *guard = None;
-    }
-
-    result
+    optimizations::disk_tree::list_directory(app, cancel, path).await
 }
 
 #[tauri::command]

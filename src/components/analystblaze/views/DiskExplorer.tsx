@@ -9,7 +9,9 @@ import {
   isTauriRuntime,
   listDiskDirectory,
   listDiskVolumes,
+  listenToDiskTreeItemReady,
   listenToDiskTreeProgress,
+  type DiskTreeItemUpdate,
   type DiskTreeNodeSummary,
   type DiskTreeProgress,
   type DiskVolumeInfo,
@@ -163,6 +165,12 @@ export function DiskExplorer({
   // filesystem for just this folder's immediate children, so there's no
   // whole-drive tree sitting in memory to leak once you leave the screen.
   const [children, setChildren] = useState<DiskTreeNodeSummary[]>([]);
+  // Directory children start at sizeBytes 0 (a real, already-empty folder
+  // looks identical) - this is what actually distinguishes "still
+  // calculating" from "genuinely empty" for the size column, seeded from
+  // every directory in a fresh listing and cleared as each one's
+  // DISK_TREE_ITEM_READY_EVENT arrives.
+  const [pendingSizePaths, setPendingSizePaths] = useState<Set<string>>(new Set());
   const [browseBusy, setBrowseBusy] = useState(false);
   const [browseError, setBrowseError] = useState<string | null>(null);
   const [browseProgress, setBrowseProgress] = useState<DiskTreeProgress | null>(null);
@@ -210,6 +218,40 @@ export function DiskExplorer({
     return () => dispose?.();
   }, [runtimeAvailable]);
 
+  // Directory sizes arrive after the listing itself (see listDiskDirectory's
+  // docs) - patch each row in place as its real size/protection status
+  // lands instead of waiting for every subfolder to finish. Also patches
+  // selectedPaths: it holds its own snapshot of each item, so a folder
+  // selected while still "calculating" (sizeBytes 0) would otherwise stay
+  // stuck at 0 in the bulk-delete total even after the real size arrives.
+  useEffect(() => {
+    if (!runtimeAvailable) return;
+    let dispose: (() => void) | undefined;
+    const applyUpdate = (update: DiskTreeItemUpdate) => {
+      const patch = (item: DiskTreeNodeSummary): DiskTreeNodeSummary =>
+        item.path === update.path
+          ? { ...item, sizeBytes: update.sizeBytes, protected: update.protected, actionable: update.actionable }
+          : item;
+      setChildren((current) => current.map(patch));
+      setSelectedPaths((current) => {
+        if (!current.has(update.path)) return current;
+        const next = new Map(current);
+        next.set(update.path, patch(current.get(update.path)!));
+        return next;
+      });
+      setPendingSizePaths((current) => {
+        if (!current.has(update.path)) return current;
+        const next = new Set(current);
+        next.delete(update.path);
+        return next;
+      });
+    };
+    listenToDiskTreeItemReady(applyUpdate).then((next) => {
+      dispose = next;
+    });
+    return () => dispose?.();
+  }, [runtimeAvailable]);
+
   useEffect(() => {
     if (!autoScan || volumes.length === 0 || rootPath || browseBusy) return;
     void loadRoot(selectedVolume || volumes[0].mountPoint);
@@ -230,10 +272,22 @@ export function DiskExplorer({
     setBrowseBusy(true);
     setBrowseError(null);
     setBrowseProgress(null);
+    // The previous folder's directory sizes may still be resolving in the
+    // background (listDiskDirectory returns before that finishes) - stop
+    // it before starting a new listing, otherwise navigating through
+    // several folders quickly stacks up concurrent background scans
+    // instead of replacing one with the next.
+    try {
+      await cancelDiskTreeScan();
+    } catch {
+      // Nothing was in flight, or the call itself failed - either way
+      // this is best-effort, not worth blocking navigation over.
+    }
     try {
       const kids = await listDiskDirectory(path);
       setCurrentPath(path);
       setChildren(kids);
+      setPendingSizePaths(new Set(kids.filter((item) => item.isDir).map((item) => item.path)));
     } catch (error) {
       setBrowseError(errorMessage(error));
     } finally {
@@ -655,8 +709,12 @@ export function DiskExplorer({
                         {t("diskExplorer.locked")}
                       </span>
                     )}
-                    <span className="w-20 shrink-0 text-right font-mono text-xs text-slate-400">
-                      {formatBytes(item.sizeBytes)}
+                    <span className="flex w-20 shrink-0 items-center justify-end gap-1 text-right font-mono text-xs text-slate-400">
+                      {pendingSizePaths.has(item.path) ? (
+                        <RefreshCw className="h-3 w-3 shrink-0 animate-spin text-slate-500" />
+                      ) : (
+                        formatBytes(item.sizeBytes)
+                      )}
                     </span>
                     {item.actionable &&
                       (pending ? (
