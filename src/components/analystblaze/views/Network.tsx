@@ -608,6 +608,16 @@ export function Network({
     { key: "live", labelKey: "network.liveMode", icon: Video },
   ];
 
+  // True only for the very first load, before any diagnostics have ever
+  // resolved - a later refresh (button spinner already covers that) must
+  // NOT hit this branch, or every refresh would blank out already-loaded
+  // data. Without this, a slow first gather (some users' network
+  // diagnostics - gateway probing, adapter enumeration - can take real
+  // time) rendered the hero/tabs immediately with every value stuck on
+  // "--", which read as a frozen/broken screen rather than "still
+  // loading" since nothing on it was animated.
+  const isInitialLoad = diagnosticsBusy && !networkDiagnostics;
+
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
@@ -618,6 +628,19 @@ export function Network({
         <h1 className="text-[36px] font-semibold tracking-tight text-slate-50">{t("network.title")}</h1>
       </header>
 
+      {isInitialLoad ? (
+        <div className="glass-panel cyber-glow flex flex-col items-center justify-center gap-4 py-24 text-center">
+          <span className="relative flex h-12 w-12 items-center justify-center">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-400/30" />
+            <RefreshCw className="relative h-8 w-8 animate-spin text-cyan-300" />
+          </span>
+          <div>
+            <div className="text-sm font-semibold text-slate-100">{t("network.loadingTitle")}</div>
+            <p className="mt-1 text-xs text-slate-500">{t("network.loadingDesc")}</p>
+          </div>
+        </div>
+      ) : (
+        <>
       {/* Hero: one glance instead of reading every field - status +
           friendly summary + the numbers people actually check first. */}
       <div className="glass-panel cyber-glow relative overflow-hidden p-6">
@@ -1203,6 +1226,8 @@ export function Network({
           </div>
         </div>
       </AdvancedSection>
+        </>
+      )}
 
       {tuneSession && tuneSession.status === "pending" && (
         <NetworkTuneDialog
