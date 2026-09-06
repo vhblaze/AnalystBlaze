@@ -12,12 +12,15 @@
 //!
 //! This module owns the *data* side: parsing PresentMon's CSV output into
 //! per-frame samples and reducing those into the aggregate stats a
-//! before/after comparison or a training row actually needs. It
-//! deliberately does not spawn PresentMon.exe itself yet - starting an ETW
-//! trace session needs elevation, so that half belongs next to the
-//! existing privileged helper service (see optimizations::privileged_helper),
-//! not here, and shouldn't be wired up before someone can validate the
-//! actual capture against a real GPU/game session.
+//! before/after comparison or a training row actually needs. The half that
+//! actually spawns PresentMon.exe lives in
+//! `optimizations::frame_capture_control`, next to the privileged helper
+//! service - starting an ETW trace session needs elevation, so that
+//! process-management code belongs there, not here. This module stays pure
+//! data transformation so it's testable without a real PresentMon binary or
+//! a running game, and so the helper's stdout-reading thread and the
+//! whole-CSV path (a manual export, say) share one parsing implementation
+//! instead of two.
 //!
 //! "1% low" / "0.1% low" below follow the convention most benchmarking
 //! tools (CapFrameX, PresentMon's own analysis) use: the *average frame
@@ -63,33 +66,59 @@ pub struct FrameTimeStats {
 /// varies by version/flags, so this looks up `MsBetweenPresents` and
 /// `Dropped` by header name and ignores every other column.
 pub fn parse_presentmon_csv(csv: &str) -> Vec<FrameSample> {
-    let mut lines = csv.lines();
-    let Some(header) = lines.next() else {
-        return Vec::new();
-    };
-    let columns: Vec<&str> = header.split(',').map(str::trim).collect();
-    let frame_time_index = columns.iter().position(|&name| name == "MsBetweenPresents");
-    let dropped_index = columns.iter().position(|&name| name == "Dropped");
-    let Some(frame_time_index) = frame_time_index else {
-        return Vec::new();
-    };
-
-    lines
-        .filter_map(|line| {
-            let fields: Vec<&str> = line.split(',').collect();
-            let ms_between_presents = fields.get(frame_time_index)?.trim().parse::<f64>().ok()?;
-            if !ms_between_presents.is_finite() || ms_between_presents <= 0.0 {
-                return None;
-            }
-            let dropped = dropped_index
-                .and_then(|index| fields.get(index))
-                .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True"));
-            Some(FrameSample {
-                ms_between_presents,
-                dropped,
-            })
-        })
+    let mut parser = PresentMonLineParser::new();
+    csv.lines()
+        .filter_map(|line| parser.feed_line(line))
         .collect()
+}
+
+/// Incremental counterpart to `parse_presentmon_csv`, for a live PresentMon
+/// process whose stdout is read one line at a time as it runs -
+/// `optimizations::frame_capture_control`'s reader thread feeds it lines as
+/// they arrive so a capture's samples are available immediately on stop
+/// instead of needing the whole CSV buffered first. Feed it PresentMon's
+/// header line first (via the first `feed_line` call), then one data line
+/// per subsequent call.
+#[derive(Debug, Default)]
+pub struct PresentMonLineParser {
+    frame_time_index: Option<usize>,
+    dropped_index: Option<usize>,
+    header_seen: bool,
+}
+
+impl PresentMonLineParser {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns `Some(sample)` for a data row that parsed into a usable frame
+    /// sample - `None` for the header line itself, a malformed/non-numeric
+    /// row, or any row seen before a `MsBetweenPresents` column has been
+    /// found in the header.
+    pub fn feed_line(&mut self, line: &str) -> Option<FrameSample> {
+        if !self.header_seen {
+            self.header_seen = true;
+            let columns: Vec<&str> = line.split(',').map(str::trim).collect();
+            self.frame_time_index = columns.iter().position(|&name| name == "MsBetweenPresents");
+            self.dropped_index = columns.iter().position(|&name| name == "Dropped");
+            return None;
+        }
+
+        let frame_time_index = self.frame_time_index?;
+        let fields: Vec<&str> = line.split(',').collect();
+        let ms_between_presents = fields.get(frame_time_index)?.trim().parse::<f64>().ok()?;
+        if !ms_between_presents.is_finite() || ms_between_presents <= 0.0 {
+            return None;
+        }
+        let dropped = self
+            .dropped_index
+            .and_then(|index| fields.get(index))
+            .is_some_and(|value| matches!(value.trim(), "1" | "true" | "True"));
+        Some(FrameSample {
+            ms_between_presents,
+            dropped,
+        })
+    }
 }
 
 pub fn compute_frame_time_stats(samples: &[FrameSample]) -> FrameTimeStats {
@@ -293,5 +322,38 @@ mod tests {
         let grouped = parse_presentmon_csv_by_process(csv);
         assert_eq!(grouped.get("111").map(Vec::len), Some(2));
         assert_eq!(grouped.get("222").map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn incremental_parser_matches_the_whole_csv_parser_line_by_line() {
+        let csv = "ProcessID,Dropped,MsBetweenPresents,Application\n1234,0,16.67,game.exe\n1234,1,33.33,game.exe\n";
+        let mut parser = PresentMonLineParser::new();
+        let samples: Vec<FrameSample> = csv.lines().filter_map(|line| parser.feed_line(line)).collect();
+        assert_eq!(samples, parse_presentmon_csv(csv));
+    }
+
+    #[test]
+    fn incremental_parser_returns_none_for_the_header_line() {
+        let mut parser = PresentMonLineParser::new();
+        assert_eq!(
+            parser.feed_line("MsBetweenPresents,Dropped"),
+            None,
+            "the first line fed in is always treated as the header"
+        );
+        assert_eq!(
+            parser.feed_line("16.67,0"),
+            Some(FrameSample {
+                ms_between_presents: 16.67,
+                dropped: false,
+            })
+        );
+    }
+
+    #[test]
+    fn incremental_parser_yields_nothing_once_a_capture_stops_producing_frames() {
+        let mut parser = PresentMonLineParser::new();
+        parser.feed_line("MsBetweenPresents");
+        assert!(parser.feed_line("").is_none());
+        assert!(parser.feed_line("NOT_A_NUMBER").is_none());
     }
 }

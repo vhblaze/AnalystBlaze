@@ -7,6 +7,7 @@ pub mod disk_tree;
 pub mod disk_usage;
 pub mod energy;
 pub mod focus;
+pub mod frame_capture_control;
 pub mod latency;
 pub mod local_ai_policy;
 pub mod memory;
@@ -50,6 +51,14 @@ pub struct GameModeSession {
     pub restored_at: Option<i64>,
     pub status: String,
     pub restore_reason: Option<String>,
+    /// Set once a PresentMon ground-truth frame capture has actually
+    /// started for this session (see START_FRAME_CAPTURE below) - `None`
+    /// for sessions with no capture attempt, a capture still starting, or a
+    /// capture that failed to start. `#[serde(default)]` so a session file
+    /// written by an older build (before this field existed) still
+    /// deserializes.
+    #[serde(default)]
+    pub frame_capture_id: Option<String>,
 }
 
 impl ExecutionResult {
@@ -198,7 +207,7 @@ async fn execute_command_checked_with_helper(
 
     let result = match action_name {
         "APPLY_ADAPTIVE_OPTIMIZATION" => adaptive::apply_adaptive_optimization(payload).await,
-        "APPLY_GAME_MODE" => apply_game_mode(payload).await,
+        "APPLY_GAME_MODE" => apply_game_mode(payload, source).await,
         "APPLY_PC_CLEAN_FAST_BACKGROUND_PRIORITIES" => {
             processes::optimize_background_process_priorities(payload).await
         }
@@ -336,6 +345,8 @@ async fn execute_command_checked_with_helper(
         "RESTORE_STARTUP_APP" => windows_actions::restore_startup_app(payload).await,
         "STOP_SERVICE" => windows_actions::stop_service(payload).await,
         "RESTORE_SERVICE" => windows_actions::restore_service(payload).await,
+        "START_FRAME_CAPTURE" => frame_capture_control::start_frame_capture(payload).await,
+        "STOP_FRAME_CAPTURE" => frame_capture_control::stop_frame_capture(payload).await,
         other => ExecutionResult::unsupported(other),
     };
 
@@ -355,7 +366,7 @@ async fn execute_command_checked_with_helper(
     result
 }
 
-async fn apply_game_mode(payload: Option<Value>) -> ExecutionResult {
+async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> ExecutionResult {
     let optimize_power_plan = payload_bool(payload.as_ref(), "optimize_power_plan", true);
     let safe_temp_cleanup = payload_bool(payload.as_ref(), "safe_temp_cleanup", true);
     let enter_focus_mode = payload_bool(payload.as_ref(), "enter_focus_mode", true);
@@ -453,6 +464,28 @@ async fn apply_game_mode(payload: Option<Value>) -> ExecutionResult {
     } else {
         None
     };
+
+    // Ground-truth frame capture starts for any activation EXCEPT
+    // LocalPolicy - that's the one source privileged_helper.rs's
+    // validate_request_execution_policy always rejects on the pipe side for
+    // any helper-required action (an unsupervised local heuristic must
+    // never reach the elevated helper on its own). ManualUser (the "Ativar
+    // Modo Gamer" button - see lib.rs's activate_game_mode) is deliberately
+    // included here: a live user click is, if anything, more supervised
+    // than RemoteCommand's already-automatic "learned_auto" mode, and nothing
+    // about the security boundary excludes it. The real, known coverage gap
+    // is just LocalPolicy's local fallback decision loop, which is most
+    // Modo Gamer activations day-to-day - those get every other training
+    // signal but not a PresentMon capture. Widening that further means
+    // either growing the fraction of activations the server decides
+    // (RemoteCommand) or deliberately relaxing the LocalPolicy boundary for
+    // this specifically read-only, self-terminating action pair - not
+    // something to do implicitly here.
+    if source != CommandSource::LocalPolicy {
+        if let (Some(pid), Some(session)) = (target_pid, restore_session.as_ref()) {
+            spawn_frame_capture_start(session.id.clone(), pid);
+        }
+    }
 
     if let Some(session) = restore_session.as_ref() {
         if session.target_pid.is_some() || session.target_process_name.is_some() {
@@ -598,10 +631,22 @@ pub fn restore_active_game_mode_session() -> snapshot::RestoreReport {
     };
 
     let report = snapshot::restore_snapshots_by_ids(&session.snapshot_ids);
+    let capture_id = session.frame_capture_id.take();
     session.status = "restored".to_string();
     session.restored_at = Some(chrono::Utc::now().timestamp());
     session.restore_reason = Some("manual_restore".to_string());
     let _ = write_active_game_mode_session(&session);
+    if let Some(capture_id) = capture_id {
+        // Called from an async Tauri command (a Tokio runtime is already
+        // driving this call), so a detached spawn is enough here - contrast
+        // with spawn_game_restore_monitor below, a plain OS thread with no
+        // ambient runtime, which has to build its own to await the same
+        // async stop call.
+        let session_group_id = session.id.clone();
+        tokio::spawn(async move {
+            stop_frame_capture_and_queue_upload(capture_id, session_group_id).await;
+        });
+    }
     let _ = audit::record_event(
         "info",
         "game_mode.restored_manually",
@@ -641,6 +686,7 @@ fn save_active_game_mode_session(
         restored_at: None,
         status: "monitoring".to_string(),
         restore_reason: None,
+        frame_capture_id: None,
     };
     write_active_game_mode_session(&session)?;
     Ok(session)
@@ -675,6 +721,130 @@ fn mark_game_mode_session_restored(session_id: &str, reason: &str) {
 
 fn game_mode_session_path() -> std::path::PathBuf {
     snapshot::app_data_dir().join("game-mode-session.json")
+}
+
+/// Fire-and-forget: starts a PresentMon capture for a just-activated Modo
+/// Gamer session, routed through the normal helper client path
+/// (execute_command_checked -> privileged_helper::execute over the signed
+/// pipe) exactly like any other helper-required action. Detached instead of
+/// awaited so APPLY_GAME_MODE's own response never waits on this extra
+/// round-trip to the helper.
+fn spawn_frame_capture_start(session_id: String, target_pid: u32) {
+    tokio::spawn(async move {
+        let result = execute_command_checked(
+            CommandSource::RemoteCommand,
+            "START_FRAME_CAPTURE",
+            Some(json!({ "targetPid": target_pid })),
+            None,
+            true,
+        )
+        .await;
+
+        if !result.success {
+            let _ = audit::record_event(
+                "info",
+                "frame_capture.start_failed",
+                "Nao foi possivel iniciar a captura de frames para esta sessao de Modo Gamer.",
+                json!({
+                    "session_id": session_id,
+                    "target_pid": target_pid,
+                    "message": result.message,
+                }),
+            );
+            return;
+        }
+
+        if let Some(capture_id) = result.details.get("captureId").and_then(Value::as_str) {
+            attach_frame_capture_id_to_active_session(session_id, capture_id.to_string()).await;
+        }
+    });
+}
+
+/// Records the running capture's id on the still-active session so the
+/// restore path (whichever one fires - process-exit monitor or manual
+/// restore) knows to stop it. If the session already restored by the time
+/// this helper round-trip came back (game closed unusually fast, or the
+/// user hit "restore" manually mid-round-trip), there's nobody left who
+/// will ever call STOP_FRAME_CAPTURE for this id - stop it right here
+/// instead of leaving PresentMon attached to a process AnalystBlaze no
+/// longer considers "in a game session".
+async fn attach_frame_capture_id_to_active_session(session_id: String, capture_id: String) {
+    let orphaned = match read_active_game_mode_session() {
+        Some(mut session) if session.id == session_id && session.restored_at.is_none() => {
+            session.frame_capture_id = Some(capture_id.clone());
+            let _ = write_active_game_mode_session(&session);
+            false
+        }
+        _ => true,
+    };
+
+    if orphaned {
+        stop_frame_capture_and_queue_upload(capture_id, session_id).await;
+    }
+}
+
+/// Stops a running frame capture (again via the normal helper client path)
+/// and, if it produced any samples, queues the resulting stats for upload
+/// on the telemetry engine's next tick (see
+/// frame_capture_control::queue_frame_capture_upload - the engine owns the
+/// only context with valid backend credentials, so this module can't POST
+/// it directly).
+async fn stop_frame_capture_and_queue_upload(capture_id: String, session_group_id: String) {
+    let result = execute_command_checked(
+        CommandSource::RemoteCommand,
+        "STOP_FRAME_CAPTURE",
+        Some(json!({ "captureId": capture_id })),
+        None,
+        true,
+    )
+    .await;
+
+    if !result.success {
+        let _ = audit::record_event(
+            "warn",
+            "frame_capture.stop_failed",
+            "Nao foi possivel finalizar a captura de frames.",
+            json!({
+                "capture_id": capture_id,
+                "session_group_id": session_group_id,
+                "message": result.message,
+            }),
+        );
+        return;
+    }
+
+    let details = &result.details;
+    let sample_count = details.get("sampleCount").and_then(Value::as_u64).unwrap_or(0);
+    if sample_count == 0 {
+        // Nothing usable was captured (game closed before any frame
+        // presented, PresentMon failed to attach, ...) - not worth a
+        // training row.
+        return;
+    }
+
+    let upload = json!({
+        "sessionGroupId": session_group_id,
+        "mode": "standalone",
+        "actionName": "APPLY_GAME_MODE",
+        "startedAt": details.get("startedAt"),
+        "endedAt": details.get("endedAt"),
+        "sampleCount": details.get("sampleCount"),
+        "avgFps": details.get("avgFps"),
+        "avgFrameTimeMs": details.get("avgFrameTimeMs"),
+        "low1PctFps": details.get("low1PctFps"),
+        "low0_1PctFps": details.get("low0_1PctFps"),
+        "droppedFrameCount": details.get("droppedFrameCount"),
+        "stutterCount": details.get("stutterCount"),
+        "source": "presentmon",
+    });
+    if let Err(error) = frame_capture_control::queue_frame_capture_upload(upload) {
+        let _ = audit::record_event(
+            "warn",
+            "frame_capture.queue_failed",
+            "Nao foi possivel enfileirar o upload da captura de frames.",
+            json!({ "error": error }),
+        );
+    }
 }
 
 fn spawn_game_restore_monitor(
@@ -713,7 +883,34 @@ fn spawn_game_restore_monitor(
             }
 
             let report = snapshot::restore_snapshots_by_ids(&snapshot_ids);
+            let capture_id = read_active_game_mode_session()
+                .filter(|current| current.id == session_id)
+                .and_then(|current| current.frame_capture_id);
             mark_game_mode_session_restored(&session_id, "target_process_exit");
+            if let Some(capture_id) = capture_id {
+                // A plain OS thread (thread::spawn above), not a Tokio task -
+                // no ambient runtime to tokio::spawn onto, so a short-lived
+                // current-thread runtime is built just for this one await,
+                // mirroring privileged_helper.rs's execute_request, which
+                // faces the same "async call from a bare thread" situation.
+                match tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                {
+                    Ok(runtime) => runtime.block_on(stop_frame_capture_and_queue_upload(
+                        capture_id,
+                        session_id.clone(),
+                    )),
+                    Err(error) => {
+                        let _ = audit::record_event(
+                            "warn",
+                            "frame_capture.stop_runtime_failed",
+                            "Nao foi possivel criar runtime para finalizar a captura de frames.",
+                            json!({ "error": error.to_string() }),
+                        );
+                    }
+                }
+            }
             let _ = audit::record_event(
                 "info",
                 "game_mode.restored_after_game_exit",

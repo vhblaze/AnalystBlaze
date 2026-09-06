@@ -460,13 +460,16 @@ pub async fn apply_pc_clean_fast_profile(options: PcCleanFastOptions) -> Executi
     if options.include_gaming {
         let detected_game = detection::detect_game_process_with_payload(None);
         if detected_game.detected {
-            let game_mode = super::apply_game_mode(Some(json!({
-                    "safe_temp_cleanup": false,
-                    "enter_focus_mode": true,
-                    "optimize_visual_effects": false,
-                    "optimize_process_priorities": true,
-                    "auto_restore": true,
-            })))
+            let game_mode = super::apply_game_mode(
+                Some(json!({
+                        "safe_temp_cleanup": false,
+                        "enter_focus_mode": true,
+                        "optimize_visual_effects": false,
+                        "optimize_process_priorities": true,
+                        "auto_restore": true,
+                })),
+                super::safety::CommandSource::ManualUser,
+            )
             .await;
             append_action_result(
                 &mut actions,

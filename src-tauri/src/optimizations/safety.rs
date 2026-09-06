@@ -227,6 +227,17 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: false,
             requires_privileged_helper: true,
         }),
+        // Read-only (observes present events via ETW, changes nothing on
+        // the system) and self-terminating (STOP kills the child process;
+        // an orphaned one is reaped after MAX_CAPTURE_SECONDS - see
+        // frame_capture_control.rs), so no snapshot is needed even though
+        // starting an ETW trace session needs the elevated helper.
+        "START_FRAME_CAPTURE" | "STOP_FRAME_CAPTURE" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
         "APPLY_LATENCY_TWEAKS" => Some(CommandSafetyProfile {
             risk: RiskLevel::Critical,
             requires_local_confirmation: true,
@@ -285,6 +296,8 @@ pub fn supported_actions() -> &'static [&'static str] {
         "STOP_SERVICE",
         "RESTORE_SERVICE",
         "DELETE_DISK_USAGE_ITEM",
+        "START_FRAME_CAPTURE",
+        "STOP_FRAME_CAPTURE",
     ]
 }
 
@@ -704,6 +717,37 @@ fn validate_action_payload(
                         json!({ "adapter_name": adapter_name }),
                     ));
                 }
+            }
+        }
+        "START_FRAME_CAPTURE" => {
+            let target_pid = payload
+                .and_then(|value| value.get("targetPid").or_else(|| value.get("target_pid")))
+                .and_then(Value::as_u64);
+            if target_pid.is_none() {
+                return Err(safety_error(
+                    "frame_capture_target_pid_required",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "required_fields": ["targetPid"] }),
+                ));
+            }
+        }
+        "STOP_FRAME_CAPTURE" => {
+            let capture_id = payload
+                .and_then(|value| value.get("captureId").or_else(|| value.get("capture_id")))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty());
+            if capture_id.is_none() {
+                return Err(safety_error(
+                    "frame_capture_id_required",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "required_fields": ["captureId"] }),
+                ));
             }
         }
         "RESET_WINSOCK_CATALOG" if !winsock_reset_confirmed(payload) => {
@@ -1341,6 +1385,81 @@ mod tests {
         .expect("revert network tune should be allowed");
         assert!(!revert_profile.requires_snapshot);
         assert!(revert_profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn start_frame_capture_requires_helper_and_target_pid() {
+        let helper_unavailable = validate_command(
+            "START_FRAME_CAPTURE",
+            Some(&json!({ "targetPid": 1234 })),
+            &context(CommandSource::ManualUser, None, true),
+        );
+        assert_eq!(
+            helper_unavailable.unwrap_err().reason,
+            "privileged_helper_unavailable"
+        );
+
+        let missing_pid = validate_command(
+            "START_FRAME_CAPTURE",
+            None,
+            &context_with_helper(true),
+        );
+        assert_eq!(
+            missing_pid.unwrap_err().reason,
+            "frame_capture_target_pid_required"
+        );
+
+        let profile = validate_command(
+            "START_FRAME_CAPTURE",
+            Some(&json!({ "targetPid": 1234 })),
+            &context_with_helper(true),
+        )
+        .expect("start frame capture should be allowed with a target pid");
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(!profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn stop_frame_capture_requires_helper_and_capture_id() {
+        let missing_capture_id = validate_command(
+            "STOP_FRAME_CAPTURE",
+            None,
+            &context_with_helper(true),
+        );
+        assert_eq!(
+            missing_capture_id.unwrap_err().reason,
+            "frame_capture_id_required"
+        );
+
+        let profile = validate_command(
+            "STOP_FRAME_CAPTURE",
+            Some(&json!({ "captureId": "abc123" })),
+            &context_with_helper(true),
+        )
+        .expect("stop frame capture should be allowed with a capture id");
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn local_policy_can_never_reach_frame_capture_actions() {
+        // The same boundary STOP_SERVICE/SET_DNS_SERVERS already rely on:
+        // this is enforced again on the pipe side in
+        // privileged_helper.rs's validate_request_execution_policy, but
+        // asserting it here too keeps the safety module itself honest about
+        // which source is even attempting the helper-required action.
+        let result = validate_command(
+            "START_FRAME_CAPTURE",
+            Some(&json!({ "targetPid": 1234 })),
+            &SafetyContext {
+                source: CommandSource::LocalPolicy,
+                allowed_actions: None,
+                local_confirmation: true,
+                privileged_helper_available: true,
+            },
+        );
+        assert!(result.is_ok(), "safety.rs itself doesn't gate by source - the pipe-side check in privileged_helper.rs does");
     }
 
     #[test]

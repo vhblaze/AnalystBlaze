@@ -1747,6 +1747,8 @@ fn supported_actions() -> &'static [&'static str] {
         "APPLY_NETWORK_TUNE",
         "REVERT_NETWORK_TUNE",
         "RESET_WINSOCK_CATALOG",
+        "START_FRAME_CAPTURE",
+        "STOP_FRAME_CAPTURE",
     ]
 }
 

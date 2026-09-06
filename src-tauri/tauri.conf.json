@@ -30,7 +30,8 @@
     "targets": "all",
     "createUpdaterArtifacts": true,
     "resources": {
-      "installer/helper-service.ps1": "helper-service.ps1"
+      "installer/helper-service.ps1": "helper-service.ps1",
+      "installer/vendor/PresentMon-2.5.1-x64.exe": "PresentMon.exe"
     },
     "windows": {
       "webviewInstallMode": {

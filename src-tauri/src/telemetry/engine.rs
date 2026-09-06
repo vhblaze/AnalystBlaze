@@ -639,6 +639,63 @@ impl TelemetryEngine {
         }
     }
 
+    /// Uploads any PresentMon captures that finished locally (see
+    /// optimizations::frame_capture_control) since the last tick. This is
+    /// their only route to the server: frame_capture_control itself has no
+    /// backend credentials, only this engine loop does, so a capture
+    /// finishing just queues to disk and waits for whichever tick comes
+    /// next. Each queued entry is removed only once its own POST succeeds,
+    /// so a network hiccup mid-batch leaves the rest for the next tick
+    /// instead of dropping them.
+    async fn upload_pending_frame_captures(&mut self, access_token: &str, hw_id: Uuid) {
+        let queued = optimizations::frame_capture_control::queued_frame_capture_uploads();
+        if queued.is_empty() {
+            return;
+        }
+
+        for mut entry in queued {
+            let Some(local_queue_id) = entry
+                .get("localQueueId")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if let Some(object) = entry.as_object_mut() {
+                object.remove("localQueueId");
+                object.insert("deviceId".to_string(), json!(hw_id.to_string()));
+            }
+
+            match self
+                .api
+                .post_frame_capture_session(access_token, hw_id, &entry)
+                .await
+            {
+                Ok(()) => {
+                    optimizations::frame_capture_control::discard_queued_frame_capture_upload(
+                        &local_queue_id,
+                    );
+                }
+                Err(error) => {
+                    // Leave it queued and move on to the next entry instead
+                    // of stopping the whole batch on one failure - a
+                    // permanently-invalid entry (bad payload) would
+                    // otherwise poison-pill every entry queued behind it
+                    // forever. MAX_QUEUED_UPLOADS still bounds how long a
+                    // stuck entry can occupy a slot. Not routed through
+                    // record_backend_failure's backoff - a bad capture entry
+                    // shouldn't throttle command polling.
+                    let _ = crate::audit::record_event(
+                        "warn",
+                        "frame_capture.upload_failed",
+                        "Falha ao enviar captura de frames ao backend.",
+                        json!({ "error": error }),
+                    );
+                }
+            }
+        }
+    }
+
     async fn poll_commands(&mut self) {
         if self.backend_in_backoff() {
             return;
@@ -647,6 +704,8 @@ impl TelemetryEngine {
         let Some((access_token, hw_id, hw_secret)) = self.credentials() else {
             return;
         };
+
+        self.upload_pending_frame_captures(&access_token, hw_id).await;
 
         if !self.has_usable_policy() {
             self.refresh_agent_policy().await;

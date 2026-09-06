@@ -458,6 +458,29 @@ impl ApiClient {
         ok_empty(response).await
     }
 
+    /// Ground-truth PresentMon capture stats for one Modo Gamer session -
+    /// see app/models/performance.py's FrameCaptureSession docstring for why
+    /// this exists as its own endpoint instead of folding into the
+    /// performance summary above.
+    pub async fn post_frame_capture_session(
+        &self,
+        access_token: &str,
+        hw_id: Uuid,
+        session: &Value,
+    ) -> Result<(), String> {
+        let response = self
+            .http
+            .post(self.url("/api/v1/performance/frame-capture/sessions"))
+            .bearer_auth(access_token)
+            .header("X-AnalystBlaze-Hardware-Id", hw_id.to_string())
+            .json(session)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+
+        ok_empty(response).await
+    }
+
     pub async fn next_commands(
         &self,
         access_token: &str,
