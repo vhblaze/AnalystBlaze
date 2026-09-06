@@ -85,8 +85,11 @@ pub async fn restore_startup_app(payload: Option<Value>) -> ExecutionResult {
 /// Update, print spooler, etc.) - it's the small set of well-known,
 /// widely-recommended "safe to pause while gaming" services.
 const GAME_MODE_PAUSABLE_SERVICES: &[&str] = &[
-    "SysMain", // Superfetch - preloads apps into RAM based on usage patterns
-    "WSearch", // Windows Search - background file indexing
+    "SysMain",  // Superfetch - preloads apps into RAM based on usage patterns
+    "WSearch",  // Windows Search - background file indexing
+    "DiagTrack", // Connected User Experiences and Telemetry - Microsoft's own
+                 // telemetry upload service, periodic background CPU/network
+                 // use with zero relevance to what the user is doing
 ];
 
 /// Stops whichever of GAME_MODE_PAUSABLE_SERVICES are actually running,
