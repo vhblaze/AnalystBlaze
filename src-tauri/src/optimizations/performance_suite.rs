@@ -3,10 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::thread;
 use std::time::{Duration, SystemTime};
-use sysinfo::System;
 use uuid::Uuid;
 
 use super::{
@@ -189,6 +186,17 @@ pub struct PcCleanFastOptions {
     pub include_gaming: bool,
 }
 
+/// A startup app moved out of Windows' normal startup sequence. Despite the
+/// name (kept for the local JSON file's/API's backward compatibility) and
+/// the still-accepted `delay_seconds` parameter, this is a one-way disable
+/// with a reversible snapshot, NOT a "launch it later automatically" queue.
+/// That auto-relaunch behavior existed once and got removed after a real
+/// report from the field: a delayed app (Epic Games Launcher) popping open
+/// on its own a couple minutes into a session is exactly the kind of
+/// surprise performance hit this product exists to prevent, not cause.
+/// The app now only starts again when Windows would anyway (the user
+/// restores it via RESTORE_DELAYED_STARTUP_APP, taking effect next boot)
+/// or when the user opens it themselves.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct DelayedStartupRecord {
@@ -198,8 +206,6 @@ struct DelayedStartupRecord {
     delay_seconds: u64,
     created_at: i64,
     disabled_snapshot_id: Option<String>,
-    launch_supported: bool,
-    last_launched_boot_id: Option<i64>,
 }
 
 #[derive(Debug, Default)]
@@ -366,8 +372,6 @@ pub async fn delay_startup_app(
         delay_seconds,
         created_at: chrono::Utc::now().timestamp(),
         disabled_snapshot_id: snapshot_id.clone(),
-        launch_supported: parse_launch_command(&app.command).is_some(),
-        last_launched_boot_id: None,
     };
 
     match upsert_delayed_startup_record(record.clone()) {
@@ -646,49 +650,6 @@ pub fn restore_performance_session(session_id: Option<String>) -> ExecutionResul
             "restore": report,
         }),
     }
-}
-
-pub fn spawn_delayed_startup_runner() {
-    thread::spawn(|| {
-        let records = match read_delayed_startup_records() {
-            Ok(records) => records,
-            Err(_) => return,
-        };
-        if records.is_empty() {
-            return;
-        }
-        let boot_id = current_boot_id();
-        let mut updated = records.clone();
-
-        for record in records {
-            if !record.launch_supported || record.last_launched_boot_id == Some(boot_id) {
-                continue;
-            }
-            let Some((program, args)) = parse_launch_command(&record.command) else {
-                continue;
-            };
-            thread::sleep(Duration::from_secs(record.delay_seconds));
-            if Command::new(&program).args(args).spawn().is_ok() {
-                if let Some(stored) = updated.iter_mut().find(|item| {
-                    item.name.eq_ignore_ascii_case(&record.name)
-                        && item.location.eq_ignore_ascii_case(&record.location)
-                }) {
-                    stored.last_launched_boot_id = Some(boot_id);
-                }
-                let _ = audit::record_event(
-                    "info",
-                    "performance.delayed_startup_launched",
-                    "App de inicializacao atrasada executado pelo agente local.",
-                    json!({
-                        "name": record.name,
-                        "delay_seconds": record.delay_seconds,
-                    }),
-                );
-            }
-        }
-
-        let _ = write_delayed_startup_records(&updated);
-    });
 }
 
 pub fn performance_summary_payload(report: &PerformanceReport) -> Value {
@@ -1739,59 +1700,6 @@ fn write_delayed_startup_records(records: &[DelayedStartupRecord]) -> Result<(),
     write_json_file(&delayed_startup_path(), records)
 }
 
-fn parse_launch_command(command: &str) -> Option<(PathBuf, Vec<String>)> {
-    let expanded = expand_env_vars(command.trim());
-    let parts = split_command_line(&expanded);
-    let program = PathBuf::from(parts.first()?.trim_matches('"'));
-    if !program.is_file() {
-        return None;
-    }
-    let executable = program
-        .extension()
-        .and_then(|value| value.to_str())
-        .map(|value| value.eq_ignore_ascii_case("exe"))
-        .unwrap_or(false);
-    if !executable {
-        return None;
-    }
-    Some((program, parts.into_iter().skip(1).collect()))
-}
-
-fn split_command_line(value: &str) -> Vec<String> {
-    let mut parts = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    for ch in value.chars() {
-        if ch == '"' {
-            in_quotes = !in_quotes;
-            continue;
-        }
-        if ch.is_whitespace() && !in_quotes {
-            if !current.is_empty() {
-                parts.push(current.clone());
-                current.clear();
-            }
-            continue;
-        }
-        current.push(ch);
-    }
-    if !current.is_empty() {
-        parts.push(current);
-    }
-    parts
-}
-
-fn expand_env_vars(value: &str) -> String {
-    let mut output = value.to_string();
-    for (key, val) in std::env::vars() {
-        let pattern = format!("%{key}%");
-        if output.contains(&pattern) {
-            output = output.replace(&pattern, &val);
-        }
-    }
-    output
-}
-
 fn user_temp_targets() -> Vec<PathBuf> {
     let mut targets = Vec::new();
     push_unique_dir(&mut targets, std::env::temp_dir());
@@ -2085,10 +1993,6 @@ fn default_true() -> bool {
     true
 }
 
-fn current_boot_id() -> i64 {
-    chrono::Utc::now().timestamp() - System::uptime() as i64
-}
-
 fn unknown_performance_change() -> String {
     "unknown".to_string()
 }
@@ -2097,8 +2001,7 @@ fn unknown_performance_change() -> String {
 mod tests {
     use super::{
         measured_gain_percent_from_delta, performance_change_label, score_change_percent,
-        score_delta_points, split_command_line, startup_impact_from_app,
-        windows_inventory::StartupApp,
+        score_delta_points, startup_impact_from_app, windows_inventory::StartupApp,
     };
 
     #[test]
@@ -2114,13 +2017,6 @@ mod tests {
         assert_eq!(performance_change_label(Some(-7.0)), "regressed");
         assert_eq!(performance_change_label(Some(0.6)), "stable");
         assert_eq!(performance_change_label(None), "unknown");
-    }
-
-    #[test]
-    fn parses_simple_quoted_startup_command() {
-        let parts = split_command_line("\"C:\\Program Files\\App\\app.exe\" --silent");
-        assert_eq!(parts[0], "C:\\Program Files\\App\\app.exe");
-        assert_eq!(parts[1], "--silent");
     }
 
     #[test]

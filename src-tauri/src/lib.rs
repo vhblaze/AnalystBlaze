@@ -1717,7 +1717,6 @@ pub fn run() {
                 let _ = ensure_agent_running(&state, app.handle());
             }
             spawn_plan_sync_loop(app.handle().clone());
-            optimizations::performance_suite::spawn_delayed_startup_runner();
 
             // The window starts hidden (see tauri.conf.json) regardless of how
             // it was launched, so this is the single place that decides
