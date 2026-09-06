@@ -373,6 +373,8 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
     let optimize_visual_effects = payload_bool(payload.as_ref(), "optimize_visual_effects", true);
     let optimize_process_priorities =
         payload_bool(payload.as_ref(), "optimize_process_priorities", true);
+    let stop_nonessential_services =
+        payload_bool(payload.as_ref(), "stop_nonessential_services", true);
     let auto_restore = payload_bool(payload.as_ref(), "auto_restore", true);
     let detected_game = detection::detect_game_process_with_payload(payload.as_ref());
     let target_pid = detected_game
@@ -426,14 +428,26 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
             json!({ "implemented": true, "skipped_by_policy": true }),
         )
     };
+    let (services, services_snapshot_ids) = if stop_nonessential_services {
+        windows_actions::stop_nonessential_services_for_game_mode().await
+    } else {
+        (
+            ExecutionResult::ok(
+                "Pausa de servicos ignorada pela policy local.",
+                json!({ "implemented": true, "skipped_by_policy": true }),
+            ),
+            Vec::new(),
+        )
+    };
     let foreground = detection::detect_foreground_game(payload).await;
-    let snapshot_ids = collect_snapshot_ids([
+    let mut snapshot_ids = collect_snapshot_ids([
         &power.details,
         &cleanup.details,
         &focus.details,
         &visual_effects_result.details,
         &process_priorities.details,
     ]);
+    snapshot_ids.extend(services_snapshot_ids);
     let after = json!({
         "powerPlan": current_power_plan_value(),
         "targetPid": target_pid,
@@ -521,6 +535,7 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
                 "enter_focus_mode": enter_focus_mode,
                 "optimize_visual_effects": optimize_visual_effects,
                 "optimize_process_priorities": optimize_process_priorities,
+                "stop_nonessential_services": stop_nonessential_services,
                 "auto_restore": auto_restore,
             },
             "detected_game": detected_game,
@@ -568,6 +583,11 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
                     "success": process_priorities.success,
                     "message": process_priorities.message,
                     "details": process_priorities.details,
+                },
+                "services": {
+                    "success": services.success,
+                    "message": services.message,
+                    "details": services.details,
                 },
                 "foreground": {
                     "success": foreground.success,

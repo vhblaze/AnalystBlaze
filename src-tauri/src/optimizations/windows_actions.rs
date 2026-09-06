@@ -75,6 +75,85 @@ pub async fn restore_startup_app(payload: Option<Value>) -> ExecutionResult {
     }
 }
 
+/// Services worth pausing for the duration of a game session - each one is
+/// non-critical background work that competes for CPU/disk/RAM (SysMain in
+/// particular actively works AGAINST optimizations::memory's standby-list
+/// clear, since its whole job is preloading apps back into RAM). Kept
+/// short and conservative on purpose: `safety::is_critical_service` already
+/// refuses anything actually load-bearing, but the point here isn't "stop
+/// everything non-critical" (that's a much longer, riskier list - Windows
+/// Update, print spooler, etc.) - it's the small set of well-known,
+/// widely-recommended "safe to pause while gaming" services.
+const GAME_MODE_PAUSABLE_SERVICES: &[&str] = &[
+    "SysMain", // Superfetch - preloads apps into RAM based on usage patterns
+    "WSearch", // Windows Search - background file indexing
+];
+
+/// Stops whichever of GAME_MODE_PAUSABLE_SERVICES are actually running,
+/// each through the same snapshot-backed stop_service_sync used by the
+/// standalone STOP_SERVICE action - so restoring the Modo Gamer session
+/// (either path: process-exit monitor or manual restore) already knows how
+/// to bring them back via the existing SnapshotEntry::ServiceState restore,
+/// no new restore logic needed. Returns the combined step result (for the
+/// same steps.* reporting shape apply_game_mode already builds) and the
+/// flat list of snapshot ids to fold into the session's snapshot_ids.
+pub async fn stop_nonessential_services_for_game_mode() -> (ExecutionResult, Vec<String>) {
+    let results: Vec<(String, ExecutionResult)> =
+        stop_each_sequentially(GAME_MODE_PAUSABLE_SERVICES).await;
+
+    let snapshot_ids: Vec<String> = results
+        .iter()
+        .filter_map(|(_, result)| {
+            result
+                .details
+                .pointer("/snapshot/id")
+                .and_then(Value::as_str)
+                .map(|value| value.to_string())
+        })
+        .collect();
+    let stopped: Vec<&str> = results
+        .iter()
+        .filter(|(_, result)| result.success && result.details.get("changed") == Some(&json!(true)))
+        .map(|(name, _)| name.as_str())
+        .collect();
+
+    let summary = ExecutionResult {
+        // Never the reason Modo Gamer itself reports failure - a service
+        // that's already stopped, missing, or access-denied just means one
+        // less thing paused, not a broken activation.
+        success: true,
+        message: if stopped.is_empty() {
+            "Nenhum servico adicional precisou ser pausado.".to_string()
+        } else {
+            format!("Servicos pausados durante o jogo: {}.", stopped.join(", "))
+        },
+        details: json!({
+            "implemented": true,
+            "stopped": stopped,
+            "attempted": GAME_MODE_PAUSABLE_SERVICES,
+            "results": results
+                .iter()
+                .map(|(name, result)| json!({
+                    "service": name,
+                    "success": result.success,
+                    "message": result.message,
+                }))
+                .collect::<Vec<_>>(),
+        }),
+    };
+
+    (summary, snapshot_ids)
+}
+
+async fn stop_each_sequentially(services: &[&str]) -> Vec<(String, ExecutionResult)> {
+    let mut results = Vec::with_capacity(services.len());
+    for service in services {
+        let result = stop_service(Some(json!({ "service": service }))).await;
+        results.push(((*service).to_string(), result));
+    }
+    results
+}
+
 pub async fn stop_service(payload: Option<Value>) -> ExecutionResult {
     let target = extract_payload_string(
         payload.as_ref(),
