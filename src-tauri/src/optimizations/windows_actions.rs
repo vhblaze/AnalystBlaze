@@ -193,6 +193,11 @@ const GAME_MODE_CLOSABLE_APPS: &[&str] = &[
     // Xbox Game Bar's own widgets host - same category again, and a real
     // footprint in practice (measured ~170MB on a real machine).
     "XboxGameBarWidgets.exe",
+    // The full Xbox PC app (library, friends chat, cloud saves) - heavier
+    // and more stateful than the overlay/widgets above, so it leans on the
+    // same active-use protection Discord/Spotify get rather than the
+    // "vendor overlay, no real state" reasoning those two used.
+    "XboxPcAppFT.exe",
 ];
 
 /// Closes whichever of GAME_MODE_CLOSABLE_APPS are running and NOT in
