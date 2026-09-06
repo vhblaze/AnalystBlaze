@@ -187,6 +187,9 @@ const GAME_MODE_CLOSABLE_APPS: &[&str] = &[
     // ships as part of Edge) - same category as NVIDIA Overlay: a vendor
     // overlay helper, not something holding user state.
     "EdgeGameAssist.exe",
+    // Xbox Game Bar's own widgets host - same category again, and a real
+    // footprint in practice (measured ~170MB on a real machine).
+    "XboxGameBarWidgets.exe",
 ];
 
 /// Closes whichever of GAME_MODE_CLOSABLE_APPS are running and NOT in
