@@ -194,8 +194,57 @@ pub async fn close_nonessential_apps_for_game_mode() -> ExecutionResult {
     }
 }
 
+/// Groups every running process matching a GAME_MODE_CLOSABLE_APPS name by
+/// that name, then decides per GROUP (never per pid) whether it's in active
+/// use - see close_nonessential_apps_for_game_mode_sync's doc comment for
+/// why per-pid checking is the wrong granularity for a multi-process app.
+/// Pure and OS-call-free on purpose, so the actual grouping/skip decision -
+/// the part that was wrong before - has a real regression test instead of
+/// only "it compiles and looks right".
+fn group_closable_processes_by_name<N: AsRef<str>>(
+    processes: impl IntoIterator<Item = (u32, N)>,
+) -> std::collections::HashMap<&'static str, Vec<u32>> {
+    let mut candidates: std::collections::HashMap<&'static str, Vec<u32>> =
+        std::collections::HashMap::new();
+    for (pid, name) in processes {
+        if let Some(&matched) = GAME_MODE_CLOSABLE_APPS
+            .iter()
+            .find(|candidate| candidate.eq_ignore_ascii_case(name.as_ref()))
+        {
+            candidates.entry(matched).or_default().push(pid);
+        }
+    }
+    candidates
+}
+
+/// Splits grouped candidates into (names safe to close, names skipped
+/// because at least one of their pids is in active use). Still pure: takes
+/// the active-use signals as plain data rather than calling
+/// active_use::foreground_process_id()/processes_with_active_audio_session()
+/// itself.
+fn partition_closable_groups<'a>(
+    candidates: &std::collections::HashMap<&'a str, Vec<u32>>,
+    foreground_pid: Option<u32>,
+    active_audio_pids: &std::collections::HashSet<u32>,
+) -> (Vec<&'a str>, Vec<&'a str>) {
+    let mut closable = Vec::new();
+    let mut skipped_active_use = Vec::new();
+    for (&name, pids) in candidates {
+        let any_pid_active = pids.iter().any(|&pid| {
+            super::active_use::is_in_active_use(pid, foreground_pid, active_audio_pids)
+        });
+        if any_pid_active {
+            skipped_active_use.push(name);
+        } else {
+            closable.push(name);
+        }
+    }
+    closable.sort_unstable();
+    skipped_active_use.sort_unstable();
+    (closable, skipped_active_use)
+}
+
 fn close_nonessential_apps_for_game_mode_sync() -> ExecutionResult {
-    use std::collections::BTreeSet;
     use sysinfo::{ProcessesToUpdate, System};
 
     let foreground_pid = super::active_use::foreground_process_id();
@@ -204,30 +253,31 @@ fn close_nonessential_apps_for_game_mode_sync() -> ExecutionResult {
     let mut system = System::new_all();
     system.refresh_processes(ProcessesToUpdate::All, true);
 
-    let mut closed: BTreeSet<&str> = BTreeSet::new();
-    let mut skipped_active_use: BTreeSet<&str> = BTreeSet::new();
-
-    for (pid, process) in system.processes() {
-        let name = process.name().to_string_lossy();
-        let Some(&matched) = GAME_MODE_CLOSABLE_APPS
+    let candidates = group_closable_processes_by_name(
+        system
+            .processes()
             .iter()
-            .find(|candidate| candidate.eq_ignore_ascii_case(&name))
-        else {
+            .map(|(pid, process)| (pid.as_u32(), process.name().to_string_lossy())),
+    );
+
+    let (closable_names, skipped_active_use) =
+        partition_closable_groups(&candidates, foreground_pid, &active_audio_pids);
+
+    let mut closed = Vec::new();
+    for name in closable_names {
+        let Some(pids) = candidates.get(name) else {
             continue;
         };
-
-        if super::active_use::is_in_active_use(pid.as_u32(), foreground_pid, &active_audio_pids) {
-            skipped_active_use.insert(matched);
-            continue;
+        let mut any_killed = false;
+        for &pid in pids {
+            if let Some(process) = system.process(sysinfo::Pid::from_u32(pid)) {
+                any_killed |= process.kill();
+            }
         }
-
-        if process.kill() {
-            closed.insert(matched);
+        if any_killed {
+            closed.push(name);
         }
     }
-
-    let closed: Vec<&str> = closed.into_iter().collect();
-    let skipped_active_use: Vec<&str> = skipped_active_use.into_iter().collect();
 
     ExecutionResult::ok(
         // Same "never the reason Modo Gamer reports failure" rule as
@@ -691,4 +741,85 @@ fn extract_payload_string(payload: Option<&Value>, keys: &[&str]) -> Option<Stri
         .find_map(|key| payload.get(*key).and_then(Value::as_str))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+#[cfg(test)]
+mod closable_apps_tests {
+    use super::{group_closable_processes_by_name, partition_closable_groups};
+    use std::collections::HashSet;
+
+    // Regression test for a real bug found in the field: Discord runs
+    // several distinct "Discord.exe" processes (main, renderer, GPU,
+    // utility), and only the one actually carrying a voice call's audio
+    // stream showed up as "active" - checking active-use per PID instead of
+    // per app closed a Discord process out from under a live call, even
+    // though a *different* Discord pid was correctly flagged as active.
+    #[test]
+    fn a_multi_process_app_is_fully_protected_if_any_of_its_pids_is_in_a_call() {
+        // Three real-shaped Discord pids: one owns the foreground window,
+        // one is the audio-active voice-call process, one is an idle
+        // renderer with neither signal - none should be considered
+        // closable, because they all share the "Discord.exe" identity.
+        let processes = [
+            (100u32, "Discord.exe"),
+            (101u32, "Discord.exe"),
+            (102u32, "Discord.exe"),
+            (200u32, "Spotify.exe"),
+        ];
+        let candidates = group_closable_processes_by_name(processes.into_iter());
+        assert_eq!(candidates.get("Discord.exe").map(Vec::len), Some(3));
+
+        let foreground_pid = Some(100u32);
+        let active_audio_pids: HashSet<u32> = [101u32].into_iter().collect();
+
+        let (closable, skipped) =
+            partition_closable_groups(&candidates, foreground_pid, &active_audio_pids);
+
+        assert!(
+            !closable.contains(&"Discord.exe"),
+            "Discord has an active pid (101, the voice call) - none of its \
+             processes should be closable, not just pid 101 itself"
+        );
+        assert!(skipped.contains(&"Discord.exe"));
+        assert!(
+            closable.contains(&"Spotify.exe"),
+            "Spotify has no active pid at all, so it should remain closable"
+        );
+    }
+
+    #[test]
+    fn an_app_with_no_active_signal_at_all_is_closable() {
+        let processes = [(300u32, "Voicemod.exe")];
+        let candidates = group_closable_processes_by_name(processes.into_iter());
+        let (closable, skipped) = partition_closable_groups(&candidates, None, &HashSet::new());
+
+        assert_eq!(closable, vec!["Voicemod.exe"]);
+        assert!(skipped.is_empty());
+    }
+
+    #[test]
+    fn matching_is_case_insensitive_and_ignores_unrelated_processes() {
+        let processes = [
+            (1u32, "DISCORD.EXE"),
+            (2u32, "explorer.exe"),
+            (3u32, "svchost.exe"),
+        ];
+        let candidates = group_closable_processes_by_name(processes.into_iter());
+
+        assert_eq!(candidates.get("Discord.exe").map(Vec::len), Some(1));
+        assert_eq!(candidates.len(), 1, "only the Discord match should be grouped at all");
+    }
+
+    #[test]
+    fn foreground_window_alone_protects_every_pid_of_that_app() {
+        let processes = [(10u32, "WhatsApp.Root.exe"), (11u32, "WhatsApp.Root.exe")];
+        let candidates = group_closable_processes_by_name(processes.into_iter());
+
+        // pid 11 owns the foreground window, not 10 - both still protected.
+        let (closable, skipped) =
+            partition_closable_groups(&candidates, Some(11), &HashSet::new());
+
+        assert!(closable.is_empty());
+        assert_eq!(skipped, vec!["WhatsApp.Root.exe"]);
+    }
 }
