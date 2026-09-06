@@ -183,6 +183,10 @@ const GAME_MODE_CLOSABLE_APPS: &[&str] = &[
     "NVIDIA Overlay.exe",
     "Skype.exe",
     "Telegram.exe",
+    // Microsoft's own gaming-companion overlay (Xbox Game Bar-adjacent,
+    // ships as part of Edge) - same category as NVIDIA Overlay: a vendor
+    // overlay helper, not something holding user state.
+    "EdgeGameAssist.exe",
 ];
 
 /// Closes whichever of GAME_MODE_CLOSABLE_APPS are running and NOT in
