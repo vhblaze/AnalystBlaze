@@ -435,6 +435,7 @@ export function DiskExplorer({
   );
   const treemapItems = sortedChildren.filter((item) => !deletingPaths.has(item.path));
   const folderTotalBytes = children.reduce((sum, item) => sum + item.sizeBytes, 0);
+  const totalDirCount = children.filter((item) => item.isDir).length;
   const selectableChildren = sortedChildren.filter((item) => item.actionable && !deletingPaths.has(item.path));
   const allSelected = selectableChildren.length > 0 && selectableChildren.every((item) => selectedPaths.has(item.path));
   const toggleSelectAll = () => {
@@ -586,6 +587,18 @@ export function DiskExplorer({
                 <span className="text-sm text-slate-300">
                   {t("diskExplorer.folderTotal", { size: formatBytes(folderTotalBytes) })}
                 </span>
+                {pendingSizePaths.size > 0 && (
+                  <span
+                    className="inline-flex items-center gap-1.5 rounded-md border border-cyan-400/20 bg-cyan-400/5 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-cyan-200/80"
+                    title={t("diskExplorer.calculatingSizesHint")}
+                  >
+                    <RefreshCw className="h-3 w-3 animate-spin" />
+                    {t("diskExplorer.calculatingSizes", {
+                      done: totalDirCount - pendingSizePaths.size,
+                      total: totalDirCount,
+                    })}
+                  </span>
+                )}
               </div>
               <DiskTreemapLegend t={t} />
             </div>
