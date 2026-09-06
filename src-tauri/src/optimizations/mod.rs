@@ -1,3 +1,4 @@
+pub mod active_use;
 pub mod adaptive;
 pub mod app_usage;
 pub mod autostart;
@@ -375,6 +376,8 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
         payload_bool(payload.as_ref(), "optimize_process_priorities", true);
     let stop_nonessential_services =
         payload_bool(payload.as_ref(), "stop_nonessential_services", true);
+    let close_nonessential_apps =
+        payload_bool(payload.as_ref(), "close_nonessential_apps", true);
     let auto_restore = payload_bool(payload.as_ref(), "auto_restore", true);
     let detected_game = detection::detect_game_process_with_payload(payload.as_ref());
     let target_pid = detected_game
@@ -437,6 +440,14 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
                 json!({ "implemented": true, "skipped_by_policy": true }),
             ),
             Vec::new(),
+        )
+    };
+    let apps = if close_nonessential_apps {
+        windows_actions::close_nonessential_apps_for_game_mode().await
+    } else {
+        ExecutionResult::ok(
+            "Fechamento de apps ignorado pela policy local.",
+            json!({ "implemented": true, "skipped_by_policy": true }),
         )
     };
     let foreground = detection::detect_foreground_game(payload).await;
@@ -536,6 +547,7 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
                 "optimize_visual_effects": optimize_visual_effects,
                 "optimize_process_priorities": optimize_process_priorities,
                 "stop_nonessential_services": stop_nonessential_services,
+                "close_nonessential_apps": close_nonessential_apps,
                 "auto_restore": auto_restore,
             },
             "detected_game": detected_game,
@@ -588,6 +600,11 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
                     "success": services.success,
                     "message": services.message,
                     "details": services.details,
+                },
+                "apps": {
+                    "success": apps.success,
+                    "message": apps.message,
+                    "details": apps.details,
                 },
                 "foreground": {
                     "success": foreground.success,

@@ -154,6 +154,99 @@ async fn stop_each_sequentially(services: &[&str]) -> Vec<(String, ExecutionResu
     results
 }
 
+/// Apps well-known enough, and lightweight enough, to close and relaunch
+/// without losing anything a user would notice - communication/media apps
+/// with no unsaved-document concept of their own, matched by exact process
+/// image name only. Deliberately an ALLOWLIST, not "anything not on some
+/// protected-apps denylist": protected_apps.rs's list was built to guard
+/// DISABLE_STARTUP_APP (security tools, VPNs, drivers), never vetted as
+/// "safe to force-close a running instance of" - a browser mid-video-call,
+/// an editor with an unsaved tab, or the game itself would all pass a
+/// denylist check while being exactly the wrong things to close. Growing
+/// this list is a one-line addition once a candidate has actually been
+/// reviewed, not something to do speculatively.
+const GAME_MODE_CLOSABLE_APPS: &[&str] = &[
+    "Discord.exe",
+    "Spotify.exe",
+    "WhatsApp.Root.exe",
+    "Voicemod.exe",
+    "NVIDIA Overlay.exe",
+    "Skype.exe",
+    "Telegram.exe",
+];
+
+/// Closes whichever of GAME_MODE_CLOSABLE_APPS are running and NOT in
+/// active use right now (see active_use.rs: not the foreground window, no
+/// live audio session on either the speaker or microphone side) - a
+/// process someone's actively talking through, listening to, or looking
+/// at is skipped even if it's on the list. Unlike stop_nonessential_services,
+/// this has no snapshot/restore: closing an app isn't a toggle to undo,
+/// it's the same one-way action as EMPTY_TEMP - the app relaunches itself
+/// next time the user opens it, same as if they'd closed it by hand.
+pub async fn close_nonessential_apps_for_game_mode() -> ExecutionResult {
+    match tokio::task::spawn_blocking(close_nonessential_apps_for_game_mode_sync).await {
+        Ok(result) => result,
+        Err(error) => ExecutionResult {
+            success: false,
+            message: format!("Falha ao fechar apps nao essenciais: {error}"),
+            details: json!({ "implemented": true }),
+        },
+    }
+}
+
+fn close_nonessential_apps_for_game_mode_sync() -> ExecutionResult {
+    use std::collections::BTreeSet;
+    use sysinfo::{ProcessesToUpdate, System};
+
+    let foreground_pid = super::active_use::foreground_process_id();
+    let active_audio_pids = super::active_use::processes_with_active_audio_session();
+
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+
+    let mut closed: BTreeSet<&str> = BTreeSet::new();
+    let mut skipped_active_use: BTreeSet<&str> = BTreeSet::new();
+
+    for (pid, process) in system.processes() {
+        let name = process.name().to_string_lossy();
+        let Some(&matched) = GAME_MODE_CLOSABLE_APPS
+            .iter()
+            .find(|candidate| candidate.eq_ignore_ascii_case(&name))
+        else {
+            continue;
+        };
+
+        if super::active_use::is_in_active_use(pid.as_u32(), foreground_pid, &active_audio_pids) {
+            skipped_active_use.insert(matched);
+            continue;
+        }
+
+        if process.kill() {
+            closed.insert(matched);
+        }
+    }
+
+    let closed: Vec<&str> = closed.into_iter().collect();
+    let skipped_active_use: Vec<&str> = skipped_active_use.into_iter().collect();
+
+    ExecutionResult::ok(
+        // Same "never the reason Modo Gamer reports failure" rule as
+        // stop_nonessential_services_for_game_mode - nothing to close, or
+        // everything eligible being in active use, is a normal outcome.
+        if closed.is_empty() {
+            "Nenhum app nao essencial precisou ser fechado.".to_string()
+        } else {
+            format!("Apps fechados durante o jogo: {}.", closed.join(", "))
+        },
+        json!({
+            "implemented": true,
+            "closed": closed,
+            "skipped_active_use": skipped_active_use,
+            "candidates": GAME_MODE_CLOSABLE_APPS,
+        }),
+    )
+}
+
 pub async fn stop_service(payload: Option<Value>) -> ExecutionResult {
     let target = extract_payload_string(
         payload.as_ref(),
