@@ -165,11 +165,21 @@ async fn stop_each_sequentially(services: &[&str]) -> Vec<(String, ExecutionResu
 /// denylist check while being exactly the wrong things to close. Growing
 /// this list is a one-line addition once a candidate has actually been
 /// reviewed, not something to do speculatively.
+///
+/// Real-time audio/voice processing tools (Voicemod and anything like it)
+/// deliberately do NOT belong on this list, even with the active-use check
+/// in place - found the hard way in the field: silence between spoken
+/// words is normal for a mic pipe someone is actively using for a call, not
+/// evidence they're done with it, and Core Audio's "active session" signal
+/// isn't a reliable enough proxy for "this tool is mid-use" the way it is
+/// for something like Spotify. And unlike Spotify, relaunching one mid-game
+/// often means reconfiguring it (reselecting the voice, reconnecting it as
+/// the game/Discord's input device) rather than just picking up where it
+/// left off - a real disruption, not a minor one.
 const GAME_MODE_CLOSABLE_APPS: &[&str] = &[
     "Discord.exe",
     "Spotify.exe",
     "WhatsApp.Root.exe",
-    "Voicemod.exe",
     "NVIDIA Overlay.exe",
     "Skype.exe",
     "Telegram.exe",
@@ -789,11 +799,11 @@ mod closable_apps_tests {
 
     #[test]
     fn an_app_with_no_active_signal_at_all_is_closable() {
-        let processes = [(300u32, "Voicemod.exe")];
+        let processes = [(300u32, "Telegram.exe")];
         let candidates = group_closable_processes_by_name(processes.into_iter());
         let (closable, skipped) = partition_closable_groups(&candidates, None, &HashSet::new());
 
-        assert_eq!(closable, vec!["Voicemod.exe"]);
+        assert_eq!(closable, vec!["Telegram.exe"]);
         assert!(skipped.is_empty());
     }
 
