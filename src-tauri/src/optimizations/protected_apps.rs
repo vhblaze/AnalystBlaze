@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use super::snapshot;
 use crate::audit;
@@ -91,17 +93,44 @@ pub fn is_protected_app(name: &str) -> bool {
             .any(|app| same_app_name(&app.name, &normalized))
 }
 
+/// `is_protected_app` (via this) is now called on every single file/folder
+/// visited by the disk-tree walk and the protected-descendant scan, not
+/// just once per top-level item - re-reading and re-parsing this JSON file
+/// from disk on every one of those calls is what made browsing/deleting
+/// large folders burn CPU. Cached keyed on the file's own mtime (a single
+/// cheap stat) instead: unchanged between calls (the overwhelming common
+/// case mid-scan) skips the read+parse entirely, while an edit made
+/// through the Protected Apps UI is still picked up on the next call.
+type UserAppsCache = Mutex<Option<(SystemTime, Vec<ProtectedApp>)>>;
+
 fn load_user_apps() -> Vec<ProtectedApp> {
+    static CACHE: OnceLock<UserAppsCache> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(None));
+
     let path = protected_apps_path();
-    let Ok(raw) = fs::read_to_string(path) else {
+    let mtime = fs::metadata(&path).and_then(|meta| meta.modified()).ok();
+
+    let mut guard = cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let (Some(mtime), Some((cached_mtime, cached_apps))) = (mtime, guard.as_ref()) {
+        if *cached_mtime == mtime {
+            return cached_apps.clone();
+        }
+    }
+
+    let Ok(raw) = fs::read_to_string(&path) else {
+        *guard = None;
         return Vec::new();
     };
-
-    serde_json::from_str::<Vec<ProtectedApp>>(&raw)
+    let apps: Vec<ProtectedApp> = serde_json::from_str::<Vec<ProtectedApp>>(&raw)
         .unwrap_or_default()
         .into_iter()
         .filter(|app| !normalize_app_name(&app.name).is_empty())
-        .collect()
+        .collect();
+
+    if let Some(mtime) = mtime {
+        *guard = Some((mtime, apps.clone()));
+    }
+    apps
 }
 
 fn save_user_apps(apps: &[ProtectedApp]) -> Result<(), String> {

@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
@@ -755,22 +755,40 @@ pub fn validate_deletable_path(raw_path: &str) -> Result<PathBuf, String> {
 /// System Volume Information, ProgramData, boot/recovery partitionish
 /// folders, and the well-known paging/hibernation/swap files by name.
 /// Used both to block deletion and to mark tree nodes non-actionable.
+/// Canonicalized once and cached for the process's lifetime rather than
+/// recomputed on every call - `is_system_critical_path` is now called on
+/// every single file/folder visited by the disk-tree walk and the
+/// protected-descendant scan (previously only once per top-level item),
+/// and `fs::canonicalize` is a real filesystem round-trip. None of these
+/// six roots move while the process is running, so caching them is safe -
+/// this used to be 6 canonicalize() syscalls PER ENTRY in a recursive walk
+/// that can touch hundreds of thousands of entries, which is what made
+/// browsing/deleting large folders burn CPU and feel slow.
+fn system_critical_denylist() -> &'static [PathBuf] {
+    static DENYLIST: OnceLock<Vec<PathBuf>> = OnceLock::new();
+    DENYLIST.get_or_init(|| {
+        let system_drive = system_drive_root();
+        let windows_dir = std::env::var_os("WINDIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| system_drive.join("Windows"));
+        [
+            windows_dir,
+            system_drive.join("$Recycle.Bin"),
+            system_drive.join("System Volume Information"),
+            system_drive.join("ProgramData"),
+            system_drive.join("Recovery"),
+            system_drive.join("Boot"),
+        ]
+        .into_iter()
+        .filter_map(|root| fs::canonicalize(&root).ok())
+        .collect()
+    })
+}
+
 pub(crate) fn is_system_critical_path(canonical: &Path) -> bool {
-    let system_drive = system_drive_root();
-    let windows_dir = std::env::var_os("WINDIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| system_drive.join("Windows"));
-    let denylist = [
-        windows_dir,
-        system_drive.join("$Recycle.Bin"),
-        system_drive.join("System Volume Information"),
-        system_drive.join("ProgramData"),
-        system_drive.join("Recovery"),
-        system_drive.join("Boot"),
-    ];
-    if denylist
+    if system_critical_denylist()
         .iter()
-        .any(|root| fs::canonicalize(root).is_ok_and(|root| canonical.starts_with(&root)))
+        .any(|root| canonical.starts_with(root))
     {
         return true;
     }
