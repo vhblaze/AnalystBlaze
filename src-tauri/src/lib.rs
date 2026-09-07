@@ -542,6 +542,22 @@ fn list_disk_volumes() -> Vec<optimizations::disk_tree::DiskVolumeInfo> {
     optimizations::disk_tree::list_volumes()
 }
 
+/// Only relevant to the boot drive being a spinning HDD (see
+/// storage_media.rs) - runs a couple of unelevated PowerShell calls, so
+/// it's spawn_blocking'd rather than called straight from the command
+/// (same reasoning as any other shelled-out check reached from the UI
+/// thread).
+#[tauri::command]
+async fn check_disk_optimization_insight() -> optimizations::storage_media::DiskOptimizationInsight
+{
+    tokio::task::spawn_blocking(optimizations::storage_media::disk_optimization_insight)
+        .await
+        .unwrap_or(optimizations::storage_media::DiskOptimizationInsight {
+            is_hdd: false,
+            defrag: None,
+        })
+}
+
 /// Lists `path`'s immediate children instantly; each directory child's
 /// real recursive size keeps resolving in the background afterwards (D6
 /// "Explorador de Disco" - see disk_tree::list_directory's docs). Because
@@ -1820,6 +1836,7 @@ pub fn run() {
             cancel_disk_usage_scan,
             delete_disk_usage_item,
             list_disk_volumes,
+            check_disk_optimization_insight,
             list_disk_directory,
             cancel_disk_tree_scan,
             detect_live_mode_streaming_app,

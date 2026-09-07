@@ -8,6 +8,7 @@
 //! triggers on launch, which matters far more on a drive with real seek
 //! latency than on an SSD, where SysMain's benefit is already marginal.
 
+use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::OnceLock;
 
@@ -56,9 +57,84 @@ $disk.MediaType
     }
 }
 
+/// Windows' own scheduled optimization ("Defrag and Optimize Drives")
+/// only helps a spinning HDD - an SSD is TRIM'd, not defragmented, and
+/// Windows already knows this (the built-in task optimizes each volume
+/// with whichever method suits its media type). This check is only worth
+/// surfacing at all when system_drive_is_hdd() is true; a caller showing
+/// this to the user must gate on that first; this module doesn't do it
+/// internally so the two facts (media type, task status) stay independent
+/// and each remain unit-testable on their own inputs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledDefragStatus {
+    /// False means the task itself is disabled - nothing gets optimized
+    /// automatically, on any drive, until re-enabled.
+    pub enabled: bool,
+    /// ISO-8601, or None if the task has apparently never run.
+    pub last_run_time: Option<String>,
+    /// 0 means success; anything else (including None, if the task has
+    /// never run) is not itself alarming - Windows also skips the run
+    /// entirely on some conditions (battery power, in an active game,
+    /// etc.), which is normal and not a fault to react to.
+    pub last_task_result: Option<i64>,
+}
+
+/// Combined shape for the D6 "Explorador de Disco" screen's optimization
+/// card - both facts (media type, scheduler status) in one round trip
+/// instead of the frontend making two calls and gating visibility itself.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskOptimizationInsight {
+    pub is_hdd: bool,
+    pub defrag: Option<ScheduledDefragStatus>,
+}
+
+/// Only worth computing the (unelevated but still real) scheduled-defrag
+/// PowerShell round trip when the drive is actually an HDD - on an SSD,
+/// scheduled optimization uses TRIM instead of defragmentation and is
+/// already exactly as it should be regardless of this task's state, so
+/// there's nothing useful to tell the user either way.
+pub fn disk_optimization_insight() -> DiskOptimizationInsight {
+    let is_hdd = system_drive_is_hdd();
+    DiskOptimizationInsight {
+        is_hdd,
+        defrag: if is_hdd { scheduled_defrag_status() } else { None },
+    }
+}
+
+/// Queries Windows' native "ScheduledDefrag" task (Task Scheduler path
+/// `\Microsoft\Windows\Defrag\`) - the same task the Optimize Drives
+/// Control Panel applet manages, verified live against a real machine
+/// (Get-ScheduledTask/Get-ScheduledTaskInfo both work unelevated).
+pub fn scheduled_defrag_status() -> Option<ScheduledDefragStatus> {
+    let script = r#"
+$task = Get-ScheduledTask -TaskPath "\Microsoft\Windows\Defrag\" -TaskName "ScheduledDefrag" -ErrorAction Stop
+$info = Get-ScheduledTaskInfo -TaskPath "\Microsoft\Windows\Defrag\" -TaskName "ScheduledDefrag" -ErrorAction Stop
+[PSCustomObject]@{
+    enabled = ($task.State -ne "Disabled")
+    lastRunTime = if ($info.LastRunTime) { $info.LastRunTime.ToString("o") } else { $null }
+    lastTaskResult = $info.LastTaskResult
+} | ConvertTo-Json -Compress
+"#;
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .no_window()
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = decode_console_bytes(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    serde_json::from_str::<ScheduledDefragStatus>(&text).ok()
+}
+
 #[cfg(test)]
 mod manual_diagnostics {
-    use super::query_system_drive_media_type;
+    use super::{query_system_drive_media_type, scheduled_defrag_status};
 
     /// Not run in CI - prints the real detection result against whatever
     /// machine runs it, the same way active_use.rs's own manual_diagnostics
@@ -68,5 +144,11 @@ mod manual_diagnostics {
     #[ignore]
     fn print_live_media_type() {
         println!("system drive media type: {:?}", query_system_drive_media_type());
+    }
+
+    #[test]
+    #[ignore]
+    fn print_live_scheduled_defrag_status() {
+        println!("scheduled defrag status: {:?}", scheduled_defrag_status());
     }
 }

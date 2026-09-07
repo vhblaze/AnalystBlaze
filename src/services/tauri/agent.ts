@@ -1178,6 +1178,24 @@ export async function listenToDiskUsageProgress(onProgress: (progress: DiskUsage
   return listen<DiskUsageProgress>("disk-usage-scan-progress", (event) => onProgress(event.payload));
 }
 
+export type ScheduledDefragStatus = {
+  enabled: boolean;
+  lastRunTime?: string | null;
+  lastTaskResult?: number | null;
+};
+
+export type DiskOptimizationInsight = {
+  isHdd: boolean;
+  defrag?: ScheduledDefragStatus | null;
+};
+
+/** Only meaningful when isHdd is true - an SSD is TRIM'd, not
+ * defragmented, so `defrag` is always null for one. */
+export async function checkDiskOptimizationInsight(): Promise<DiskOptimizationInsight> {
+  requireTauriRuntime("Explorador de disco");
+  return invoke<DiskOptimizationInsight>("check_disk_optimization_insight");
+}
+
 export async function listDiskVolumes(): Promise<DiskVolumeInfo[]> {
   requireTauriRuntime("Explorador de disco");
   return invoke<DiskVolumeInfo[]>("list_disk_volumes");

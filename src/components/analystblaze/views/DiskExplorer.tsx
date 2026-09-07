@@ -4,6 +4,7 @@ import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
   cancelDiskTreeScan,
+  checkDiskOptimizationInsight,
   deleteDiskUsageItem,
   getDiskUsageSummary,
   isTauriRuntime,
@@ -11,6 +12,7 @@ import {
   listDiskVolumes,
   listenToDiskTreeItemReady,
   listenToDiskTreeProgress,
+  type DiskOptimizationInsight,
   type DiskTreeItemUpdate,
   type DiskTreeNodeSummary,
   type DiskTreeProgress,
@@ -158,6 +160,11 @@ export function DiskExplorer({
   const [volumes, setVolumes] = useState<DiskVolumeInfo[]>([]);
   const [selectedVolume, setSelectedVolume] = useState<string>("");
   const [volumesError, setVolumesError] = useState<string | null>(null);
+  // Only ever non-null when the boot drive is a spinning HDD AND its
+  // scheduled optimization is disabled - see checkDiskOptimizationInsight's
+  // docs. Not tied to whichever volume is currently being browsed; checked
+  // once per screen visit.
+  const [diskOptimizationInsight, setDiskOptimizationInsight] = useState<DiskOptimizationInsight | null>(null);
 
   const [rootPath, setRootPath] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState<string>("");
@@ -207,6 +214,13 @@ export function DiskExplorer({
     // is expected to be a stable callback from AppShell, not something that
     // should re-trigger a fresh scan on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runtimeAvailable]);
+
+  useEffect(() => {
+    if (!runtimeAvailable) return;
+    checkDiskOptimizationInsight()
+      .then((insight) => setDiskOptimizationInsight(insight))
+      .catch(() => undefined);
   }, [runtimeAvailable]);
 
   useEffect(() => {
@@ -473,6 +487,24 @@ export function DiskExplorer({
         </div>
         <h1 className="text-[36px] font-semibold tracking-tight text-slate-50">{t("diskExplorer.title")}</h1>
       </header>
+
+      {diskOptimizationInsight?.isHdd && diskOptimizationInsight.defrag?.enabled === false && (
+        <div className="glass-panel flex flex-col gap-2 rounded-2xl border border-amber-400/25 bg-amber-400/5 p-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+            <div>
+              <div className="text-sm font-semibold text-amber-100">{t("diskExplorer.defragDisabledTitle")}</div>
+              <p className="mt-1 text-xs leading-relaxed text-amber-100/70">{t("diskExplorer.defragDisabledDesc")}</p>
+            </div>
+          </div>
+          <button
+            onClick={() => setDiskOptimizationInsight(null)}
+            className="shrink-0 self-end rounded-lg border border-amber-400/20 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:text-amber-100 sm:self-auto"
+          >
+            {t("common.close")}
+          </button>
+        </div>
+      )}
 
       <section className="glass-panel cyber-glow p-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
