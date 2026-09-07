@@ -267,6 +267,16 @@ fn is_never_game_process(normalized: &str) -> bool {
         || normalized.starts_with("analystblaze")
 }
 
+/// Professional creative/dev tools that legitimately peg both GPU and CPU,
+/// exactly the signal `evaluate_local_policy`'s `(high_gpu && high_cpu)`
+/// fallback uses to guess "gaming". They're excluded here for the same
+/// reason as the browsers/terminals above, not just an afterthought: a
+/// real incident (2026-09) had Blender rendering trigger automatic Game
+/// Mode (RAM purge, service stops, app closures, all at once) on a modest
+/// machine, freezing it. Unlike the terminal/browser entries, these are
+/// added specifically because their normal, intended use is as GPU/CPU
+/// heavy as any game - see foreground_process_is_confirmed_non_game, which
+/// the (high_gpu && high_cpu) branch itself now consults.
 fn is_common_foreground_non_game(normalized: &str) -> bool {
     matches!(
         normalized,
@@ -281,7 +291,47 @@ fn is_common_foreground_non_game(normalized: &str) -> bool {
             | "cmd.exe"
             | "windowsterminal.exe"
             | "discord.exe"
+            | "blender.exe"
+            | "unity.exe"
+            | "unrealeditor.exe"
+            | "ue4editor.exe"
+            | "ue5editor.exe"
+            | "resolve.exe"
+            | "afterfx.exe"
+            | "adobe premiere pro.exe"
+            | "photoshop.exe"
+            | "devenv.exe"
+            | "houdinifx.exe"
+            | "maya.exe"
     )
+}
+
+/// True when the current foreground process is confidently known to NOT be
+/// a game - a launcher, AnalystBlaze itself, or a common non-game
+/// foreground app (browser, terminal, or a professional creative/dev tool
+/// from the list above). Exists specifically so resource-usage-only
+/// heuristics (high GPU + high CPU, with no process-name or window-title
+/// evidence at all) can be veto'd for a foreground app already confirmed
+/// not to be a game - see this function's call site in
+/// telemetry/engine.rs's evaluate_local_policy for the incident that made
+/// this necessary.
+pub fn foreground_process_is_confirmed_non_game() -> bool {
+    let Some(pid) = foreground_pid() else {
+        return false;
+    };
+    let mut system = System::new_all();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+    let Some(process) = system
+        .processes()
+        .iter()
+        .find_map(|(candidate, process)| (candidate.as_u32() == pid).then_some(process))
+    else {
+        return false;
+    };
+    let normalized = normalize_process_name(&process.name().to_string_lossy());
+    is_launcher_process(&normalized)
+        || is_never_game_process(&normalized)
+        || is_common_foreground_non_game(&normalized)
 }
 
 pub(crate) fn normalize_process_name(name: &str) -> String {
@@ -295,7 +345,7 @@ pub(crate) fn normalize_process_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_game_process, normalize_process_name};
+    use super::{is_common_foreground_non_game, looks_like_game_process, normalize_process_name};
 
     #[test]
     fn excludes_app_shell_from_game_candidates() {
@@ -303,6 +353,21 @@ mod tests {
         assert!(!looks_like_game_process(
             "C:\\Program Files\\AnalystBlaze\\AnalystBlaze.exe"
         ));
+    }
+
+    /// Regression test for the 2026-09 incident: Blender rendering (heavy
+    /// GPU+CPU, foreground, name unrelated to any known game) triggered
+    /// automatic Game Mode and froze a machine. Blender itself was never a
+    /// `looks_like_game_process` match - the bug was in the OTHER two
+    /// detection paths (foreground-candidate fallback, and
+    /// evaluate_local_policy's high_gpu&&high_cpu heuristic) not excluding
+    /// it, which is what is_common_foreground_non_game now fixes for both.
+    #[test]
+    fn excludes_known_creative_and_dev_tools_from_foreground_game_guess() {
+        assert!(is_common_foreground_non_game("blender.exe"));
+        assert!(is_common_foreground_non_game("unity.exe"));
+        assert!(is_common_foreground_non_game("devenv.exe"));
+        assert!(!is_common_foreground_non_game("cs2.exe"));
     }
 
     #[test]

@@ -1864,12 +1864,22 @@ fn evaluate_local_policy(
         .as_deref()
         .map(window_looks_like_game)
         .unwrap_or(false);
+    // (high_gpu && high_cpu) alone has zero awareness of what's actually
+    // running - it's just as true for Blender rendering, a video export,
+    // or a local model training run as it is for any game. A real incident
+    // (2026-09) had exactly that: Blender's foreground process ALSO wasn't
+    // excluded from known_game_process at the time, and the combination
+    // triggered full Game Mode (RAM purge, service stops, app closures)
+    // while it was rendering, freezing the machine. Both paths are now
+    // vetoed together when the foreground app is a confirmed non-game.
+    let foreground_confirmed_non_game =
+        optimizations::detection::foreground_process_is_confirmed_non_game();
 
     let gaming_detected = activity == "gaming"
         || gaming_signal
         || known_game_process
         || active_window_game_hint
-        || (high_gpu && high_cpu);
+        || (high_gpu && high_cpu && !foreground_confirmed_non_game);
     if gaming_detected
         && local_ai_policy.auto_game_mode
         && action_allowed(policy, "APPLY_GAME_MODE")

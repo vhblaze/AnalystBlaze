@@ -21,6 +21,7 @@ pub mod processes;
 pub mod protected_apps;
 pub mod safety;
 pub mod snapshot;
+pub mod storage_media;
 pub mod visual_effects;
 pub mod windows_actions;
 pub mod windows_inventory;
@@ -369,13 +370,23 @@ async fn execute_command_checked_with_helper(
 
 async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> ExecutionResult {
     let optimize_power_plan = payload_bool(payload.as_ref(), "optimize_power_plan", true);
-    let safe_temp_cleanup = payload_bool(payload.as_ref(), "safe_temp_cleanup", true);
     let enter_focus_mode = payload_bool(payload.as_ref(), "enter_focus_mode", true);
     let optimize_visual_effects = payload_bool(payload.as_ref(), "optimize_visual_effects", true);
     let optimize_process_priorities =
         payload_bool(payload.as_ref(), "optimize_process_priorities", true);
+    // Both of these touch disk I/O in ways that compete with whatever the
+    // newly-launched app is itself doing on startup - TEMP cleanup does
+    // its own scan/delete pass, and stopping SysMain specifically removes
+    // the read-cache that's most useful during exactly this kind of
+    // cold-start I/O burst. Harmless competition on an SSD; on a spinning
+    // HDD (real seek latency, one physical head) it's what turned a real
+    // incident (2026-09, see storage_media.rs's docs) into a full freeze.
+    // Skipped outright rather than reordered/delayed - simplest fix for a
+    // machine already the most starved for I/O headroom.
+    let on_hdd = storage_media::system_drive_is_hdd();
+    let safe_temp_cleanup = payload_bool(payload.as_ref(), "safe_temp_cleanup", true) && !on_hdd;
     let stop_nonessential_services =
-        payload_bool(payload.as_ref(), "stop_nonessential_services", true);
+        payload_bool(payload.as_ref(), "stop_nonessential_services", true) && !on_hdd;
     let close_nonessential_apps =
         payload_bool(payload.as_ref(), "close_nonessential_apps", true);
     let auto_restore = payload_bool(payload.as_ref(), "auto_restore", true);
@@ -401,6 +412,11 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
     };
     let cleanup = if safe_temp_cleanup {
         cleanup::empty_temp(payload.clone()).await
+    } else if on_hdd {
+        ExecutionResult::ok(
+            "Limpeza TEMP ignorada - disco mecanico (HD) detectado, evitando disputa por I/O no inicio do jogo.",
+            json!({ "implemented": true, "skipped_reason": "hdd_detected" }),
+        )
     } else {
         ExecutionResult::ok(
             "Limpeza TEMP ignorada pela policy local.",
@@ -433,6 +449,14 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
     };
     let (services, services_snapshot_ids) = if stop_nonessential_services {
         windows_actions::stop_nonessential_services_for_game_mode().await
+    } else if on_hdd {
+        (
+            ExecutionResult::ok(
+                "Pausa de servicos ignorada - disco mecanico (HD) detectado; o SysMain ajuda mais do que atrapalha nesse caso.",
+                json!({ "implemented": true, "skipped_reason": "hdd_detected" }),
+            ),
+            Vec::new(),
+        )
     } else {
         (
             ExecutionResult::ok(
