@@ -478,6 +478,21 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
             json!({ "implemented": true, "skipped_by_policy": true }),
         )
     };
+    // Only when the target is a heavy-workload tool (Blender and the like),
+    // not for ordinary gaming - real GPU memory headroom matters far more
+    // on a small VRAM budget doing sustained rendering than during a
+    // typical game session, and this wasn't reviewed/asked for as a
+    // general gaming behavior change (see windows_actions.rs's
+    // GAME_MODE_GPU_MEMORY_CLOSABLE_APPS docs).
+    let is_heavy_workload = detection::is_heavy_workload_target(&detected_game);
+    let gpu_memory_apps = if close_nonessential_apps && is_heavy_workload {
+        windows_actions::close_gpu_memory_heavy_apps_for_game_mode().await
+    } else {
+        ExecutionResult::ok(
+            "Fechamento de apps de RGB/iluminacao nao se aplica (alvo nao e uma ferramenta de carga pesada).",
+            json!({ "implemented": true, "skipped_reason": "not_a_heavy_workload_target" }),
+        )
+    };
     let foreground = detection::detect_foreground_game(payload).await;
     let mut snapshot_ids = collect_snapshot_ids([
         &power.details,
@@ -579,6 +594,7 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
                 "auto_restore": auto_restore,
             },
             "detected_game": detected_game,
+            "is_heavy_workload_target": is_heavy_workload,
             "verification": {
                 "before": before,
                 "after": after,
@@ -628,6 +644,11 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
                     "success": services.success,
                     "message": services.message,
                     "details": services.details,
+                },
+                "gpu_memory_apps": {
+                    "success": gpu_memory_apps.success,
+                    "message": gpu_memory_apps.message,
+                    "details": gpu_memory_apps.details,
                 },
                 "apps": {
                     "success": apps.success,

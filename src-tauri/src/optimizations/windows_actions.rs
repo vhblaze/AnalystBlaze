@@ -222,11 +222,65 @@ const GAME_MODE_CLOSABLE_APPS: &[&str] = &[
 /// it's the same one-way action as EMPTY_TEMP - the app relaunches itself
 /// next time the user opens it, same as if they'd closed it by hand.
 pub async fn close_nonessential_apps_for_game_mode() -> ExecutionResult {
-    match tokio::task::spawn_blocking(close_nonessential_apps_for_game_mode_sync).await {
+    match tokio::task::spawn_blocking(|| {
+        close_named_apps_not_in_active_use(
+            GAME_MODE_CLOSABLE_APPS,
+            "Nenhum app nao essencial precisou ser fechado.",
+            "Apps fechados durante o jogo:",
+        )
+    })
+    .await
+    {
         Ok(result) => result,
         Err(error) => ExecutionResult {
             success: false,
             message: format!("Falha ao fechar apps nao essenciais: {error}"),
+            details: json!({ "implemented": true }),
+        },
+    }
+}
+
+/// RGB/lighting-control background daemons - pure utility software with no
+/// document/session state, safe to close and let it relaunch itself later,
+/// same bar as GAME_MODE_CLOSABLE_APPS. Called out separately (and only
+/// when Game Mode's target is a heavy-workload tool - Blender and the like,
+/// see detection.rs's is_heavy_workload_tool) rather than folded into the
+/// general list: real GPU memory users (Corsair iCUE's rendering component
+/// alone has been measured using real GPU load just idling), but not
+/// something worth touching during ordinary gaming, where every megabyte
+/// of VRAM matters far less than on the ~2GB card that prompted this
+/// (2026-09 incident notes in mod.rs's apply_game_mode).
+///
+/// Exact names sourced from vendor/community documentation, not verified
+/// against a live machine running each one the way the rest of this
+/// module's lists were - matching is exact-string, so a wrong name is a
+/// silent no-op rather than a risk, but flagging the lower confidence
+/// bar here honestly rather than presenting it as field-verified.
+const GAME_MODE_GPU_MEMORY_CLOSABLE_APPS: &[&str] = &[
+    "iCUE.exe",
+    "iCUE4.exe",
+    "LGHUB.exe",
+    "RazerCentralService.exe",
+    "LightingService.exe",
+];
+
+/// Same mechanism as close_nonessential_apps_for_game_mode, scoped to
+/// GAME_MODE_GPU_MEMORY_CLOSABLE_APPS - see that constant's docs for when
+/// this should be called.
+pub async fn close_gpu_memory_heavy_apps_for_game_mode() -> ExecutionResult {
+    match tokio::task::spawn_blocking(|| {
+        close_named_apps_not_in_active_use(
+            GAME_MODE_GPU_MEMORY_CLOSABLE_APPS,
+            "Nenhum app de RGB/iluminacao precisou ser fechado.",
+            "Apps de RGB/iluminacao fechados para liberar VRAM:",
+        )
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => ExecutionResult {
+            success: false,
+            message: format!("Falha ao fechar apps de RGB/iluminacao: {error}"),
             details: json!({ "implemented": true }),
         },
     }
@@ -241,11 +295,12 @@ pub async fn close_nonessential_apps_for_game_mode() -> ExecutionResult {
 /// only "it compiles and looks right".
 fn group_closable_processes_by_name<N: AsRef<str>>(
     processes: impl IntoIterator<Item = (u32, N)>,
+    closable_names: &'static [&'static str],
 ) -> std::collections::HashMap<&'static str, Vec<u32>> {
     let mut candidates: std::collections::HashMap<&'static str, Vec<u32>> =
         std::collections::HashMap::new();
     for (pid, name) in processes {
-        if let Some(&matched) = GAME_MODE_CLOSABLE_APPS
+        if let Some(&matched) = closable_names
             .iter()
             .find(|candidate| candidate.eq_ignore_ascii_case(name.as_ref()))
         {
@@ -282,7 +337,14 @@ fn partition_closable_groups<'a>(
     (closable, skipped_active_use)
 }
 
-fn close_nonessential_apps_for_game_mode_sync() -> ExecutionResult {
+/// Shared by close_nonessential_apps_for_game_mode and
+/// close_gpu_memory_heavy_apps_for_game_mode - only the candidate list and
+/// the two message strings differ between them.
+fn close_named_apps_not_in_active_use(
+    closable_names: &'static [&'static str],
+    empty_message: &str,
+    closed_prefix: &str,
+) -> ExecutionResult {
     use sysinfo::{ProcessesToUpdate, System};
 
     let foreground_pid = super::active_use::foreground_process_id();
@@ -296,13 +358,14 @@ fn close_nonessential_apps_for_game_mode_sync() -> ExecutionResult {
             .processes()
             .iter()
             .map(|(pid, process)| (pid.as_u32(), process.name().to_string_lossy())),
+        closable_names,
     );
 
-    let (closable_names, skipped_active_use) =
+    let (closable, skipped_active_use) =
         partition_closable_groups(&candidates, foreground_pid, &active_audio_pids);
 
     let mut closed = Vec::new();
-    for name in closable_names {
+    for name in closable {
         let Some(pids) = candidates.get(name) else {
             continue;
         };
@@ -322,15 +385,15 @@ fn close_nonessential_apps_for_game_mode_sync() -> ExecutionResult {
         // stop_nonessential_services_for_game_mode - nothing to close, or
         // everything eligible being in active use, is a normal outcome.
         if closed.is_empty() {
-            "Nenhum app nao essencial precisou ser fechado.".to_string()
+            empty_message.to_string()
         } else {
-            format!("Apps fechados durante o jogo: {}.", closed.join(", "))
+            format!("{closed_prefix} {}.", closed.join(", "))
         },
         json!({
             "implemented": true,
             "closed": closed,
             "skipped_active_use": skipped_active_use,
-            "candidates": GAME_MODE_CLOSABLE_APPS,
+            "candidates": closable_names,
         }),
     )
 }
@@ -783,7 +846,9 @@ fn extract_payload_string(payload: Option<&Value>, keys: &[&str]) -> Option<Stri
 
 #[cfg(test)]
 mod closable_apps_tests {
-    use super::{group_closable_processes_by_name, partition_closable_groups};
+    use super::{
+        group_closable_processes_by_name, partition_closable_groups, GAME_MODE_CLOSABLE_APPS,
+    };
     use std::collections::HashSet;
 
     // Regression test for a real bug found in the field: Discord runs
@@ -804,7 +869,7 @@ mod closable_apps_tests {
             (102u32, "Discord.exe"),
             (200u32, "Spotify.exe"),
         ];
-        let candidates = group_closable_processes_by_name(processes.into_iter());
+        let candidates = group_closable_processes_by_name(processes.into_iter(), GAME_MODE_CLOSABLE_APPS);
         assert_eq!(candidates.get("Discord.exe").map(Vec::len), Some(3));
 
         let foreground_pid = Some(100u32);
@@ -828,7 +893,7 @@ mod closable_apps_tests {
     #[test]
     fn an_app_with_no_active_signal_at_all_is_closable() {
         let processes = [(300u32, "Telegram.exe")];
-        let candidates = group_closable_processes_by_name(processes.into_iter());
+        let candidates = group_closable_processes_by_name(processes.into_iter(), GAME_MODE_CLOSABLE_APPS);
         let (closable, skipped) = partition_closable_groups(&candidates, None, &HashSet::new());
 
         assert_eq!(closable, vec!["Telegram.exe"]);
@@ -842,7 +907,7 @@ mod closable_apps_tests {
             (2u32, "explorer.exe"),
             (3u32, "svchost.exe"),
         ];
-        let candidates = group_closable_processes_by_name(processes.into_iter());
+        let candidates = group_closable_processes_by_name(processes.into_iter(), GAME_MODE_CLOSABLE_APPS);
 
         assert_eq!(candidates.get("Discord.exe").map(Vec::len), Some(1));
         assert_eq!(candidates.len(), 1, "only the Discord match should be grouped at all");
@@ -851,7 +916,7 @@ mod closable_apps_tests {
     #[test]
     fn foreground_window_alone_protects_every_pid_of_that_app() {
         let processes = [(10u32, "WhatsApp.Root.exe"), (11u32, "WhatsApp.Root.exe")];
-        let candidates = group_closable_processes_by_name(processes.into_iter());
+        let candidates = group_closable_processes_by_name(processes.into_iter(), GAME_MODE_CLOSABLE_APPS);
 
         // pid 11 owns the foreground window, not 10 - both still protected.
         let (closable, skipped) =
@@ -859,5 +924,24 @@ mod closable_apps_tests {
 
         assert!(closable.is_empty());
         assert_eq!(skipped, vec!["WhatsApp.Root.exe"]);
+    }
+
+    /// Confirms the grouping/partition mechanism works identically for a
+    /// second candidate list (GAME_MODE_GPU_MEMORY_CLOSABLE_APPS) - the
+    /// refactor that made these functions take the list as a parameter
+    /// instead of hardcoding GAME_MODE_CLOSABLE_APPS should behave the same
+    /// for any list, not just the original one.
+    #[test]
+    fn gpu_memory_closable_list_uses_the_same_grouping_mechanism() {
+        use super::GAME_MODE_GPU_MEMORY_CLOSABLE_APPS;
+
+        let processes = [(1u32, "iCUE.exe"), (2u32, "explorer.exe")];
+        let candidates =
+            group_closable_processes_by_name(processes.into_iter(), GAME_MODE_GPU_MEMORY_CLOSABLE_APPS);
+        assert_eq!(candidates.len(), 1, "only iCUE.exe should be grouped");
+
+        let (closable, skipped) = partition_closable_groups(&candidates, None, &HashSet::new());
+        assert_eq!(closable, vec!["iCUE.exe"]);
+        assert!(skipped.is_empty());
     }
 }

@@ -12,6 +12,23 @@ pub struct GameDetection {
     pub reason: String,
 }
 
+/// True when `detection` resolved to a heavy-workload tool (Blender and
+/// friends), not an actual game - used by apply_game_mode to decide
+/// whether to also free GPU memory for it (see windows_actions.rs's
+/// GAME_MODE_GPU_MEMORY_CLOSABLE_APPS). Only meaningful for a detection
+/// that was allowed to target one in the first place (allow_heavy_workload_target
+/// true at foreground_process_detection's call site) - explicit_target_detection's
+/// "user_selected_process" path can also legitimately resolve to one, which
+/// this correctly treats the same way.
+pub fn is_heavy_workload_target(detection: &GameDetection) -> bool {
+    detection.detected
+        && detection
+            .process_name
+            .as_deref()
+            .map(normalize_process_name)
+            .is_some_and(|normalized| is_heavy_workload_tool(&normalized))
+}
+
 pub async fn detect_foreground_game(payload: Option<Value>) -> ExecutionResult {
     // Server-facing preview, not a live user click - stays on the
     // conservative/unsupervised side (no heavy-workload targets).
