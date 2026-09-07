@@ -1749,6 +1749,7 @@ fn supported_actions() -> &'static [&'static str] {
         "RESET_WINSOCK_CATALOG",
         "START_FRAME_CAPTURE",
         "STOP_FRAME_CAPTURE",
+        "ENABLE_SCHEDULED_DEFRAG",
     ]
 }
 

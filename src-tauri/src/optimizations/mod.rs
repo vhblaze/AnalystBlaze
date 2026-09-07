@@ -271,6 +271,7 @@ async fn execute_command_checked_with_helper(
         "SET_ADAPTER_ENABLED" => network_admin::set_adapter_enabled(payload).await,
         "CHECK_ADAPTER_DISABLE_GUARD" => network_admin::check_adapter_disable_guard(payload).await,
         "RESET_WINSOCK_CATALOG" => network_admin::reset_winsock_catalog(payload).await,
+        "ENABLE_SCHEDULED_DEFRAG" => storage_media::enable_scheduled_defrag(payload).await,
         "APPLY_VISUAL_PERFORMANCE_MODE" => {
             visual_effects::apply_visual_performance_mode(payload).await
         }

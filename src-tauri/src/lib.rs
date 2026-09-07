@@ -318,6 +318,14 @@ async fn deep_clean_temp() -> Result<optimizations::ExecutionResult, String> {
     .await)
 }
 
+/// See storage_media.rs's docs for why this needs the privileged helper -
+/// offered from an Insights card, "Fazer eu mesmo" (see AppShell.tsx's
+/// applyInsightActionLocally and Insights.tsx's LOCALLY_EXECUTABLE_ACTIONS).
+#[tauri::command]
+async fn enable_scheduled_defrag() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("ENABLE_SCHEDULED_DEFRAG", None).await)
+}
+
 #[tauri::command]
 async fn purge_cleanup_quarantine() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command(
@@ -1837,6 +1845,7 @@ pub fn run() {
             delete_disk_usage_item,
             list_disk_volumes,
             check_disk_optimization_insight,
+            enable_scheduled_defrag,
             list_disk_directory,
             cancel_disk_tree_scan,
             detect_live_mode_streaming_app,

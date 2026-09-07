@@ -4,10 +4,12 @@ import { fetchInsights, type DiskNearFullInfo, type Insight } from "@/services/i
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
+  checkDiskOptimizationInsight,
   getNetworkDiagnostics,
   isTauriRuntime,
   openAgentInsights,
   type AgentTelemetrySnapshot,
+  type DiskOptimizationInsight,
   type NetworkDiagnostics,
 } from "@/services/tauri/agent";
 
@@ -37,7 +39,7 @@ const DISMISS_TTL_MS = 24 * 60 * 60 * 1000;
  * validated allowlist (see safe_action_policy.py) - these are the ones the
  * desktop already knows how to run locally, so "I'll do it myself" has
  * something real to call. Anything else server-side is display-only for now. */
-const LOCALLY_EXECUTABLE_ACTIONS = new Set(["APPLY_GAME_MODE", "EMPTY_TEMP"]);
+const LOCALLY_EXECUTABLE_ACTIONS = new Set(["APPLY_GAME_MODE", "EMPTY_TEMP", "ENABLE_SCHEDULED_DEFRAG"]);
 
 function insightKey(insight: Pick<Insight, "category" | "actionName" | "title">): string {
   return `${insight.category}:${insight.actionName ?? insight.title}`;
@@ -123,6 +125,11 @@ export function Insights({
   // the passive telemetry sample doesn't probe the adapter/VPN detection
   // (kept out of the 2s telemetry loop deliberately, see collect_network_sample).
   const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(null);
+  // Same independent-fetch pattern as networkDiagnostics above, not shared
+  // state with DiskExplorer (which fetches this too, for its own card) -
+  // cheap enough (a couple of unelevated PowerShell calls) that duplicating
+  // it here is simpler than lifting shared state up.
+  const [diskOptimizationInsightData, setDiskOptimizationInsightData] = useState<DiskOptimizationInsight | null>(null);
 
   const dismissInsight = (insight: Insight) => {
     const key = insightKey(insight);
@@ -274,13 +281,34 @@ export function Insights({
     };
   }, [diskNearFullInfo, onOpenDiskUsage, track]);
 
+  const scheduledDefragInsight = useMemo<Insight | null>(() => {
+    const data = diskOptimizationInsightData;
+    // Only ever fires for an HDD boot drive with the task off - an SSD
+    // never gets this (it's TRIM'd, not defragmented) and an enabled task
+    // is exactly the state that needs no attention.
+    if (!data?.isHdd || data.defrag?.enabled !== false) return null;
+
+    return {
+      title: "Otimizacao automatica de disco esta desativada",
+      explanation:
+        "Seu disco principal e um HD (mecanico) e a desfragmentacao agendada do Windows esta desativada - isso e o que mantem a leitura de arquivos rapida com o tempo. Quer que eu reative?",
+      impact: "HD sem otimizacao agendada",
+      category: "limpeza",
+      risk: "baixo",
+      reversible: true,
+      confidence: 0.9,
+      reason: "Tarefa nativa \"Otimizar Unidades\" do Windows (ScheduledDefrag) esta desativada.",
+      actionName: "ENABLE_SCHEDULED_DEFRAG",
+    };
+  }, [diskOptimizationInsightData]);
+
   const visibleInsights = useMemo(() => {
-    const local = [diskUsageInsight, vpnLatencyInsight, diskNearFullInsight].filter(
+    const local = [diskUsageInsight, vpnLatencyInsight, diskNearFullInsight, scheduledDefragInsight].filter(
       (insight): insight is Insight => insight != null,
     );
     const all = [...local, ...insights];
     return all.filter((insight) => !(insightKey(insight) in dismissed));
-  }, [diskUsageInsight, vpnLatencyInsight, diskNearFullInsight, insights, dismissed]);
+  }, [diskUsageInsight, vpnLatencyInsight, diskNearFullInsight, scheduledDefragInsight, insights, dismissed]);
 
   const generate = async () => {
     setLoading(true);
@@ -291,6 +319,9 @@ export function Insights({
       // whole insights screen errors out.
       getNetworkDiagnostics()
         .then(setNetworkDiagnostics)
+        .catch(() => undefined);
+      checkDiskOptimizationInsight()
+        .then(setDiskOptimizationInsightData)
         .catch(() => undefined);
     }
     try {

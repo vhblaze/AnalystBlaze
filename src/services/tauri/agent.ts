@@ -1097,6 +1097,14 @@ export async function deepCleanTemp(): Promise<OptimizationResult> {
   return invoke<OptimizationResult>("deep_clean_temp");
 }
 
+/** Re-enables Windows' scheduled disk-optimization task - see
+ * checkDiskOptimizationInsight, which is what surfaces the "Fazer eu
+ * mesmo" prompt for this in the first place. */
+export async function enableScheduledDefrag(): Promise<OptimizationResult> {
+  requireTauriRuntime("Otimizacao agendada de disco");
+  return invoke<OptimizationResult>("enable_scheduled_defrag");
+}
+
 export async function purgeCleanupQuarantine(): Promise<OptimizationResult> {
   requireTauriRuntime("Purge da quarentena de limpeza");
   return invoke<OptimizationResult>("purge_cleanup_quarantine");

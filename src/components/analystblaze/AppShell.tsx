@@ -201,6 +201,17 @@ export function AppShell() {
           auth.cleanTempDeep,
         );
       }
+      if (actionName === "ENABLE_SCHEDULED_DEFRAG") {
+        return runConfirmed(
+          {
+            title: "Reativar otimizacao automatica de disco",
+            description: "Reativa a tarefa nativa do Windows que desfragmenta seu HD periodicamente, mantendo a leitura de arquivos rapida com o tempo. Exige o helper privilegiado instalado.",
+            risk: "sensivel",
+            snapshot: false,
+          },
+          auth.enableScheduledDefrag,
+        );
+      }
       return Promise.reject(new Error(`Acao nao suportada localmente: ${actionName}`));
     },
     [runConfirmed, activateGameModeWithUpsell, auth],

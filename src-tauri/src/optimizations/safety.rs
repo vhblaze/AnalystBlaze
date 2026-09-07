@@ -227,6 +227,16 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: false,
             requires_privileged_helper: true,
         }),
+        // Re-enables Windows' own scheduled disk-optimization task - a
+        // single, trivially-reversible boolean (re-toggle the same task if
+        // this is ever undone), so no snapshot, but still needs elevation
+        // (Enable-ScheduledTask fails unelevated).
+        "ENABLE_SCHEDULED_DEFRAG" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
         // Read-only (observes present events via ETW, changes nothing on
         // the system) and self-terminating (STOP kills the child process;
         // an orphaned one is reaped after MAX_CAPTURE_SECONDS - see
@@ -298,6 +308,7 @@ pub fn supported_actions() -> &'static [&'static str] {
         "DELETE_DISK_USAGE_ITEM",
         "START_FRAME_CAPTURE",
         "STOP_FRAME_CAPTURE",
+        "ENABLE_SCHEDULED_DEFRAG",
     ]
 }
 

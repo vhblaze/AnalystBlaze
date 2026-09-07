@@ -9,9 +9,11 @@
 //! latency than on an SSD, where SysMain's benefit is already marginal.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::process::Command;
 use std::sync::OnceLock;
 
+use super::ExecutionResult;
 use crate::process_ext::{decode_console_bytes, CommandExt};
 
 /// True if the boot drive reports as a spinning HDD, or if the check
@@ -130,6 +132,58 @@ $info = Get-ScheduledTaskInfo -TaskPath "\Microsoft\Windows\Defrag\" -TaskName "
         return None;
     }
     serde_json::from_str::<ScheduledDefragStatus>(&text).ok()
+}
+
+/// Re-enables the "ScheduledDefrag" task - the ENABLE_SCHEDULED_DEFRAG
+/// action, offered from an Insights card when disk_optimization_insight()
+/// finds it off on an HDD boot drive. Unlike the read-only status check
+/// above, changing a scheduled task's enabled state needs elevation (an
+/// unelevated attempt returns "Access is denied"), so this only ever runs
+/// inside the already-elevated privileged helper - see safety.rs's
+/// requires_privileged_helper on this action's profile. No snapshot: the
+/// state is a trivial single boolean, re-toggled the same way through the
+/// same task if this ever needs undoing.
+pub async fn enable_scheduled_defrag(_payload: Option<Value>) -> ExecutionResult {
+    match tokio::task::spawn_blocking(enable_scheduled_defrag_sync).await {
+        Ok(result) => result,
+        Err(error) => ExecutionResult {
+            success: false,
+            message: format!("Falha ao reativar a otimizacao agendada de disco: {error}"),
+            details: json!({ "implemented": true }),
+        },
+    }
+}
+
+fn enable_scheduled_defrag_sync() -> ExecutionResult {
+    let script = r#"
+Enable-ScheduledTask -TaskPath "\Microsoft\Windows\Defrag\" -TaskName "ScheduledDefrag" -ErrorAction Stop | Out-Null
+"#;
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script])
+        .no_window()
+        .output();
+    let output = match output {
+        Ok(output) => output,
+        Err(error) => {
+            return ExecutionResult {
+                success: false,
+                message: "Nao foi possivel chamar o PowerShell.".to_string(),
+                details: json!({ "implemented": true, "error": error.to_string() }),
+            };
+        }
+    };
+
+    let success = output.status.success();
+    let stderr = decode_console_bytes(&output.stderr).trim().to_string();
+    ExecutionResult {
+        success,
+        message: if success {
+            "Otimizacao automatica de disco reativada.".to_string()
+        } else {
+            "Nao foi possivel reativar a otimizacao automatica de disco.".to_string()
+        },
+        details: json!({ "implemented": true, "stderr": stderr }),
+    }
 }
 
 #[cfg(test)]

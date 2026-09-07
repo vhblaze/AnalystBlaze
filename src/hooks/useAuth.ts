@@ -12,6 +12,7 @@ import {
   deepCleanTemp,
   delayStartupApp,
   disableStartupApp,
+  enableScheduledDefrag as enableScheduledDefragAction,
   flushDnsCache,
   getAgentStatus,
   isTauriRuntime,
@@ -758,6 +759,23 @@ export function useAuth() {
     return result;
   }, [runAction]);
 
+  const enableScheduledDefrag = useCallback(async () => {
+    const result = await runAction(async () => {
+      const result = await enableScheduledDefragAction();
+      setMessage({
+        key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+        params: { message: result.message },
+      });
+      captureTelemetry({
+        name: result.success ? "scheduled_defrag_enabled" : "scheduled_defrag_enable_failed",
+        category: "agent",
+      });
+      return result;
+    }, { rethrow: true });
+    if (result && !result.success) throw new Error(result.message);
+    return result;
+  }, [runAction]);
+
   const purgeCleanup = useCallback(async () => {
     const result = await runAction(async () => {
       const result = await purgeCleanupQuarantine();
@@ -973,6 +991,7 @@ export function useAuth() {
     applyVisualPerformance,
     restoreVisualPerformance,
     cleanTempDeep,
+    enableScheduledDefrag,
     purgeCleanup,
     applyCleanupCategory,
     delayStartup,
