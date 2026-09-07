@@ -12,7 +12,7 @@ export const translations = {
   "pt-BR": {
     app: {
       name: "AnalystBlaze",
-      versionLine: "v0.1.58 - build 2026.09",
+      versionLine: "v0.1.59 - build 2026.09",
       loading: "A carregar...",
     },
     common: {
@@ -567,7 +567,7 @@ export const translations = {
   "en-US": {
     app: {
       name: "AnalystBlaze",
-      versionLine: "v0.1.58 - build 2026.09",
+      versionLine: "v0.1.59 - build 2026.09",
       loading: "Loading...",
     },
     common: {
