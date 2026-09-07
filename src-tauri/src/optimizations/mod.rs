@@ -374,19 +374,19 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
     let optimize_visual_effects = payload_bool(payload.as_ref(), "optimize_visual_effects", true);
     let optimize_process_priorities =
         payload_bool(payload.as_ref(), "optimize_process_priorities", true);
-    // Both of these touch disk I/O in ways that compete with whatever the
-    // newly-launched app is itself doing on startup - TEMP cleanup does
-    // its own scan/delete pass, and stopping SysMain specifically removes
-    // the read-cache that's most useful during exactly this kind of
-    // cold-start I/O burst. Harmless competition on an SSD; on a spinning
-    // HDD (real seek latency, one physical head) it's what turned a real
+    // TEMP cleanup does its own scan/delete pass, competing for disk I/O
+    // with whatever the newly-launched app is itself doing on startup -
+    // harmless competition on an SSD, but on a spinning HDD (real seek
+    // latency, one physical head) that competition is what turned a real
     // incident (2026-09, see storage_media.rs's docs) into a full freeze.
-    // Skipped outright rather than reordered/delayed - simplest fix for a
-    // machine already the most starved for I/O headroom.
+    // Skipped outright on HDD rather than reordered/delayed - simplest fix
+    // for a machine already the most starved for I/O headroom, and its
+    // benefit (freeing some disk space) isn't tied to gaming performance
+    // anyway, so there's nothing lost by just doing it another time.
     let on_hdd = storage_media::system_drive_is_hdd();
     let safe_temp_cleanup = payload_bool(payload.as_ref(), "safe_temp_cleanup", true) && !on_hdd;
     let stop_nonessential_services =
-        payload_bool(payload.as_ref(), "stop_nonessential_services", true) && !on_hdd;
+        payload_bool(payload.as_ref(), "stop_nonessential_services", true);
     let close_nonessential_apps =
         payload_bool(payload.as_ref(), "close_nonessential_apps", true);
     let auto_restore = payload_bool(payload.as_ref(), "auto_restore", true);
@@ -448,15 +448,11 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
         )
     };
     let (services, services_snapshot_ids) = if stop_nonessential_services {
-        windows_actions::stop_nonessential_services_for_game_mode().await
-    } else if on_hdd {
-        (
-            ExecutionResult::ok(
-                "Pausa de servicos ignorada - disco mecanico (HD) detectado; o SysMain ajuda mais do que atrapalha nesse caso.",
-                json!({ "implemented": true, "skipped_reason": "hdd_detected" }),
-            ),
-            Vec::new(),
-        )
+        // On HDD, SysMain is spared (its caching genuinely helps there) but
+        // WSearch/DiagTrack are still paused - they're pure background
+        // overhead with no upside either way, so there's no reason to give
+        // up that part of the benefit just because SysMain has to stay.
+        windows_actions::stop_nonessential_services_for_game_mode(on_hdd).await
     } else {
         (
             ExecutionResult::ok(

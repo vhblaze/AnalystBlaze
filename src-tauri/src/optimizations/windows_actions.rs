@@ -100,9 +100,22 @@ const GAME_MODE_PAUSABLE_SERVICES: &[&str] = &[
 /// no new restore logic needed. Returns the combined step result (for the
 /// same steps.* reporting shape apply_game_mode already builds) and the
 /// flat list of snapshot ids to fold into the session's snapshot_ids.
-pub async fn stop_nonessential_services_for_game_mode() -> (ExecutionResult, Vec<String>) {
-    let results: Vec<(String, ExecutionResult)> =
-        stop_each_sequentially(GAME_MODE_PAUSABLE_SERVICES).await;
+///
+/// `skip_sysmain` exists for machines with a spinning HDD boot drive (see
+/// storage_media.rs): WSearch and DiagTrack are pure background overhead
+/// with no upside for I/O either way, but SysMain's entire job is caching
+/// disk reads - the one service on this list that actually HELPS an HDD,
+/// so it's the one spared instead of lumping all three together under one
+/// on/off switch.
+pub async fn stop_nonessential_services_for_game_mode(
+    skip_sysmain: bool,
+) -> (ExecutionResult, Vec<String>) {
+    let services: Vec<&str> = GAME_MODE_PAUSABLE_SERVICES
+        .iter()
+        .copied()
+        .filter(|service| !(skip_sysmain && *service == "SysMain"))
+        .collect();
+    let results: Vec<(String, ExecutionResult)> = stop_each_sequentially(&services).await;
 
     let snapshot_ids: Vec<String> = results
         .iter()
@@ -133,7 +146,7 @@ pub async fn stop_nonessential_services_for_game_mode() -> (ExecutionResult, Vec
         details: json!({
             "implemented": true,
             "stopped": stopped,
-            "attempted": GAME_MODE_PAUSABLE_SERVICES,
+            "attempted": services,
             "results": results
                 .iter()
                 .map(|(name, result)| json!({
