@@ -91,6 +91,30 @@ pub fn looks_like_mojibake(text: &str) -> bool {
     text.contains('\u{FFFD}')
 }
 
+/// True when an error's text indicates the file is currently open/locked
+/// by another process (Windows' ERROR_SHARING_VIOLATION, os error 32).
+/// String-matched against the error's own Display output rather than a
+/// dedicated ErrorKind - std::io::Error has no such variant on stable
+/// Rust, and some callers (snapshot.rs's copy_dir_recursive) have already
+/// stringified the original io::Error by the time this runs, so matching
+/// on `&str` covers both a fresh io::Error's .to_string() and an
+/// already-flattened error message alike. Shared by disk_usage.rs (large
+/// permanent deletes) and snapshot.rs (the much more common quarantine-move
+/// path): a real report (2026-09) was that deleting a file currently in
+/// use didn't clearly say why. The permanent-delete path already had this
+/// classification; the quarantine path - what most everyday deletes go
+/// through - never applied it and just surfaced a raw, compound
+/// rename/copy failure string instead.
+/// Shared wording for every delete/move path that classifies this case -
+/// disk_usage.rs's two delete paths and snapshot.rs's cross-volume moves.
+pub const FILE_IN_USE_MESSAGE: &str =
+    "o item esta em uso por outro programa - feche-o e tente novamente.";
+
+pub fn error_indicates_file_in_use(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("being used by another process") || lower.contains("em uso por outro processo")
+}
+
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
@@ -156,5 +180,25 @@ mod tests {
     #[test]
     fn empty_input_decodes_to_empty_string() {
         assert_eq!(decode_console_bytes_with_codepage(&[], CP850_LATIN1_MULTILINGUAL), "");
+    }
+
+    /// Regression test for the 2026-09 report: deleting a file open in
+    /// another program didn't clearly say why. The English case is
+    /// verified against this exact machine's real
+    /// std::io::Error::from_raw_os_error(32) text - Windows' own
+    /// FormatMessage came back in English here even on a pt-BR install, so
+    /// the Portuguese substring below is asserted only against the exact
+    /// wording this function already checks for, not a guessed full
+    /// sentence this session couldn't verify against a real pt-BR OS
+    /// message.
+    #[test]
+    fn recognizes_file_in_use_errors_in_either_language() {
+        assert!(error_indicates_file_in_use(
+            "The process cannot access the file because it is being used by another process. (os error 32)"
+        ));
+        assert!(error_indicates_file_in_use(
+            "O processo nao pode acessar o arquivo porque ele esta em uso por outro processo. (os error 32)"
+        ));
+        assert!(!error_indicates_file_in_use("Access is denied. (os error 5)"));
     }
 }

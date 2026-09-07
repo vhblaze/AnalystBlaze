@@ -910,9 +910,21 @@ fn delete_item_blocking(path: String) -> ExecutionResult {
     }
 
     if let Err(error) = snapshot::move_file_across_volumes(&validated, &quarantine_target) {
+        // This is the quarantine path most everyday deletes go through
+        // (anything under DIRECT_DELETE_THRESHOLD_BYTES) - a real report
+        // (2026-09) was that deleting a file currently open in another
+        // program didn't clearly say why here. move_file_across_volumes
+        // already turns that specific case into the same clean message
+        // describe_io_error below uses for the large-item direct-delete
+        // path; anything else still gets a real reason, just prefixed.
+        let message = if error == crate::process_ext::FILE_IN_USE_MESSAGE {
+            error.clone()
+        } else {
+            format!("Falha ao mover item para a quarentena local: {error}")
+        };
         return ExecutionResult {
             success: false,
-            message: "Falha ao mover item para a quarentena local.".to_string(),
+            message,
             details: serde_json::json!({ "implemented": true, "error": error }),
         };
     }
@@ -1010,9 +1022,8 @@ fn describe_io_error(error: &std::io::Error) -> String {
         std::io::ErrorKind::NotFound => "o item ja nao existe mais nesse caminho.".to_string(),
         _ => {
             let raw = error.to_string();
-            let lower = raw.to_ascii_lowercase();
-            if lower.contains("being used by another process") || lower.contains("em uso por outro processo") {
-                "o item esta em uso por outro programa - feche-o e tente novamente.".to_string()
+            if crate::process_ext::error_indicates_file_in_use(&raw) {
+                crate::process_ext::FILE_IN_USE_MESSAGE.to_string()
             } else {
                 raw
             }

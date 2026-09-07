@@ -837,6 +837,16 @@ pub fn move_file_across_volumes(source: &PathBuf, target: &PathBuf) -> Result<()
     match fs::rename(source, target) {
         Ok(()) => Ok(()),
         Err(rename_error) => {
+            // A sharing violation on the rename means the file is open in
+            // another program right now - the copy fallback below would
+            // almost always hit the exact same error, so there's nothing
+            // useful in reporting both; return the one clear, user-facing
+            // reason instead of a compound "rename failed: X; copy failed:
+            // Y" string none of this function's four callers used to be
+            // able to turn into a helpful message (a real report, 2026-09).
+            if crate::process_ext::error_indicates_file_in_use(&rename_error.to_string()) {
+                return Err(crate::process_ext::FILE_IN_USE_MESSAGE.to_string());
+            }
             fs::copy(source, target).map_err(|copy_error| {
                 format!("rename failed: {rename_error}; copy failed: {copy_error}")
             })?;
@@ -852,8 +862,18 @@ fn move_dir_across_volumes(source: &PathBuf, target: &PathBuf) -> Result<(), Str
     match fs::rename(source, target) {
         Ok(()) => Ok(()),
         Err(rename_error) => {
+            // Same reasoning as move_file_across_volumes above - a file
+            // somewhere in the tree being open elsewhere surfaces here as
+            // the rename failing (same-volume dirs) or the recursive copy
+            // failing partway through (cross-volume).
+            if crate::process_ext::error_indicates_file_in_use(&rename_error.to_string()) {
+                return Err(crate::process_ext::FILE_IN_USE_MESSAGE.to_string());
+            }
             if let Err(copy_error) = copy_dir_recursive(source, target) {
                 let _ = fs::remove_dir_all(target);
+                if crate::process_ext::error_indicates_file_in_use(&copy_error) {
+                    return Err(crate::process_ext::FILE_IN_USE_MESSAGE.to_string());
+                }
                 return Err(format!(
                     "rename failed: {rename_error}; recursive copy failed: {copy_error}"
                 ));
