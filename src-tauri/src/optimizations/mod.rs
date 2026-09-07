@@ -390,7 +390,15 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
     let close_nonessential_apps =
         payload_bool(payload.as_ref(), "close_nonessential_apps", true);
     let auto_restore = payload_bool(payload.as_ref(), "auto_restore", true);
-    let detected_game = detection::detect_game_process_with_payload(payload.as_ref());
+    // A live "Ativar Modo Gamer" click (or a server RemoteCommand, which is
+    // itself already vetted server-side) is a supervised decision - unlike
+    // the unsupervised LocalPolicy auto-trigger this same detection feeds
+    // in evaluate_local_policy, it's safe to let it target a heavy-workload
+    // tool like Blender (see detection.rs's is_heavy_workload_tool docs).
+    let detected_game = detection::detect_game_process_with_payload(
+        payload.as_ref(),
+        source != CommandSource::LocalPolicy,
+    );
     let target_pid = detected_game
         .pid
         .as_deref()

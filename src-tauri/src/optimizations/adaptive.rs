@@ -46,7 +46,7 @@ pub async fn apply_adaptive_optimization(payload: Option<Value>) -> ExecutionRes
     }
 
     let before = collect_observation_blocking("before");
-    let detection = detection::detect_game_process_with_payload(Some(&payload));
+    let detection = detection::detect_game_process_with_payload(Some(&payload), false);
 
     let mut steps = Vec::new();
     let foreground = latency::apply_foreground_burst_mode(Some(payload.clone())).await;

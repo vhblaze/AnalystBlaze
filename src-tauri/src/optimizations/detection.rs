@@ -13,7 +13,9 @@ pub struct GameDetection {
 }
 
 pub async fn detect_foreground_game(payload: Option<Value>) -> ExecutionResult {
-    let detection = detect_game_process_with_payload(payload.as_ref());
+    // Server-facing preview, not a live user click - stays on the
+    // conservative/unsupervised side (no heavy-workload targets).
+    let detection = detect_game_process_with_payload(payload.as_ref(), false);
     ExecutionResult::ok(
         if detection.detected {
             "Jogo detectado por processo local."
@@ -29,16 +31,25 @@ pub async fn detect_foreground_game(payload: Option<Value>) -> ExecutionResult {
     )
 }
 
+/// Always the conservative/unsupervised variant - used by
+/// evaluate_local_policy's automatic heuristic, which must never target a
+/// heavy-workload tool on its own (see is_heavy_workload_tool's docs).
 pub fn detect_game_process() -> GameDetection {
-    detect_game_process_with_payload(None)
+    detect_game_process_with_payload(None, false)
 }
 
-pub fn detect_game_process_with_payload(payload: Option<&Value>) -> GameDetection {
+/// `allow_heavy_workload_target` should be true only for a supervised,
+/// human-initiated activation (a live "Ativar Modo Gamer" click) - see
+/// foreground_process_detection's docs.
+pub fn detect_game_process_with_payload(
+    payload: Option<&Value>,
+    allow_heavy_workload_target: bool,
+) -> GameDetection {
     if let Some(detection) = explicit_target_detection(payload) {
         return detection;
     }
 
-    if let Some(detection) = foreground_process_detection() {
+    if let Some(detection) = foreground_process_detection(allow_heavy_workload_target) {
         return detection;
     }
 
@@ -197,7 +208,16 @@ fn explicit_target_detection(payload: Option<&Value>) -> Option<GameDetection> {
     })
 }
 
-fn foreground_process_detection() -> Option<GameDetection> {
+/// `allow_heavy_workload_target` lets a MANUAL activation (a live user
+/// click - CommandSource::ManualUser/RemoteCommand, never LocalPolicy)
+/// still target a heavy-workload tool (Blender and friends -
+/// is_heavy_workload_tool) as "what Game Mode is optimizing for", so its
+/// process gets the priority bump and, if requested, a frame capture -
+/// same as it would for an actual game. False for every unsupervised
+/// path (the automatic local-policy heuristic, and detect_foreground_game's
+/// server-facing preview) - see is_heavy_workload_tool's docs for why that
+/// distinction matters.
+fn foreground_process_detection(allow_heavy_workload_target: bool) -> Option<GameDetection> {
     let foreground_pid = foreground_pid()?;
     let mut system = System::new_all();
     system.refresh_processes(ProcessesToUpdate::All, true);
@@ -208,10 +228,11 @@ fn foreground_process_detection() -> Option<GameDetection> {
     let name = process.name().to_string_lossy().trim().to_string();
     let normalized = normalize_process_name(&name);
 
-    if is_launcher_process(&normalized)
-        || is_never_game_process(&normalized)
-        || is_common_foreground_non_game(&normalized)
-    {
+    if is_launcher_process(&normalized) || is_never_game_process(&normalized) {
+        return None;
+    }
+    let is_heavy_workload = is_heavy_workload_tool(&normalized);
+    if is_common_foreground_non_game(&normalized) || (is_heavy_workload && !allow_heavy_workload_target) {
         return None;
     }
 
@@ -220,9 +241,17 @@ fn foreground_process_detection() -> Option<GameDetection> {
         detected: true,
         process_name: Some(name),
         pid: Some(foreground_pid.to_string()),
-        confidence: if known { 0.9 } else { 0.66 },
+        confidence: if known {
+            0.9
+        } else if is_heavy_workload {
+            0.7
+        } else {
+            0.66
+        },
         reason: if known {
             "foreground_known_game_process".to_string()
+        } else if is_heavy_workload {
+            "foreground_manual_heavy_workload_target".to_string()
         } else {
             "foreground_process_candidate".to_string()
         },
@@ -267,16 +296,11 @@ fn is_never_game_process(normalized: &str) -> bool {
         || normalized.starts_with("analystblaze")
 }
 
-/// Professional creative/dev tools that legitimately peg both GPU and CPU,
-/// exactly the signal `evaluate_local_policy`'s `(high_gpu && high_cpu)`
-/// fallback uses to guess "gaming". They're excluded here for the same
-/// reason as the browsers/terminals above, not just an afterthought: a
-/// real incident (2026-09) had Blender rendering trigger automatic Game
-/// Mode (RAM purge, service stops, app closures, all at once) on a modest
-/// machine, freezing it. Unlike the terminal/browser entries, these are
-/// added specifically because their normal, intended use is as GPU/CPU
-/// heavy as any game - see foreground_process_is_confirmed_non_game, which
-/// the (high_gpu && high_cpu) branch itself now consults.
+/// Incidental foreground windows that are never a meaningful Game Mode
+/// target under any circumstance, manual click included - a browser,
+/// terminal, or Discord happening to have focus says nothing about what
+/// the user is actually doing, unlike the heavy-workload tools below
+/// (where a manual click is a deliberate signal worth honoring).
 fn is_common_foreground_non_game(normalized: &str) -> bool {
     matches!(
         normalized,
@@ -291,7 +315,26 @@ fn is_common_foreground_non_game(normalized: &str) -> bool {
             | "cmd.exe"
             | "windowsterminal.exe"
             | "discord.exe"
-            | "blender.exe"
+    )
+}
+
+/// Professional creative/dev tools that legitimately peg both GPU and CPU,
+/// exactly the signal `evaluate_local_policy`'s `(high_gpu && high_cpu)`
+/// fallback uses to guess "gaming" - a real incident (2026-09) had Blender
+/// rendering trigger automatic Game Mode (service stops, app closures, a
+/// process-priority bump, all unsupervised) on a modest machine, freezing
+/// it. Unlike is_common_foreground_non_game's list, these are never
+/// excluded outright: a live "Ativar Modo Gamer" click while one of these
+/// is running is a deliberate, supervised choice to optimize a heavy
+/// render/compile/edit session - same reasoning this codebase already
+/// applies to ManualUser vs LocalPolicy elsewhere (see apply_game_mode's
+/// frame-capture gating). Only the UNSUPERVISED paths - the automatic
+/// local-policy heuristic in evaluate_local_policy, and the default
+/// (payload-less) foreground_process_detection used there - exclude them.
+fn is_heavy_workload_tool(normalized: &str) -> bool {
+    matches!(
+        normalized,
+        "blender.exe"
             | "unity.exe"
             | "unrealeditor.exe"
             | "ue4editor.exe"
@@ -307,14 +350,16 @@ fn is_common_foreground_non_game(normalized: &str) -> bool {
 }
 
 /// True when the current foreground process is confidently known to NOT be
-/// a game - a launcher, AnalystBlaze itself, or a common non-game
-/// foreground app (browser, terminal, or a professional creative/dev tool
-/// from the list above). Exists specifically so resource-usage-only
-/// heuristics (high GPU + high CPU, with no process-name or window-title
-/// evidence at all) can be veto'd for a foreground app already confirmed
-/// not to be a game - see this function's call site in
-/// telemetry/engine.rs's evaluate_local_policy for the incident that made
-/// this necessary.
+/// a game for the purposes of an UNSUPERVISED decision - a launcher,
+/// AnalystBlaze itself, a common incidental foreground app, or a
+/// heavy-workload tool. Exists so resource-usage-only heuristics (high GPU
+/// and CPU together, with no process-name or window-title evidence at
+/// all) can be veto'd for a foreground app already confirmed not to be a
+/// game.
+/// telemetry/engine.rs's evaluate_local_policy is the call site this
+/// exists for. Deliberately not used to gate a manual "Ativar Modo Gamer"
+/// click, which has its own, more permissive check in
+/// foreground_process_detection.
 pub fn foreground_process_is_confirmed_non_game() -> bool {
     let Some(pid) = foreground_pid() else {
         return false;
@@ -332,6 +377,7 @@ pub fn foreground_process_is_confirmed_non_game() -> bool {
     is_launcher_process(&normalized)
         || is_never_game_process(&normalized)
         || is_common_foreground_non_game(&normalized)
+        || is_heavy_workload_tool(&normalized)
 }
 
 pub(crate) fn normalize_process_name(name: &str) -> String {
@@ -345,7 +391,10 @@ pub(crate) fn normalize_process_name(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_common_foreground_non_game, looks_like_game_process, normalize_process_name};
+    use super::{
+        is_common_foreground_non_game, is_heavy_workload_tool, looks_like_game_process,
+        normalize_process_name,
+    };
 
     #[test]
     fn excludes_app_shell_from_game_candidates() {
@@ -361,13 +410,17 @@ mod tests {
     /// `looks_like_game_process` match - the bug was in the OTHER two
     /// detection paths (foreground-candidate fallback, and
     /// evaluate_local_policy's high_gpu&&high_cpu heuristic) not excluding
-    /// it, which is what is_common_foreground_non_game now fixes for both.
+    /// it. is_heavy_workload_tool now covers that - unlike
+    /// is_common_foreground_non_game's list, it's excluded only from
+    /// UNSUPERVISED detection, not from a manual click (see
+    /// allow_manual_click_can_still_target_a_heavy_workload_tool below).
     #[test]
-    fn excludes_known_creative_and_dev_tools_from_foreground_game_guess() {
-        assert!(is_common_foreground_non_game("blender.exe"));
-        assert!(is_common_foreground_non_game("unity.exe"));
-        assert!(is_common_foreground_non_game("devenv.exe"));
-        assert!(!is_common_foreground_non_game("cs2.exe"));
+    fn excludes_known_creative_and_dev_tools_from_unsupervised_game_guess() {
+        assert!(is_heavy_workload_tool("blender.exe"));
+        assert!(is_heavy_workload_tool("unity.exe"));
+        assert!(is_heavy_workload_tool("devenv.exe"));
+        assert!(!is_heavy_workload_tool("cs2.exe"));
+        assert!(!is_common_foreground_non_game("blender.exe"));
     }
 
     #[test]

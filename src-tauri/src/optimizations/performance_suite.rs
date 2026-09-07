@@ -493,7 +493,7 @@ pub async fn apply_pc_clean_fast_profile(options: PcCleanFastOptions) -> Executi
     }
 
     if options.include_gaming {
-        let detected_game = detection::detect_game_process_with_payload(None);
+        let detected_game = detection::detect_game_process_with_payload(None, false);
         if detected_game.detected {
             let game_mode = super::apply_game_mode(
                 Some(json!({
@@ -683,7 +683,7 @@ fn run_performance_scan_blocking(
     let sample = collector.collect_blocking();
     let cleanup_categories = scan_cleanup_categories_blocking();
     let startup_impact = scan_startup_impact_blocking();
-    let detected_game = detection::detect_game_process_with_payload(None);
+    let detected_game = detection::detect_game_process_with_payload(None, false);
     let power_plan = snapshot::active_power_plan().ok();
     let pending_snapshots = snapshot::list_snapshots(250)
         .unwrap_or_default()

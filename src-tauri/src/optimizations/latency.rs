@@ -26,7 +26,7 @@ pub struct LatencySession {
 }
 
 pub async fn apply_foreground_burst_mode(payload: Option<Value>) -> ExecutionResult {
-    let detection = detection::detect_game_process_with_payload(payload.as_ref());
+    let detection = detection::detect_game_process_with_payload(payload.as_ref(), false);
     let before = latency_observation("before", &detection);
     let foreground = processes::apply_foreground_burst_priority(payload.clone(), &detection).await;
     let quiet_background = if payload_bool(payload.as_ref(), "quiet_background", true) {
