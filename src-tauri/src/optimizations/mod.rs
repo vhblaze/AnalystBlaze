@@ -20,6 +20,7 @@ pub mod privileged_helper;
 pub mod processes;
 pub mod protected_apps;
 pub mod safety;
+pub mod service_usage;
 pub mod snapshot;
 pub mod storage_media;
 pub mod visual_effects;

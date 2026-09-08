@@ -33,6 +33,13 @@ pub struct AdvancedTelemetry {
     /// heuristic as TelemetryCollector::primary_gpu). None whenever no
     /// video controller answers the query at all, never a guess.
     pub gpu_driver_status: Option<GpuDriverStatus>,
+    /// Per-candidate "does this person ever actually use this Windows
+    /// service" signal (see `optimizations::service_usage`) - a plain
+    /// snapshot with no local decision-making, so the server can decide
+    /// when/how to turn it into a pause-suggestion insight, the same way
+    /// every other insight rule works off uploaded signals.
+    #[serde(default)]
+    pub service_usage_signals: Vec<crate::optimizations::service_usage::ServiceUsageStatus>,
     pub source: String,
     pub refreshed_at: Option<i64>,
 }
@@ -97,6 +104,10 @@ pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTeleme
     collect_event_log(&mut telemetry);
     collect_driver_inventory(&mut telemetry);
     telemetry.gpu_driver_status = collect_gpu_driver_status(gpu_name_hint);
+    // Cheap registry reads (no WMI/PowerShell child process) - safe to run
+    // on every refresh of this already-throttled (300s) block rather than
+    // needing its own cache.
+    telemetry.service_usage_signals = crate::optimizations::service_usage::current_signals();
 
     telemetry
 }

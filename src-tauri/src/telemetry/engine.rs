@@ -342,6 +342,13 @@ impl TelemetryEngine {
                         let _ = tokio::task::spawn_blocking(
                             optimizations::app_usage::record_startup_app_sightings_blocking,
                         );
+                        // Fire-and-forget: restores any candidate service
+                        // AnalystBlaze itself paused the moment its
+                        // intent_detector suggests the user wants it back
+                        // (see service_usage.rs's own docs on why this
+                        // can't just wait for the paused service's own
+                        // usage evidence to reappear).
+                        tokio::spawn(optimizations::service_usage::auto_restore_if_needed());
                     }
                 }
                 _ = batch_flush_tick.tick() => {
