@@ -768,7 +768,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Ativar visual de desempenho",
-                        description: "Reduz animacoes, transparencia, Aero Peek e efeitos leves do Explorer usando valores HKCU reversiveis por snapshot.",
+                        description: "Reduz animacoes, transparencia e efeitos visuais do Windows para deixar o sistema mais leve (reversivel por snapshot). Pode causar um pequeno engasgo de um instante em outros programas abertos, principalmente navegadores - e o Windows avisando todo mundo da mudanca, um comportamento normal do sistema, nao um erro.",
                         risk: "sensivel",
                         snapshot: true,
                       },
