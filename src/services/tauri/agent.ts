@@ -433,6 +433,7 @@ export type LocalAiPolicy = {
   adaptive_idle_eco_threshold_seconds: number;
   autostart_enabled: boolean;
   start_minimized: boolean;
+  telemetry_diagnostics_enabled: boolean;
 };
 
 export type PerformanceReport = {
@@ -1284,6 +1285,7 @@ export async function getLocalAiPolicy(): Promise<LocalAiPolicy> {
       adaptive_idle_eco_threshold_seconds: 600,
       autostart_enabled: true,
       start_minimized: true,
+      telemetry_diagnostics_enabled: false,
     };
   }
   return invoke<LocalAiPolicy>("local_ai_policy");

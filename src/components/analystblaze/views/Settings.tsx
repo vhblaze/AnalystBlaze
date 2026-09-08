@@ -314,6 +314,11 @@ export function Settings({
             description={t("settings.startMinimizedDesc")}
             control={<Switch checked={aiPolicy.start_minimized} onCheckedChange={(start_minimized) => updateAiPolicy({ start_minimized })} />}
           />
+          <Row
+            label={t("settings.telemetryDiagnostics")}
+            description={t("settings.telemetryDiagnosticsDesc")}
+            control={<Switch checked={aiPolicy.telemetry_diagnostics_enabled} onCheckedChange={(telemetry_diagnostics_enabled) => updateAiPolicy({ telemetry_diagnostics_enabled })} />}
+          />
         </div>
       </section>
 
@@ -836,6 +841,7 @@ const DEFAULT_LOCAL_AI_POLICY: LocalAiPolicy = {
   adaptive_idle_eco_threshold_seconds: 600,
   autostart_enabled: true,
   start_minimized: true,
+  telemetry_diagnostics_enabled: false,
 };
 
 function PolicyGroup({

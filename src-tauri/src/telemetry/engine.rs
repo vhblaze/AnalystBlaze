@@ -186,12 +186,23 @@ struct TelemetryPrivacyPolicy {
 }
 
 impl TelemetryPrivacyPolicy {
+    /// `diagnostics_enabled` is the OR of two sources on purpose: the
+    /// env var (kept for local/dev use - nothing in the shipped installer
+    /// or UI ever sets it) and local_ai_policy.json's
+    /// telemetry_diagnostics_enabled, which is the real, user-facing
+    /// Settings toggle (see Settings.tsx) - the only one an actual user
+    /// can ever turn on. Loaded fresh by the caller (see
+    /// TelemetryEngine::telemetry_privacy_policy) rather than cached at
+    /// startup, so flipping the toggle takes effect on the very next
+    /// sample instead of requiring a restart.
     fn from_config_and_credentials(
         config: &AgentConfig,
         credentials: Option<&StoredCredentials>,
+        local_ai_policy: &optimizations::local_ai_policy::LocalAiPolicy,
     ) -> Self {
         Self {
-            diagnostics_enabled: config.telemetry_diagnostics_enabled,
+            diagnostics_enabled: config.telemetry_diagnostics_enabled
+                || local_ai_policy.telemetry_diagnostics_enabled,
             include_ssid: config.telemetry_include_ssid,
             include_hostname: config.telemetry_include_hostname,
             family_detail_consent: config.telemetry_family_detail_consent,
@@ -1187,7 +1198,12 @@ impl TelemetryEngine {
 
     fn telemetry_privacy_policy(&self) -> TelemetryPrivacyPolicy {
         let credentials = self.store.load().ok();
-        TelemetryPrivacyPolicy::from_config_and_credentials(&self.config, credentials.as_ref())
+        let local_ai_policy = optimizations::local_ai_policy::load_local_ai_policy();
+        TelemetryPrivacyPolicy::from_config_and_credentials(
+            &self.config,
+            credentials.as_ref(),
+            &local_ai_policy,
+        )
     }
 
     fn clear_local_session_if_device_inactive(&mut self, error: &str) -> bool {
