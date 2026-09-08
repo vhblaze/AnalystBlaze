@@ -464,14 +464,23 @@ fn registry_value_json(value: &winreg::RegValue) -> Value {
 
 #[cfg(windows)]
 fn notify_windows_settings_changed() -> Value {
+    // UpdatePerUserSystemParameters is the real, necessary one - the same
+    // mechanism Windows' own Performance Options dialog uses to make
+    // animation/transparency/menu-delay registry changes (see
+    // performance_settings_unfiltered above - none of them are icon
+    // related) take effect immediately in already-running apps without a
+    // logoff. It broadcasts WM_SETTINGCHANGE to every top-level window,
+    // which is what a real user hit: some Chromium-based browsers (Opera
+    // included) briefly stutter reprocessing that broadcast - expected OS
+    // behavior on the receiving end, not something we can suppress there.
+    //
+    // ie4uinit.exe -show used to run here too (rebuilds the desktop icon
+    // cache) - removed: nothing this function ever changes is icon
+    // related, so it was a second, redundant system-wide broadcast adding
+    // to that same stutter risk for zero benefit. Don't re-add it unless a
+    // future setting here genuinely needs an icon-cache refresh.
     let update_per_user = std::process::Command::new("rundll32.exe")
         .args(["user32.dll,UpdatePerUserSystemParameters"])
-        .no_window()
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false);
-    let explorer_refresh = std::process::Command::new("ie4uinit.exe")
-        .arg("-show")
         .no_window()
         .status()
         .map(|status| status.success())
@@ -479,7 +488,6 @@ fn notify_windows_settings_changed() -> Value {
 
     json!({
         "updatePerUserSystemParameters": update_per_user,
-        "explorerIconRefresh": explorer_refresh,
     })
 }
 
