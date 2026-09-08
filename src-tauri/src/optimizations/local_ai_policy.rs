@@ -70,16 +70,17 @@ pub struct LocalAiPolicy {
     /// user needs to see right away - logged out, or an update available
     /// (see lib.rs::run's setup and updater::should_surface_update_window).
     pub start_minimized: bool,
-    /// Opt-in, off by default. When true, telemetry uploads may include a
-    /// coarse category ("gaming", "browser", ...) plus a truncated SHA-256
-    /// hash of up to 30 running process names alongside each sample (see
-    /// telemetry/engine.rs's mask_process_name/process_category) - never
-    /// the plaintext process or window name, which stays local either way.
-    /// This is the only way that category+hash signal reaches the backend
-    /// at all: before this setting existed, it was gated behind an
-    /// environment variable no installer or UI ever set, so it had never
-    /// once been exercised by a real user (confirmed against production
-    /// telemetry, 2026-09 - zero rows in the entire table had it).
+    /// Standard as of 2026-09, before this field's very first release (no
+    /// shipped version ever had it, so there is no prior user preference
+    /// being overridden here - see the git history on this line). When
+    /// true, telemetry uploads include a coarse category ("gaming",
+    /// "browser", ...) plus a truncated SHA-256 hash of up to 30 running
+    /// process names alongside each sample (see telemetry/engine.rs's
+    /// mask_process_name/process_category) - never the plaintext process
+    /// or window name, which stays local either way. Not exposed as a
+    /// Settings toggle (deliberately not optional) - still fully gated
+    /// behind the separate family_detail_consent check below for family
+    /// plans, which this does not change or bypass.
     pub telemetry_diagnostics_enabled: bool,
 }
 
@@ -120,7 +121,7 @@ impl Default for LocalAiPolicy {
             adaptive_idle_eco_threshold_seconds: 10 * 60,
             autostart_enabled: true,
             start_minimized: true,
-            telemetry_diagnostics_enabled: false,
+            telemetry_diagnostics_enabled: true,
         }
     }
 }

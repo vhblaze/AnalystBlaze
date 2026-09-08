@@ -317,7 +317,11 @@ export function Settings({
           <Row
             label={t("settings.telemetryDiagnostics")}
             description={t("settings.telemetryDiagnosticsDesc")}
-            control={<Switch checked={aiPolicy.telemetry_diagnostics_enabled} onCheckedChange={(telemetry_diagnostics_enabled) => updateAiPolicy({ telemetry_diagnostics_enabled })} />}
+            control={
+              <span className="shrink-0 rounded-md border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-cyan-200">
+                {t("settings.telemetryDiagnosticsAlwaysOn")}
+              </span>
+            }
           />
         </div>
       </section>
