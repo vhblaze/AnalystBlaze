@@ -232,7 +232,10 @@ impl TelemetryCollector {
         // re-confirming itself every ~10s), but never skip the very first
         // tick, which is what actually populates process_names at all.
         let due = self.collection_count == 1 || self.collection_count.is_multiple_of(5);
-        if due && (self.collection_count == 1 || !crate::optimizations::focus::should_pause_heavy_scans()) {
+        if due
+            && (self.collection_count == 1
+                || !crate::optimizations::focus::should_pause_heavy_scans_for_process_refresh())
+        {
             self.system.refresh_processes(ProcessesToUpdate::All, true);
             self.disks.refresh(false);
         }
@@ -326,6 +329,17 @@ impl TelemetryCollector {
             .get("activity")
             .cloned()
             .unwrap_or_else(|| json!("unknown"));
+        // Feeds optimizations::focus::should_pause_heavy_scans() so it
+        // engages automatically during a real gaming session, not only
+        // while a manually-started Modo Foco: Jogo session is active (see
+        // that function's own docs on why - real usage showed that
+        // manual path essentially never gets used).
+        let known_game_process_running = local_context
+            .get("signals")
+            .and_then(|signals| signals.get("game_detection_reason"))
+            .and_then(Value::as_str)
+            == Some("known_game_process_running");
+        crate::optimizations::focus::set_passive_gaming_detected(known_game_process_running);
         let thermal_analysis = self.analyze_thermal(
             cpu_temperature_available.then_some(cpu_temperature),
             gpu_temperature_available.then_some(gpu_temperature),

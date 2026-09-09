@@ -2,11 +2,62 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::fs;
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::thread;
 use std::time::Duration;
 
 use super::{latency, snapshot, ExecutionResult};
 use crate::audit;
+
+// --- Passive gaming signal, feeding should_pause_heavy_scans() below ---
+//
+// should_pause_heavy_scans() used to only reflect a manually-started
+// Modo Foco: Jogo session - real-world usage showed that session type is
+// essentially never started (zero occurrences across the whole user base
+// at the time this was added), meaning the heavy-scan pause it gates
+// (network diagnostics spawning ping.exe/powershell.exe every 30s,
+// advanced telemetry's WMI queries every 5min - see telemetry/collector.rs)
+// never actually engaged during a real gaming session for anyone,
+// competing for CPU/disk with whatever else was running (confirmed by a
+// real user report: a video on a second monitor stuttering throughout a
+// gaming session). This plugs the same ALREADY-RELIABLE passive game
+// signal telemetry already computes every sample into this policy too,
+// so it engages automatically without the user ever touching Modo Foco.
+
+static PASSIVE_GAMING_VALUE: AtomicBool = AtomicBool::new(false);
+static PASSIVE_GAMING_UPDATED_AT: AtomicI64 = AtomicI64::new(0);
+
+/// How long a passive gaming reading stays trusted with no fresh sample
+/// before falling back to "not gaming". Comfortably longer than the 60s
+/// normal telemetry cadence that updates it (one missed tick shouldn't
+/// flip this), but short enough that a stalled/paused collector (telemetry
+/// off, app backgrounded) doesn't leave heavy scans paused indefinitely -
+/// falling back to "not gaming" (scans resume) is the safe direction on
+/// staleness, not the other way around.
+const PASSIVE_GAMING_STALE_AFTER_SECONDS: i64 = 5 * 60;
+
+/// Called every telemetry sample with the SAME reliable "a known game
+/// process is actually running" signal already validated for training
+/// data in AnalystBlaze-lab (game_detection_reason ==
+/// "known_game_process_running") - deliberately NOT the looser
+/// `signals.gaming` boolean, which also counts a launcher
+/// (Steam/Epic/Battle.net) merely being open and measured ~93% positive
+/// in production - using that here would pause heavy scans for nearly
+/// the entire time those apps are open, not just while actually playing.
+pub fn set_passive_gaming_detected(detected: bool) {
+    PASSIVE_GAMING_VALUE.store(detected, Ordering::Relaxed);
+    PASSIVE_GAMING_UPDATED_AT.store(chrono::Utc::now().timestamp(), Ordering::Relaxed);
+}
+
+fn is_passive_gaming_detected() -> bool {
+    let updated_at = PASSIVE_GAMING_UPDATED_AT.load(Ordering::Relaxed);
+    if updated_at == 0
+        || chrono::Utc::now().timestamp() - updated_at > PASSIVE_GAMING_STALE_AFTER_SECONDS
+    {
+        return false;
+    }
+    PASSIVE_GAMING_VALUE.load(Ordering::Relaxed)
+}
 
 const FOCUS_SESSION_FILE: &str = "focus-session.json";
 const DEFAULT_FOCUS_TTL_SECONDS: i64 = 60 * 60;
@@ -257,6 +308,20 @@ pub fn focus_runtime_policy() -> Option<FocusSessionEffects> {
 }
 
 pub fn should_pause_heavy_scans() -> bool {
+    should_pause_heavy_scans_for_process_refresh() || is_passive_gaming_detected()
+}
+
+/// Same policy as `should_pause_heavy_scans()` but WITHOUT the passive
+/// gaming signal - for the one caller (telemetry/collector.rs's
+/// `begin_collection_tick`) whose own gated work is refreshing the
+/// process list, which is the exact input the passive signal is computed
+/// FROM. Feeding the passive signal back into that particular gate would
+/// freeze the process list the instant gaming is first detected and never
+/// refresh it again - the stale list would keep "confirming" the game is
+/// still running even after it closes, since nothing would ever notice
+/// otherwise. A real self-reinforcing loop, caught before shipping.
+/// Every other caller should keep using `should_pause_heavy_scans()`.
+pub fn should_pause_heavy_scans_for_process_refresh() -> bool {
     focus_runtime_policy().is_some_and(|effects| effects.pause_heavy_scans)
 }
 
@@ -556,8 +621,37 @@ mod tests {
 
     use super::{
         effects_for_profile, focus_background_targets, profile_from_payload,
-        ttl_seconds_from_payload, FocusProfile, MAX_FOCUS_TTL_SECONDS, MIN_FOCUS_TTL_SECONDS,
+        set_passive_gaming_detected, should_pause_heavy_scans,
+        should_pause_heavy_scans_for_process_refresh, ttl_seconds_from_payload, FocusProfile,
+        MAX_FOCUS_TTL_SECONDS, MIN_FOCUS_TTL_SECONDS,
     };
+
+    // Exercises set_passive_gaming_detected/should_pause_heavy_scans/
+    // should_pause_heavy_scans_for_process_refresh together, in one test,
+    // because they share process-global atomic state - splitting this
+    // across multiple #[test] fns would let the default parallel test
+    // runner interleave and flake them against each other. Staleness
+    // expiry itself isn't exercised here (would need a 5-minute sleep or
+    // an injectable clock) - only the core "set -> reflected in the right
+    // place, not the other" contract, which is what the process-refresh
+    // feedback-loop bug (see should_pause_heavy_scans_for_process_refresh's
+    // docs) actually hinges on.
+    #[test]
+    fn passive_gaming_signal_feeds_should_pause_heavy_scans_but_not_the_process_refresh_variant() {
+        set_passive_gaming_detected(false);
+        assert!(!should_pause_heavy_scans());
+        assert!(!should_pause_heavy_scans_for_process_refresh());
+
+        set_passive_gaming_detected(true);
+        assert!(should_pause_heavy_scans());
+        // The process-refresh variant must stay false here - if it also
+        // turned true, the process list that feeds this very signal would
+        // freeze, and a closed game could never be un-detected.
+        assert!(!should_pause_heavy_scans_for_process_refresh());
+
+        set_passive_gaming_detected(false);
+        assert!(!should_pause_heavy_scans());
+    }
 
     #[test]
     fn supports_common_focus_profile_aliases() {
