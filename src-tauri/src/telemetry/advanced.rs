@@ -40,6 +40,16 @@ pub struct AdvancedTelemetry {
     /// every other insight rule works off uploaded signals.
     #[serde(default)]
     pub service_usage_signals: Vec<crate::optimizations::service_usage::ServiceUsageStatus>,
+    /// Whether Xbox Game Bar's background Game DVR recording
+    /// (HKCU\System\GameConfigStore\GameDVR_Enabled) is currently on -
+    /// found via a cross-user production audit correlating with
+    /// Microsoft-Windows-DistributedCOM event 10010 timeouts naming Game
+    /// Bar/BcastDVR components (Windows' own broadcast/capture service
+    /// failing to start in time). `None` when the value has never been
+    /// explicitly set (key/value absent - Windows applies its own
+    /// platform default in that case, which this deliberately doesn't
+    /// guess at) or on non-Windows.
+    pub game_dvr_enabled: Option<bool>,
     pub source: String,
     pub refreshed_at: Option<i64>,
 }
@@ -108,8 +118,25 @@ pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTeleme
     // on every refresh of this already-throttled (300s) block rather than
     // needing its own cache.
     telemetry.service_usage_signals = crate::optimizations::service_usage::current_signals();
+    telemetry.game_dvr_enabled = game_dvr_enabled();
 
     telemetry
+}
+
+#[cfg(windows)]
+fn game_dvr_enabled() -> Option<bool> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key = hkcu.open_subkey("System\\GameConfigStore").ok()?;
+    let value: u32 = key.get_value("GameDVR_Enabled").ok()?;
+    Some(value != 0)
+}
+
+#[cfg(not(windows))]
+fn game_dvr_enabled() -> Option<bool> {
+    None
 }
 
 /// Age past which a GPU driver is flagged as possibly outdated. Not a
@@ -526,4 +553,13 @@ fn battery_status_label(status: i64) -> String {
         _ => "unknown",
     }
     .to_string()
+}
+
+#[cfg(test)]
+mod game_dvr_live_check {
+    #[test]
+    #[ignore] // machine-dependent - run manually with --ignored
+    fn live_game_dvr_enabled_on_this_machine() {
+        println!("game_dvr_enabled() = {:?}", super::game_dvr_enabled());
+    }
 }
