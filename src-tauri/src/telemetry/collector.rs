@@ -167,7 +167,6 @@ pub struct TelemetryCollector {
     disks: Disks,
     gpu_devices: Vec<GpuInfo>,
     gpu_usage_reader: Option<GpuUsageReader>,
-    nvidia_sensor_reader: Option<NvidiaSensorReader>,
     collection_count: u64,
     advanced_cache: AdvancedTelemetry,
     advanced_refreshed_at: i64,
@@ -186,7 +185,6 @@ impl TelemetryCollector {
             disks: Disks::new_with_refreshed_list(),
             gpu_devices: detect_gpu_devices(),
             gpu_usage_reader: GpuUsageReader::new(),
-            nvidia_sensor_reader: NvidiaSensorReader::new(),
             collection_count: 0,
             advanced_cache: AdvancedTelemetry::default(),
             advanced_refreshed_at: 0,
@@ -264,10 +262,7 @@ impl TelemetryCollector {
         let cpu_temperature_methods = cpu_temperature_reading.methods.clone();
         let (throttle_distance_c, throttle_distance_assumed_tjmax_c) =
             throttle_distance(cpu_temperature_reading.value_c);
-        let nvidia_sensors = self
-            .nvidia_sensor_reader
-            .as_ref()
-            .and_then(NvidiaSensorReader::sample);
+        let nvidia_sensors = nvidia_sensor_reader().and_then(NvidiaSensorReader::sample);
         let mut gpu_temperature_methods = self.gpu_temperature_methods(&hardware_sensors);
         if let Some(temperature) = nvidia_sensors
             .as_ref()
@@ -1621,9 +1616,35 @@ struct NvidiaSensorSample {
     power_watts: Option<f64>,
 }
 
+/// Process-wide NVML reader, created at most once.
+///
+/// NVML's init/shutdown are global to the process, not per-handle. Every
+/// `TelemetryCollector::new()` used to build its own reader, and five call
+/// sites construct collectors - the long-lived telemetry engine, the
+/// `collect_once` Tauri command, the performance scan, and hardware-profile
+/// reads during sign-in. So a short-lived collector's `Drop` ran
+/// `nvmlShutdown()` and unloaded nvml.dll while the engine's reader was
+/// still live and holding device handles, which is an access violation
+/// inside NVIDIA's own DLL. Three such crashes were recorded on one machine
+/// across three app versions and three driver versions, always in nvml.dll,
+/// always `c0000005`; 56% of registered devices have an NVIDIA GPU and load
+/// this library.
+///
+/// Initialising once and never shutting down is the fix. The library stays
+/// loaded for the life of the process, which is what NVIDIA's own guidance
+/// assumes - there is no correct moment to unload it while any part of the
+/// app may still sample.
+static NVIDIA_SENSOR_READER: std::sync::OnceLock<Option<NvidiaSensorReader>> =
+    std::sync::OnceLock::new();
+
+fn nvidia_sensor_reader() -> Option<&'static NvidiaSensorReader> {
+    NVIDIA_SENSOR_READER
+        .get_or_init(NvidiaSensorReader::new)
+        .as_ref()
+}
+
 struct NvidiaSensorReader {
     _library: libloading::Library,
-    shutdown: unsafe extern "C" fn() -> u32,
     device_get_count: unsafe extern "C" fn(*mut u32) -> u32,
     device_get_handle_by_index: unsafe extern "C" fn(u32, *mut NvmlDevice) -> u32,
     device_get_temperature: unsafe extern "C" fn(NvmlDevice, u32, *mut u32) -> u32,
@@ -1632,6 +1653,10 @@ struct NvidiaSensorReader {
     device_get_power_usage: unsafe extern "C" fn(NvmlDevice, *mut u32) -> u32,
 }
 
+// NVML is documented as thread-safe, and the reader holds only function
+// pointers plus the loaded library - no per-thread state. Now that a single
+// instance is shared process-wide (see NVIDIA_SENSOR_READER) this is what
+// lets the engine thread and a UI-triggered collect_once sample concurrently.
 unsafe impl Send for NvidiaSensorReader {}
 unsafe impl Sync for NvidiaSensorReader {}
 
@@ -1641,9 +1666,6 @@ impl NvidiaSensorReader {
             let library = libloading::Library::new("nvml.dll").ok()?;
             let init = *library
                 .get::<unsafe extern "C" fn() -> u32>(b"nvmlInit_v2\0")
-                .ok()?;
-            let shutdown = *library
-                .get::<unsafe extern "C" fn() -> u32>(b"nvmlShutdown\0")
                 .ok()?;
             let device_get_count = *library
                 .get::<unsafe extern "C" fn(*mut u32) -> u32>(b"nvmlDeviceGetCount_v2\0")
@@ -1680,7 +1702,6 @@ impl NvidiaSensorReader {
 
             Some(Self {
                 _library: library,
-                shutdown,
                 device_get_count,
                 device_get_handle_by_index,
                 device_get_temperature,
@@ -1785,13 +1806,12 @@ fn nvml_milliwatts_to_watts(power_mw: u32) -> Option<f64> {
     watts.is_finite().then_some(watts)
 }
 
-impl Drop for NvidiaSensorReader {
-    fn drop(&mut self) {
-        unsafe {
-            (self.shutdown)();
-        }
-    }
-}
+// Deliberately no `impl Drop`. Calling nvmlShutdown() and letting libloading
+// unload nvml.dll is exactly what crashed the app: NVML's teardown is global
+// to the process, so a short-lived collector was tearing it down under the
+// long-lived engine. The reader is now a process-lifetime singleton, and
+// there is no point at which shutting NVML down is either safe or useful -
+// the OS reclaims the library at exit.
 
 type NvmlDevice = *mut std::ffi::c_void;
 

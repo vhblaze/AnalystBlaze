@@ -475,6 +475,7 @@ mod tests {
             event_id: Some(36),
             level: None,
             message: Some("teste".to_string()),
+            count: Some(1),
         }
     }
 
