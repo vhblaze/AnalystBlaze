@@ -26,6 +26,8 @@ pub struct AdvancedTelemetry {
     pub latest_event_log_errors: Vec<EventLogIssue>,
     #[serde(default)]
     pub shell_crashes: Vec<ShellCrash>,
+    #[serde(default)]
+    pub failing_services: Vec<FailingService>,
     pub driver_inventory: Vec<DriverInfo>,
     pub thermal_throttling_suspected: Option<bool>,
     /// The GPU driver Windows itself considers "the" display adapter's
@@ -101,6 +103,27 @@ pub struct EventLogIssue {
     pub count: Option<u32>,
 }
 
+/// A Windows service that keeps failing - Service Control Manager kept
+/// logging it in the System event log over the last week.
+///
+/// `name` is the service's display name with any trailing per-session suffix
+/// stripped ("MessagingService_12d159" -> "MessagingService"). Only the name,
+/// the failure kind and how many times it happened leave the machine - never
+/// the error text, which can name paths. Per-session user services that fail
+/// transiently by design, and the Game DVR user services (already covered by
+/// the Game DVR card), are filtered out - see `FAILING_SERVICE_NOISE`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FailingService {
+    pub name: String,
+    /// "crashing" (started, then died - SCM 7031/7034/7023),
+    /// "wont_start" (failed to start at all - SCM 7000),
+    /// "start_timeout" (took too long to report ready - SCM 7009).
+    pub kind: String,
+    pub event_id: Option<u32>,
+    /// Occurrences in the ~7-day window.
+    pub count: u32,
+}
+
 /// A crash of the Windows shell, or of AnalystBlaze itself.
 ///
 /// Deliberately not "recent crashes on this PC". The Application log names
@@ -147,6 +170,7 @@ pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTeleme
     collect_windows_update(&mut telemetry);
     collect_event_log(&mut telemetry);
     collect_shell_crashes(&mut telemetry);
+    collect_failing_services(&mut telemetry);
     collect_driver_inventory(&mut telemetry);
     telemetry.gpu_driver_status = collect_gpu_driver_status(gpu_name_hint);
     // Cheap registry reads (no WMI/PowerShell child process) - safe to run
@@ -616,6 +640,111 @@ fn collect_shell_crashes(telemetry: &mut AdvancedTelemetry) {
         .collect();
 }
 
+/// SCM event IDs that mean a service is not staying up, mapped to the plain
+/// failure kind reported in `FailingService::kind`.
+const SERVICE_FAILURE_EVENTS: &[(u32, &str)] = &[
+    (7031, "crashing"),      // terminated unexpectedly (with recovery action)
+    (7034, "crashing"),      // terminated unexpectedly
+    (7023, "crashing"),      // terminated with an error
+    (7000, "wont_start"),    // failed to start
+    (7009, "start_timeout"), // timed out waiting for the service to report ready
+];
+
+/// Service names (matched case-insensitively as a prefix, after the trailing
+/// per-session suffix is stripped) that fail transiently by design and are
+/// not worth surfacing:
+///   - the per-user "…UserSvc"/"…Svc_<rand>" services Windows spins up per
+///     sign-in and tears down again, which routinely log a start failure
+///     during the race and recover on their own;
+///   - the Game DVR user services, whose failures are already explained by
+///     the Game DVR insight card.
+const FAILING_SERVICE_NOISE: &[&str] = &[
+    "MessagingService",
+    "OneSyncSvc",
+    "CDPUserSvc",
+    "PimIndexMaintenanceSvc",
+    "UnistoreSvc",
+    "UserDataSvc",
+    "WpnUserService",
+    "cbdhsvc",
+    "BluetoothUserService",
+    "CaptureService",
+    "DevicesFlowUserSvc",
+    "PrintWorkflowUserSvc",
+    "ConsentUxUserSvc",
+    "CredentialEnrollmentManagerUserSvc",
+    "DeviceAssociationBrokerSvc",
+    "BcastDVRUserService",
+];
+
+fn is_noise_service(name: &str) -> bool {
+    let lower = name.trim().to_ascii_lowercase();
+    if lower.contains("gamedvr") || lower.contains("game dvr") || lower.contains("bcastdvr") {
+        return true;
+    }
+    FAILING_SERVICE_NOISE
+        .iter()
+        .any(|noise| lower.starts_with(&noise.to_ascii_lowercase()))
+}
+
+fn collect_failing_services(telemetry: &mut AdvancedTelemetry) {
+    let kind_map = SERVICE_FAILURE_EVENTS
+        .iter()
+        .map(|(id, kind)| format!("{id}='{kind}'"))
+        .collect::<Vec<_>>()
+        .join(";");
+    let ids = SERVICE_FAILURE_EVENTS
+        .iter()
+        .map(|(id, _)| id.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // The service name lives in different Properties slots per event: [1] for
+    // 7009 (the wait-timeout, whose [0] is the timeout in ms), [0] for the
+    // rest. A trailing "_<hex/random>" is a per-session instance suffix and
+    // is stripped so instances of one service group together.
+    let Some(values) = powershell_json_array(&format!(
+        "$kind=@{{{kind_map}}}; \
+         Get-WinEvent -FilterHashtable @{{LogName='System'; ProviderName='Service Control Manager'; Id=@({ids}); StartTime=(Get-Date).AddDays(-7)}} -MaxEvents 400 -ErrorAction SilentlyContinue \
+         | ForEach-Object {{ $n=if($_.Id -eq 7009){{[string]$_.Properties[1].Value}}else{{[string]$_.Properties[0].Value}}; \
+             [pscustomobject]@{{ Name=($n -replace '_[0-9A-Fa-f]{{3,}}$',''); Kind=$kind[$_.Id]; Id=$_.Id }} }} \
+         | Where-Object {{ $_.Name -and $_.Kind }} \
+         | Group-Object Name,Kind,Id | Sort-Object Count -Descending | Select-Object -First 10 \
+         | ForEach-Object {{ [pscustomobject]@{{ Name=$_.Group[0].Name; Kind=$_.Group[0].Kind; Id=$_.Group[0].Id; Count=$_.Count }} }} \
+         | ConvertTo-Json -Compress",
+    )) else {
+        return;
+    };
+
+    telemetry.failing_services = values
+        .into_iter()
+        .filter_map(|value| {
+            let name = clean_string(value.get("Name").and_then(Value::as_str)?);
+            let count = value.get("Count").and_then(Value::as_u64).unwrap_or(1) as u32;
+            // The card is about a service that *keeps* failing; a single
+            // one-off is not a pattern and would only pad the payload (which
+            // is bounded - the server rejects a batch whose `details`
+            // exceeds 8000 chars).
+            if name.is_empty() || count < 2 || is_noise_service(&name) {
+                return None;
+            }
+            Some(FailingService {
+                // Service display names run short; the cap is only a guard
+                // against a pathological one, not expected to bite.
+                name: name.chars().take(64).collect(),
+                kind: value
+                    .get("Kind")
+                    .and_then(Value::as_str)
+                    .unwrap_or("crashing")
+                    .to_string(),
+                event_id: value.get("Id").and_then(Value::as_u64).map(|v| v as u32),
+                count,
+            })
+        })
+        .take(4)
+        .collect();
+}
+
 #[cfg(test)]
 mod shell_crash_tests {
     use super::*;
@@ -665,6 +794,67 @@ mod shell_crash_tests {
             EVENT_LOG_COUNT_CAP > 50,
             "cap must exceed the value the old metric saturated at"
         );
+    }
+
+    #[test]
+    fn is_noise_service_filters_per_session_and_game_dvr_but_keeps_real_ones() {
+        // Per-session user services (random suffix already stripped) and any
+        // Game DVR service - covered elsewhere or self-healing.
+        for noisy in [
+            "MessagingService",
+            "OneSyncSvc",
+            "cbdhsvc",
+            "Serviço de Usuário do GameDVR e Transmissão",
+            "BcastDVRUserService",
+        ] {
+            assert!(is_noise_service(noisy), "{noisy} should be filtered");
+        }
+        // Real services a user would want to know about.
+        for real in [
+            "Microsoft Route Policy Service",
+            "ASUS AURA SYNC lighting service",
+            "Steam Client Service",
+            "Autodesk CER Service",
+            "vgc",
+        ] {
+            assert!(!is_noise_service(real), "{real} must not be filtered");
+        }
+    }
+
+    #[test]
+    fn every_service_failure_event_maps_to_a_known_kind() {
+        for (_, kind) in SERVICE_FAILURE_EVENTS {
+            assert!(
+                ["crashing", "wont_start", "start_timeout"].contains(kind),
+                "unknown kind {kind}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod failing_services_live_check {
+    /// What this machine would report. Run with:
+    /// cargo test --lib failing_services_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_failing_services_on_this_machine() {
+        let mut telemetry = super::AdvancedTelemetry::default();
+        super::collect_failing_services(&mut telemetry);
+        println!("failing_services = {:#?}", telemetry.failing_services);
+        for service in &telemetry.failing_services {
+            assert!(
+                !super::is_noise_service(&service.name),
+                "noise leaked through: {}",
+                service.name
+            );
+            assert!(
+                ["crashing", "wont_start", "start_timeout"].contains(&service.kind.as_str()),
+                "bad kind: {}",
+                service.kind
+            );
+            assert!(!service.name.is_empty(), "empty service name");
+        }
     }
 }
 
