@@ -167,13 +167,77 @@ pub struct TelemetryCollector {
     disks: Disks,
     gpu_devices: Vec<GpuInfo>,
     collection_count: u64,
-    advanced_cache: AdvancedTelemetry,
-    advanced_refreshed_at: i64,
-    network_cache: NetworkDiagnostics,
-    network_refreshed_at: i64,
-    hardware_sensor_cache: Vec<HardwareSensorReading>,
-    hardware_sensor_refreshed_at: i64,
     thermal_history: VecDeque<(i64, Option<f64>, Option<f64>, f64)>,
+}
+
+/// A value plus the unix second it was last computed.
+struct TimedCache<T> {
+    value: T,
+    refreshed_at: i64,
+}
+
+impl<T> TimedCache<T> {
+    fn stale(&self, ttl_seconds: i64) -> bool {
+        chrono::Utc::now().timestamp().saturating_sub(self.refreshed_at) >= ttl_seconds
+    }
+}
+
+/// The three expensive sub-collections - advanced telemetry (~10 powershell
+/// spawns), network diagnostics (a ping/traceroute pass), hardware sensors
+/// (another powershell) - are process-wide, not per-collector.
+///
+/// They used to be `TelemetryCollector` fields, so every throwaway collector
+/// started them cold. Five call sites build collectors, and the short-lived
+/// ones behind `collect_once` (the "Coletar agora" button) and the
+/// performance scan would each recompute all three from scratch: 10-15s and
+/// ~15 child processes for one button press, while the telemetry engine's
+/// long-lived collector already had them warm. Sharing one cache per kind
+/// means those flows read what the engine last collected and only pay for a
+/// refresh when it is genuinely due.
+///
+/// Each helper checks staleness under the lock, computes *outside* it, then
+/// writes back - so a slow refresh never blocks a concurrent reader, and the
+/// worst case of two collectors racing is one wasted recompute, never a
+/// stall or a deadlock across `.await`.
+static ADVANCED_CACHE: std::sync::OnceLock<std::sync::Mutex<TimedCache<AdvancedTelemetry>>> =
+    std::sync::OnceLock::new();
+static NETWORK_CACHE: std::sync::OnceLock<std::sync::Mutex<TimedCache<NetworkDiagnostics>>> =
+    std::sync::OnceLock::new();
+static HARDWARE_SENSOR_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<TimedCache<Vec<HardwareSensorReading>>>,
+> = std::sync::OnceLock::new();
+
+fn advanced_cache() -> &'static std::sync::Mutex<TimedCache<AdvancedTelemetry>> {
+    ADVANCED_CACHE.get_or_init(|| {
+        std::sync::Mutex::new(TimedCache {
+            value: AdvancedTelemetry::default(),
+            refreshed_at: 0,
+        })
+    })
+}
+
+fn network_cache() -> &'static std::sync::Mutex<TimedCache<NetworkDiagnostics>> {
+    NETWORK_CACHE.get_or_init(|| {
+        std::sync::Mutex::new(TimedCache {
+            value: NetworkDiagnostics::default(),
+            refreshed_at: 0,
+        })
+    })
+}
+
+fn hardware_sensor_cache() -> &'static std::sync::Mutex<TimedCache<Vec<HardwareSensorReading>>> {
+    HARDWARE_SENSOR_CACHE.get_or_init(|| {
+        std::sync::Mutex::new(TimedCache {
+            value: Vec::new(),
+            refreshed_at: 0,
+        })
+    })
+}
+
+/// Lock past a poisoned mutex: a panic in one refresh must not permanently
+/// wedge telemetry for the whole process.
+fn lock_cache<T>(cache: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 impl TelemetryCollector {
@@ -184,12 +248,6 @@ impl TelemetryCollector {
             disks: Disks::new_with_refreshed_list(),
             gpu_devices: detect_gpu_devices(),
             collection_count: 0,
-            advanced_cache: AdvancedTelemetry::default(),
-            advanced_refreshed_at: 0,
-            network_cache: NetworkDiagnostics::default(),
-            network_refreshed_at: 0,
-            hardware_sensor_cache: Vec::new(),
-            hardware_sensor_refreshed_at: 0,
             thermal_history: VecDeque::with_capacity(36),
         }
     }
@@ -805,17 +863,17 @@ impl TelemetryCollector {
         methods
     }
 
-    fn advanced_telemetry(&mut self) -> AdvancedTelemetry {
-        let now = chrono::Utc::now().timestamp();
-        if now.saturating_sub(self.advanced_refreshed_at) >= 300
-            && !crate::optimizations::focus::should_pause_heavy_scans()
-        {
-            let gpu_name = self.primary_gpu().name;
-            self.advanced_cache = collect_advanced_telemetry(Some(&gpu_name));
-            self.advanced_refreshed_at = now;
+    fn advanced_telemetry(&self) -> AdvancedTelemetry {
+        let cache = advanced_cache();
+        let due = lock_cache(cache).stale(300)
+            && !crate::optimizations::focus::should_pause_heavy_scans();
+        if due {
+            let fresh = collect_advanced_telemetry(Some(&self.primary_gpu().name));
+            let mut guard = lock_cache(cache);
+            guard.value = fresh;
+            guard.refreshed_at = chrono::Utc::now().timestamp();
         }
-
-        self.advanced_cache.clone()
+        lock_cache(cache).value.clone()
     }
 
     // Both refreshes below shell out to a real child process (ping.exe /
@@ -828,68 +886,70 @@ impl TelemetryCollector {
     // back to the previous cached value on a JoinError (extremely rare -
     // only on panic) is preferable to propagating an error out of a
     // telemetry tick.
-    async fn network_diagnostics(&mut self) -> NetworkDiagnostics {
-        let now = chrono::Utc::now().timestamp();
+    async fn network_diagnostics(&self) -> NetworkDiagnostics {
         // A forced refresh (the user just changed a network setting) always
         // wins even mid-game - the user is actively waiting on that result.
         // The routine 30s poll does not: it spawns real ping.exe/powershell.exe
         // child processes (see the module doc above on why those aren't
         // isolated further), and a 100-400ms scheduler burst from that is
         // exactly the kind of hitch a CPU-bound game has no headroom for.
+        let cache = network_cache();
         let forced = super::network::take_network_cache_invalidated();
-        let due = now.saturating_sub(self.network_refreshed_at) >= 30;
+        let due = lock_cache(cache).stale(30);
         if forced || (due && !crate::optimizations::focus::should_pause_heavy_scans()) {
             if let Ok(sample) =
                 tokio::task::spawn_blocking(collect_network_sample_with_adapter_health).await
             {
-                self.network_cache = sample;
-                self.network_refreshed_at = now;
+                let mut guard = lock_cache(cache);
+                guard.value = sample;
+                guard.refreshed_at = chrono::Utc::now().timestamp();
             }
         }
-
-        self.network_cache.clone()
+        lock_cache(cache).value.clone()
     }
 
-    async fn hardware_sensors(&mut self) -> Vec<HardwareSensorReading> {
-        let now = chrono::Utc::now().timestamp();
-        if now.saturating_sub(self.hardware_sensor_refreshed_at) >= 30
-            && !crate::optimizations::focus::should_pause_heavy_scans()
-        {
+    async fn hardware_sensors(&self) -> Vec<HardwareSensorReading> {
+        let cache = hardware_sensor_cache();
+        let due =
+            lock_cache(cache).stale(30) && !crate::optimizations::focus::should_pause_heavy_scans();
+        if due {
             if let Ok(sensors) = tokio::task::spawn_blocking(external_hardware_sensors).await {
-                self.hardware_sensor_cache = sensors;
-                self.hardware_sensor_refreshed_at = now;
+                let mut guard = lock_cache(cache);
+                guard.value = sensors;
+                guard.refreshed_at = chrono::Utc::now().timestamp();
             }
         }
-
-        self.hardware_sensor_cache.clone()
+        lock_cache(cache).value.clone()
     }
 
     /// Same caching as `network_diagnostics`, called directly instead of via
     /// spawn_blocking - only for callers that are already running off the
     /// tokio reactor (see `collect_blocking`).
-    fn network_diagnostics_sync(&mut self) -> NetworkDiagnostics {
-        let now = chrono::Utc::now().timestamp();
+    fn network_diagnostics_sync(&self) -> NetworkDiagnostics {
+        let cache = network_cache();
         let forced = super::network::take_network_cache_invalidated();
-        let due = now.saturating_sub(self.network_refreshed_at) >= 30;
+        let due = lock_cache(cache).stale(30);
         if forced || (due && !crate::optimizations::focus::should_pause_heavy_scans()) {
-            self.network_cache = collect_network_sample_with_adapter_health();
-            self.network_refreshed_at = now;
+            let sample = collect_network_sample_with_adapter_health();
+            let mut guard = lock_cache(cache);
+            guard.value = sample;
+            guard.refreshed_at = chrono::Utc::now().timestamp();
         }
-
-        self.network_cache.clone()
+        lock_cache(cache).value.clone()
     }
 
     /// Same caching as `hardware_sensors`, called directly instead of via
     /// spawn_blocking - only for callers that are already running off the
     /// tokio reactor (see `collect_blocking`).
-    fn hardware_sensors_sync(&mut self) -> Vec<HardwareSensorReading> {
-        let now = chrono::Utc::now().timestamp();
-        if now.saturating_sub(self.hardware_sensor_refreshed_at) >= 30 {
-            self.hardware_sensor_cache = external_hardware_sensors();
-            self.hardware_sensor_refreshed_at = now;
+    fn hardware_sensors_sync(&self) -> Vec<HardwareSensorReading> {
+        let cache = hardware_sensor_cache();
+        if lock_cache(cache).stale(30) {
+            let sensors = external_hardware_sensors();
+            let mut guard = lock_cache(cache);
+            guard.value = sensors;
+            guard.refreshed_at = chrono::Utc::now().timestamp();
         }
-
-        self.hardware_sensor_cache.clone()
+        lock_cache(cache).value.clone()
     }
 }
 
@@ -2259,6 +2319,69 @@ fn idle_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Real system calls (powershell, ping) - kept out of the default run.
+    /// cargo test --lib shared_sub_collection -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn shared_sub_collection_caches_survive_concurrent_access() {
+        // The three caches went from per-collector fields to process globals;
+        // this is what has to hold: many collectors hitting them at once must
+        // never deadlock or poison-wedge. Warm them once single-threaded so
+        // the storm below is mostly warm reads (a cold storm just means a few
+        // wasted recomputes, which is the accepted tradeoff, not a bug).
+        let collector = std::sync::Arc::new(TelemetryCollector::new());
+        let _ = collector.hardware_sensors_sync();
+        let _ = collector.network_diagnostics_sync();
+        let _ = collector.advanced_telemetry();
+
+        let handles: Vec<_> = (0..8)
+            .map(|_| {
+                let collector = std::sync::Arc::clone(&collector);
+                std::thread::spawn(move || {
+                    for _ in 0..50 {
+                        let _ = collector.hardware_sensors_sync();
+                        let _ = collector.network_diagnostics_sync();
+                        let _ = collector.advanced_telemetry();
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("cache access thread panicked");
+        }
+
+        let started = std::time::Instant::now();
+        let _ = collector.hardware_sensors_sync();
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(50),
+            "warm hardware-sensor read took {:?} - cache not shared?",
+            started.elapsed()
+        );
+    }
+
+    /// Times a cold vs warm full sample. The warm one is what `collect_once`
+    /// (the button) costs on a machine where the engine is already running.
+    /// cargo test --lib collect_blocking_warm -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn collect_blocking_warm_reuses_the_engine_caches() {
+        let mut a = TelemetryCollector::new();
+        let cold = std::time::Instant::now();
+        let _ = a.collect_blocking();
+        let cold = cold.elapsed();
+
+        let mut b = TelemetryCollector::new();
+        let warm = std::time::Instant::now();
+        let _ = b.collect_blocking();
+        let warm = warm.elapsed();
+
+        println!("cold collect_blocking = {cold:?}   second collector = {warm:?}");
+        assert!(
+            warm * 3 < cold,
+            "second full sample ({warm:?}) was not much cheaper than the first ({cold:?})"
+        );
+    }
 
     #[test]
     fn gpu_usage_percent_shares_one_warm_reader_across_calls() {
