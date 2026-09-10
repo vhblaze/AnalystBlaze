@@ -636,7 +636,39 @@ fn run_service_loop() -> windows_service::Result<()> {
         ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceState, ServiceStatus,
         ServiceType,
     };
-    use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
+    use windows_service::service_control_handler::{
+        self, ServiceControlHandlerResult, ServiceStatusHandle,
+    };
+
+    // How long we tell SCM a stop may take, and how long the shutdown path
+    // will actually wait for the pipe listeners to drain before reporting
+    // Stopped anyway. The pipe listeners block in a synchronous, uncancelable
+    // ConnectNamedPipe; wake_named_pipe_server() unsticks them by connecting,
+    // but that is best-effort and can lose a race. Before this, a lost race
+    // meant run_service_loop hung in pipe_thread.join(), never reported
+    // Stopped, and SCM eventually killed the process - logged as event 7034,
+    // "terminated unexpectedly", once per stop/restart. sc.exe stop is on the
+    // helper's restart() and stop() paths, so that fired routinely (e.g. any
+    // time the UI's "restart the helper" flow ran after a version bump).
+    const SHUTDOWN_WAIT_HINT: Duration = Duration::from_secs(20);
+    const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+    fn service_status(
+        state: ServiceState,
+        controls: ServiceControlAccept,
+        checkpoint: u32,
+        wait_hint: Duration,
+    ) -> ServiceStatus {
+        ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: state,
+            controls_accepted: controls,
+            exit_code: ServiceExitCode::Win32(0),
+            checkpoint,
+            wait_hint,
+            process_id: None,
+        }
+    }
 
     fs::write(helper_root().join("version.txt"), HELPER_VERSION).ok();
     if let Err(error) = ensure_helper_signing_key_file() {
@@ -667,26 +699,39 @@ fn run_service_loop() -> windows_service::Result<()> {
 
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
     let handler_shutdown = Arc::clone(&shutdown_flag);
+    // register() hands back the status handle, but the control callback needs
+    // it to report StopPending the instant a stop arrives - so it reads it
+    // from this slot, which is filled immediately after register() returns.
+    let status_slot: Arc<OnceLock<ServiceStatusHandle>> = Arc::new(OnceLock::new());
+    let handler_status = Arc::clone(&status_slot);
     let status_handle =
         service_control_handler::register(SERVICE_NAME, move |event| match event {
             ServiceControl::Stop | ServiceControl::Shutdown => {
                 handler_shutdown.store(true, Ordering::SeqCst);
+                // Acknowledge to SCM before the drain: a stop it has not been
+                // told is in progress is one it will start a kill timer for.
+                if let Some(handle) = handler_status.get() {
+                    let _ = handle.set_service_status(service_status(
+                        ServiceState::StopPending,
+                        ServiceControlAccept::empty(),
+                        1,
+                        SHUTDOWN_WAIT_HINT,
+                    ));
+                }
                 wake_named_pipe_server();
                 let _ = shutdown_tx.send(());
                 ServiceControlHandlerResult::NoError
             }
             _ => ServiceControlHandlerResult::NotImplemented,
         })?;
+    let _ = status_slot.set(status_handle);
 
-    status_handle.set_service_status(ServiceStatus {
-        service_type: ServiceType::OWN_PROCESS,
-        current_state: ServiceState::Running,
-        controls_accepted: ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
-        exit_code: ServiceExitCode::Win32(0),
-        checkpoint: 0,
-        wait_hint: Duration::default(),
-        process_id: None,
-    })?;
+    status_handle.set_service_status(service_status(
+        ServiceState::Running,
+        ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
+        0,
+        Duration::default(),
+    ))?;
 
     loop {
         if shutdown_rx.try_recv().is_ok() {
@@ -696,18 +741,42 @@ fn run_service_loop() -> windows_service::Result<()> {
     }
 
     shutdown_flag.store(true, Ordering::SeqCst);
-    wake_named_pipe_server();
-    let _ = pipe_thread.join();
+    let _ = status_handle.set_service_status(service_status(
+        ServiceState::StopPending,
+        ServiceControlAccept::empty(),
+        2,
+        SHUTDOWN_WAIT_HINT,
+    ));
 
-    status_handle.set_service_status(ServiceStatus {
-        service_type: ServiceType::OWN_PROCESS,
-        current_state: ServiceState::Stopped,
-        controls_accepted: ServiceControlAccept::empty(),
-        exit_code: ServiceExitCode::Win32(0),
-        checkpoint: 0,
-        wait_hint: Duration::default(),
-        process_id: None,
-    })?;
+    // Drain on a side thread and wait on it with a deadline. The listener
+    // threads hold nothing but pipe handles the OS reclaims at exit, so if
+    // one is still wedged in ConnectNamedPipe past the deadline it is safe to
+    // report Stopped and return without it - what must NOT happen is SCM
+    // killing us first because we never reported Stopped at all.
+    let (drained_tx, drained_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for _ in 0..6 {
+            wake_named_pipe_server();
+            thread::sleep(Duration::from_millis(150));
+        }
+        let _ = pipe_thread.join();
+        let _ = drained_tx.send(());
+    });
+    if drained_rx.recv_timeout(SHUTDOWN_DRAIN_TIMEOUT).is_err() {
+        audit_helper_event(
+            "warn",
+            "optimization.helper.pipe_drain_timeout",
+            "Listeners do named pipe nao encerraram no prazo; servico reportando parada mesmo assim.",
+            json!({}),
+        );
+    }
+
+    status_handle.set_service_status(service_status(
+        ServiceState::Stopped,
+        ServiceControlAccept::empty(),
+        0,
+        Duration::default(),
+    ))?;
     Ok(())
 }
 
@@ -1556,10 +1625,13 @@ fn open_helper_pipe() -> Result<fs::File, String> {
 
 #[cfg(windows)]
 fn wake_named_pipe_server() {
-    // One connection attempt only unsticks one of the PIPE_LISTENER_COUNT
-    // blocked ConnectNamedPipe calls - open one per listener so all of them
-    // observe the shutdown flag and exit instead of staying blocked.
-    for _ in 0..PIPE_LISTENER_COUNT {
+    // Each blocked ConnectNamedPipe only unsticks when a client connects to
+    // that specific instance, and a wake connection can be consumed by a
+    // listener that was already mid-accept rather than one that is blocked.
+    // Opening comfortably more than one per listener makes it very likely
+    // every blocked call gets a client; the shutdown path also calls this
+    // several times in a loop for the stragglers.
+    for _ in 0..(PIPE_LISTENER_COUNT * 2) {
         let _ = fs::OpenOptions::new()
             .read(true)
             .write(true)
