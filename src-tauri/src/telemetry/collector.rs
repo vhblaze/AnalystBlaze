@@ -166,7 +166,6 @@ pub struct TelemetryCollector {
     components: Components,
     disks: Disks,
     gpu_devices: Vec<GpuInfo>,
-    gpu_usage_reader: Option<GpuUsageReader>,
     collection_count: u64,
     advanced_cache: AdvancedTelemetry,
     advanced_refreshed_at: i64,
@@ -184,7 +183,6 @@ impl TelemetryCollector {
             components: Components::new_with_refreshed_list(),
             disks: Disks::new_with_refreshed_list(),
             gpu_devices: detect_gpu_devices(),
-            gpu_usage_reader: GpuUsageReader::new(),
             collection_count: 0,
             advanced_cache: AdvancedTelemetry::default(),
             advanced_refreshed_at: 0,
@@ -286,11 +284,7 @@ impl TelemetryCollector {
         let gpu_usage = nvidia_sensors
             .as_ref()
             .and_then(|sample| sample.utilization_percent)
-            .or_else(|| {
-                self.gpu_usage_reader
-                    .as_mut()
-                    .and_then(GpuUsageReader::sample)
-            });
+            .or_else(gpu_usage_percent);
         let primary_gpu = self.primary_gpu();
         let gpu_name = primary_gpu.name.clone();
         let vram_gb = primary_gpu.vram_gb;
@@ -1944,13 +1938,44 @@ impl GpuUsageReader {
     }
 }
 
+// Deliberately no `impl Drop`. `PdhCloseQuery` on the shared query would be
+// exactly the NvidiaSensorReader mistake in another shape: the reader is a
+// process-lifetime singleton now (see GPU_USAGE_READER), so there is no point
+// at which closing the query is useful, and the OS reclaims it at exit.
+
+/// Process-wide PDH GPU-utilization reader, created at most once.
+///
+/// `GpuUsageReader::sample()` returns a *delta* between two
+/// `PdhCollectQueryData` calls: `new()` primes one, the first `sample()`
+/// primes a second and returns `None`, and only the third collect yields a
+/// number. A `TelemetryCollector` used to own one, and the short-lived
+/// collectors behind `collect_once` (the "Coletar agora" button) and the
+/// performance scan build a fresh one and call `sample()` exactly once - so
+/// on the 44% of the fleet without an NVIDIA GPU (where the nvidia_sensors
+/// path can't supply the value first) those flows always reported GPU usage
+/// as absent. The long-lived engine collector was fine because it sampled
+/// every ~10s and warmed up.
+///
+/// One shared, permanently-warm query fixes it. Unlike NVML, a PDH query
+/// handle is not safe for concurrent `PdhCollectQueryData` from different
+/// threads, so this is a `Mutex` rather than a bare value - the engine tick
+/// and an occasional button press briefly serialize on a lock held for the
+/// microseconds of one collect+format.
+//
+// A PDH query handle is a plain kernel handle and `GpuUsageReader` is
+// already `Send`; the `Mutex` is only here to serialize the one thing PDH
+// forbids - concurrent `PdhCollectQueryData` on the same query.
 #[cfg(windows)]
-impl Drop for GpuUsageReader {
-    fn drop(&mut self) {
-        unsafe {
-            windows::Win32::System::Performance::PdhCloseQuery(self.query);
-        }
-    }
+static GPU_USAGE_READER: std::sync::OnceLock<std::sync::Mutex<Option<GpuUsageReader>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn gpu_usage_percent() -> Option<f64> {
+    let mut guard = GPU_USAGE_READER
+        .get_or_init(|| std::sync::Mutex::new(GpuUsageReader::new()))
+        .lock()
+        .ok()?;
+    guard.as_mut().and_then(GpuUsageReader::sample)
 }
 
 #[cfg(not(windows))]
@@ -1965,6 +1990,11 @@ impl GpuUsageReader {
     fn sample(&mut self) -> Option<f64> {
         None
     }
+}
+
+#[cfg(not(windows))]
+fn gpu_usage_percent() -> Option<f64> {
+    None
 }
 
 #[cfg(windows)]
@@ -2229,6 +2259,45 @@ fn idle_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gpu_usage_percent_shares_one_warm_reader_across_calls() {
+        // Before this was a singleton, every short-lived TelemetryCollector
+        // built its own reader and got None from a single sample() (the
+        // reader needs a prior collect to have a delta). Now the first call
+        // primes the shared query and a later call - the pattern collect_once
+        // and the perf scan hit - can return a real number. On CI with no
+        // GPU counter both are None; the point is it never panics and the
+        // second call is not forced to None by a cold restart.
+        let first = gpu_usage_percent();
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let second = gpu_usage_percent();
+        for value in [first, second].into_iter().flatten() {
+            assert!(
+                (0.0..=100.0).contains(&value),
+                "GPU usage out of range: {value}"
+            );
+        }
+    }
+
+    /// Prints what this machine reports. On a non-NVIDIA machine this is the
+    /// path collect_once and the performance scan depend on.
+    /// cargo test --lib gpu_usage_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn gpu_usage_live_on_this_machine() {
+        let readings: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                gpu_usage_percent()
+            })
+            .collect();
+        println!("gpu_usage_percent() over 4 samples = {readings:?}");
+        assert!(
+            readings.iter().skip(1).any(Option::is_some),
+            "shared reader never produced a value after warm-up"
+        );
+    }
 
     #[test]
     fn throttle_distance_uses_the_assumed_tjmax_when_temperature_is_available() {
