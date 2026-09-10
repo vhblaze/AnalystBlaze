@@ -21,6 +21,7 @@ import {
   listenToRemoteCommandConfirmation,
   listenToShadowStorageNeedsConsent,
   resolveRemoteCommandConfirmation,
+  restartPrivilegedHelper,
   setShadowStorageConsent,
   type Announcement,
   type RemoteCommandConfirmationRequest,
@@ -78,7 +79,7 @@ export function AppShell() {
       return [];
     }
   });
-  const helperBootstrapStartedRef = useRef(false);
+  const helperCheckRef = useRef({ running: false, lastAt: 0 });
   const auth = useAuth();
   const telemetry = useAgentTelemetry();
   const updater = useUpdater();
@@ -639,59 +640,173 @@ export function AppShell() {
     });
   }, []);
 
+  // The privileged helper is a local Windows service that runs elevated
+  // admin actions (TEMP cleanup, network/DNS, scheduled defrag, frame
+  // capture stop, ...). When it is not installed, stopped, or on a stale
+  // version after an app update, those actions silently do nothing - which
+  // is why a lot of installs run below their full capability without the
+  // user knowing. This watches its health on a timer and on window focus,
+  // and pops one dialog offering the right fix (install / start / sync /
+  // reinstall). Declining snoozes for a few days rather than dismissing
+  // forever; a different kind of problem re-prompts regardless of snooze;
+  // once healthy the snooze is cleared.
   useEffect(() => {
-    if (!auth.ready || helperBootstrapStartedRef.current || !isTauriRuntime()) return;
-    helperBootstrapStartedRef.current = true;
-
+    if (!auth.ready || !isTauriRuntime()) return;
     let disposed = false;
-    const bootstrapKey = "analystblaze.helper.bootstrap.v1";
 
-    const bootstrapHelper = async () => {
+    const SNOOZE_KEY = "analystblaze.helper.health.v1";
+    const SNOOZE_MS = 3 * 24 * 60 * 60 * 1000;
+    const BLOCKED_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
+    const CHECK_INTERVAL_MS = 30 * 60 * 1000;
+    const FOCUS_DEBOUNCE_MS = 5 * 60 * 1000;
+
+    type Kind = "ok" | "not_installed" | "stopped" | "outdated" | "broken" | "blocked";
+
+    const classify = (s: Awaited<ReturnType<typeof getPrivilegedHelperStatus>>): Kind => {
+      if (s.available && !s.requiresUpdate) return "ok";
+      if (!s.installed) return s.canRequestUac ? "not_installed" : "blocked";
+      if (!s.running) return "stopped";
+      if (s.requiresUpdate) return "outdated";
+      return "broken";
+    };
+
+    const readSnooze = (): { until: number; kind: string } => {
       try {
-        const currentStatus = await getPrivilegedHelperStatus();
-        if (disposed || (currentStatus.available && !currentStatus.requiresUpdate)) return;
-        const previousDecision = window.localStorage.getItem(bootstrapKey);
-        if (previousDecision === "installed" || previousDecision === "dismissed") return;
-        if (!currentStatus.canRequestUac) return;
-
-        const approved = await requestConfirmation({
-          title: "Configurar helper admin",
-          description: "O AnalystBlaze pode instalar o helper local agora. Isso so fica disponivel em instalacao per-machine/Program Files; o Windows vai pedir UAC uma vez.",
-          risk: "sensivel",
-          snapshot: false,
-        });
-        if (disposed) return;
-        if (!approved) {
-          window.localStorage.setItem(bootstrapKey, "dismissed");
-          return;
-        }
-
-        toast({
-          title: "Configurando helper admin",
-          description: "Confirme o UAC do Windows para concluir a configuracao.",
-        });
-        const nextStatus = await installPrivilegedHelper();
-        window.localStorage.setItem(bootstrapKey, nextStatus.available ? "installed" : "attempted");
-        toast({
-          title: nextStatus.available ? "Helper admin pronto" : "Helper admin precisa de atencao",
-          description: nextStatus.message,
-        });
-      } catch (error) {
-        window.localStorage.setItem(bootstrapKey, "attempted");
-        toast({
-          title: "Helper admin nao foi configurado",
-          description: String(error),
-          variant: "destructive",
-        });
+        const raw = JSON.parse(window.localStorage.getItem(SNOOZE_KEY) ?? "{}");
+        return { until: Number(raw.until) || 0, kind: String(raw.kind ?? "") };
+      } catch {
+        return { until: 0, kind: "" };
+      }
+    };
+    const writeSnooze = (kind: Kind, ms: number) => {
+      try {
+        window.localStorage.setItem(SNOOZE_KEY, JSON.stringify({ until: Date.now() + ms, kind }));
+      } catch {
+        // Non-critical preference persistence.
+      }
+    };
+    const clearSnooze = () => {
+      try {
+        window.localStorage.removeItem(SNOOZE_KEY);
+      } catch {
+        // Non-critical.
       }
     };
 
-    void bootstrapHelper();
+    const COPY: Record<
+      Exclude<Kind, "ok">,
+      { title: string; body: string; fix?: () => Promise<unknown> }
+    > = {
+      not_installed: {
+        title: t("helperHealth.titleNotInstalled"),
+        body: t("helperHealth.bodyNotInstalled"),
+        fix: installPrivilegedHelper,
+      },
+      stopped: {
+        title: t("helperHealth.titleStopped"),
+        body: t("helperHealth.bodyStopped"),
+        fix: restartPrivilegedHelper,
+      },
+      outdated: {
+        title: t("helperHealth.titleOutdated"),
+        body: t("helperHealth.bodyOutdated"),
+        fix: restartPrivilegedHelper,
+      },
+      broken: {
+        title: t("helperHealth.titleBroken"),
+        body: t("helperHealth.bodyBroken"),
+        fix: installPrivilegedHelper,
+      },
+      blocked: {
+        // Nothing the app can do from here - the user has to reinstall
+        // AnalystBlaze machine-wide. Informational only, snoozed longer.
+        title: t("helperHealth.titleBlocked"),
+        body: t("helperHealth.bodyBlocked"),
+      },
+    };
+
+    const check = async () => {
+      if (disposed || helperCheckRef.current.running) return;
+      helperCheckRef.current.running = true;
+      try {
+        const status = await getPrivilegedHelperStatus();
+        if (disposed) return;
+        const kind = classify(status);
+        if (kind === "ok") {
+          clearSnooze();
+          return;
+        }
+
+        const snooze = readSnooze();
+        if (snooze.kind === kind && snooze.until > Date.now()) return;
+
+        const copy = COPY[kind];
+        const approved = await requestConfirmation({
+          title: copy.title,
+          description: copy.body,
+          risk: t("helperHealth.risk"),
+          snapshot: false,
+        });
+        if (disposed) return;
+
+        if (!approved || !copy.fix) {
+          writeSnooze(kind, kind === "blocked" ? BLOCKED_SNOOZE_MS : SNOOZE_MS);
+          return;
+        }
+
+        toast({ title: t("helperHealth.workingTitle"), description: t("helperHealth.workingBody") });
+        try {
+          let next = await copy.fix();
+          if (disposed) return;
+          // sc.exe start returns while the service is still START_PENDING,
+          // so a status() taken right after can still read "not running" -
+          // give it a moment and re-probe once before deciding it failed.
+          if (classify(next as Awaited<ReturnType<typeof getPrivilegedHelperStatus>>) !== "ok") {
+            await new Promise((r) => setTimeout(r, 2500));
+            if (disposed) return;
+            next = await getPrivilegedHelperStatus();
+          }
+          if (classify(next as Awaited<ReturnType<typeof getPrivilegedHelperStatus>>) === "ok") {
+            clearSnooze();
+            toast({ title: t("helperHealth.doneTitle"), description: t("helperHealth.doneBody") });
+          } else {
+            writeSnooze(kind, SNOOZE_MS);
+            toast({
+              title: t("helperHealth.stillDownTitle"),
+              description: t("helperHealth.stillDownBody"),
+              variant: "destructive",
+            });
+          }
+        } catch (error) {
+          if (disposed) return;
+          writeSnooze(kind, SNOOZE_MS);
+          toast({
+            title: t("helperHealth.failedTitle"),
+            description: String(error),
+            variant: "destructive",
+          });
+        }
+      } catch {
+        // Status probe failed (helper query hiccup) - try again next tick.
+      } finally {
+        helperCheckRef.current.running = false;
+        helperCheckRef.current.lastAt = Date.now();
+      }
+    };
+
+    void check();
+    const interval = window.setInterval(() => void check(), CHECK_INTERVAL_MS);
+    const onFocus = () => {
+      if (Date.now() - helperCheckRef.current.lastAt >= FOCUS_DEBOUNCE_MS) void check();
+    };
+    window.addEventListener("focus", onFocus);
 
     return () => {
       disposed = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
     };
-  }, [auth.ready, requestConfirmation]);
+  }, [auth.ready, requestConfirmation, t]);
 
   return (
     <div className="relative flex h-screen w-full overflow-hidden text-slate-100">

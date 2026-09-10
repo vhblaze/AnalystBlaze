@@ -247,6 +247,35 @@ export const translations = {
         "O Windows esta apagando pontos de restauracao antigos porque o espaco reservado para eles chegou no limite. Da pra corrigir aumentando esse limite (o AnalystBlaze so faz isso se o disco tiver espaco sobrando). Quer que o AnalystBlaze faca isso automaticamente sempre que acontecer? Confirmar = sim, pode fazer. Cancelar = prefiro cuidar disso eu mesmo.",
       consentRisk: "seguro e reversivel",
     },
+    helperHealth: {
+      titleStopped: "O componente admin do AnalystBlaze esta parado",
+      titleNotInstalled: "Falta instalar o componente admin do AnalystBlaze",
+      titleOutdated: "O componente admin do AnalystBlaze esta desatualizado",
+      titleBroken: "O componente admin do AnalystBlaze precisa ser reinstalado",
+      titleBlocked: "O componente admin do AnalystBlaze nao pode ser configurado aqui",
+      bodyStopped:
+        "Varias otimizacoes que exigem permissao de administrador (limpeza da pasta TEMP do Windows, ajustes de rede e DNS, reativar a desfragmentacao agendada, encerrar a captura de FPS, entre outras) estao indisponiveis porque esse servico local esta parado. Iniciar agora pede o UAC do Windows uma vez.",
+      bodyNotInstalled:
+        "Algumas otimizacoes precisam de permissao de administrador e usam um servico local que ainda nao foi instalado. Sem ele, essas acoes simplesmente nao rodam. Instalar agora pede o UAC do Windows uma unica vez e cria o servico.",
+      bodyOutdated:
+        "O servico local de acoes administrativas esta numa versao diferente da do app (isso acontece depois de uma atualizacao). Ate sincronizar, as acoes que exigem administrador nao rodam. Sincronizar pede o UAC do Windows uma vez.",
+      bodyBroken:
+        "O servico local de acoes administrativas esta instalado mas num estado invalido (caminho nao confiavel ou chave de assinatura ausente). Reinstalar pelo caminho seguro corrige isso e pede o UAC do Windows uma vez.",
+      bodyBlocked:
+        "O AnalystBlaze foi instalado so para o seu usuario, e o servico de acoes administrativas so pode ser criado numa instalacao para todo o computador (em Arquivos de Programas). Para liberar essas otimizacoes, reinstale o AnalystBlaze escolhendo a opcao para todos os usuarios.",
+      risk: "acao administrativa - o Windows vai pedir confirmacao (UAC)",
+      confirmStopped: "Iniciar agora",
+      confirmNotInstalled: "Instalar agora",
+      confirmOutdated: "Sincronizar agora",
+      confirmBroken: "Reinstalar agora",
+      workingTitle: "Configurando o componente admin",
+      workingBody: "Confirme o UAC do Windows para concluir.",
+      doneTitle: "Componente admin pronto",
+      doneBody: "As otimizacoes que exigem administrador ja estao liberadas.",
+      failedTitle: "Nao foi possivel configurar o componente admin",
+      stillDownTitle: "O componente admin continua indisponivel",
+      stillDownBody: "Tente reiniciar o PC e abrir o AnalystBlaze de novo; se persistir, reinstale o app pelo instalador para todo o computador.",
+    },
     deviceTransfer: {
       title: "Este PC esta vinculado a outra conta",
       body:
@@ -825,6 +854,35 @@ export const translations = {
       consentBody:
         "Windows is deleting older restore points because the space reserved for them has hit its cap. This can be fixed by raising that cap (AnalystBlaze only does so when the disk has room to spare). Want AnalystBlaze to do this automatically whenever it happens? Confirm = yes, go ahead. Cancel = I'll handle it myself.",
       consentRisk: "safe and reversible",
+    },
+    helperHealth: {
+      titleStopped: "AnalystBlaze's admin component is stopped",
+      titleNotInstalled: "AnalystBlaze's admin component isn't installed yet",
+      titleOutdated: "AnalystBlaze's admin component is out of date",
+      titleBroken: "AnalystBlaze's admin component needs reinstalling",
+      titleBlocked: "AnalystBlaze's admin component can't be set up here",
+      bodyStopped:
+        "Several optimizations that need administrator permission (clearing the Windows TEMP folder, network and DNS tweaks, re-enabling scheduled defragmentation, stopping the FPS capture, and more) are unavailable because this local service is stopped. Starting it now prompts the Windows UAC once.",
+      bodyNotInstalled:
+        "Some optimizations need administrator permission and use a local service that hasn't been installed yet. Without it, those actions simply don't run. Installing it now prompts the Windows UAC once and creates the service.",
+      bodyOutdated:
+        "The local admin-actions service is on a different version than the app (this happens after an update). Until they're synced, actions that need administrator won't run. Syncing prompts the Windows UAC once.",
+      bodyBroken:
+        "The local admin-actions service is installed but in an invalid state (untrusted path or a missing signing key). Reinstalling it from the safe path fixes this and prompts the Windows UAC once.",
+      bodyBlocked:
+        "AnalystBlaze was installed for your user only, and the admin-actions service can only be created by a machine-wide install (in Program Files). To unlock those optimizations, reinstall AnalystBlaze and choose the all-users option.",
+      risk: "administrator action - Windows will ask for confirmation (UAC)",
+      confirmStopped: "Start it now",
+      confirmNotInstalled: "Install it now",
+      confirmOutdated: "Sync it now",
+      confirmBroken: "Reinstall it now",
+      workingTitle: "Setting up the admin component",
+      workingBody: "Confirm the Windows UAC prompt to finish.",
+      doneTitle: "Admin component ready",
+      doneBody: "The optimizations that need administrator are unlocked now.",
+      failedTitle: "Couldn't set up the admin component",
+      stillDownTitle: "The admin component is still unavailable",
+      stillDownBody: "Try restarting the PC and opening AnalystBlaze again; if it persists, reinstall the app with the machine-wide installer.",
     },
     deviceTransfer: {
       title: "This PC is linked to another account",
