@@ -74,6 +74,12 @@ struct AgentState {
     /// so a manual restore can signal it to stop immediately instead of
     /// waiting for its own ~60s self-check. See spawn_game_mode_usage_checkpoint_loop.
     game_mode_usage_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+    /// Login that succeeded but stopped short of registering because this PC
+    /// is linked to another account. Held only until the user answers the
+    /// "move this PC?" prompt (confirm_device_transfer / cancel_device_transfer)
+    /// and never persisted - a cancelled or abandoned prompt leaves nothing
+    /// behind, and an app restart drops it.
+    pending_device_transfer: Mutex<Option<PendingDeviceTransfer>>,
     /// The frontend's currently selected UI locale (e.g. "pt-BR"), pushed
     /// down via set_agent_locale on mount and on every locale change - sent
     /// as Accept-Language on requests that can surface a server error
@@ -107,6 +113,10 @@ struct AgentStatus {
     /// Set when the most recent background/manual sync attempt failed, so
     /// the UI can show "not synced" instead of silently implying freshness.
     plan_sync_error: Option<String>,
+    /// Login concluído, mas este PC está vinculado a outra conta e o usuário
+    /// ainda não decidiu se quer movê-lo. A UI mostra o diálogo "Mover este
+    /// PC?" enquanto isso for `true`.
+    device_transfer_pending: bool,
     /// Verificação de e-mail. `None` = servidor não informou (backend antigo);
     /// a UI trata como verificado para nunca acusar falsamente.
     email_verified: Option<bool>,
@@ -1288,10 +1298,48 @@ async fn complete_auth_tokens(
         .lock()
         .map(|guard| guard.clone())
         .unwrap_or_else(|_| "pt-BR".to_string());
-    let registration = state
+    let existing = state.store.load()?;
+    // Device identity survives logout, so a PC linked to an account the user
+    // can no longer reach can still prove possession of itself and move to the
+    // account signing in now. That move is never automatic: the server only
+    // does it when we send a transfer_proof, and we only send one after the
+    // person at the keyboard confirms (confirm_device_transfer). Retrying on
+    // our own would hand a shared PC - and its history - to whoever signs in
+    // next.
+    let prior_device = existing.hw_id.zip(existing.hw_secret.clone());
+    let registration = match state
         .api
         .register_hardware(&tokens.access_token, &profile, Some(&locale))
-        .await?;
+        .await
+    {
+        Ok(registration) => registration,
+        Err(error) => {
+            let Some((hw_id, hw_secret)) = prior_device.filter(|_| is_already_linked_error(&error))
+            else {
+                return Err(error);
+            };
+            *state
+                .pending_device_transfer
+                .lock()
+                .map_err(|_| "Estado do agente bloqueado.".to_string())? =
+                Some(PendingDeviceTransfer {
+                    tokens,
+                    hw_id,
+                    hw_secret,
+                });
+            show_main_window(&app);
+            return status(&state);
+        }
+    };
+    finish_registration(tokens, registration, state, app).await
+}
+
+async fn finish_registration(
+    tokens: AuthTokens,
+    registration: api::HardwareRegistration,
+    state: State<'_, AgentState>,
+    app: AppHandle,
+) -> Result<AgentStatus, String> {
     let api_profile = state
         .api
         .account_profile(&tokens.access_token)
@@ -1311,6 +1359,69 @@ async fn complete_auth_tokens(
     if credentials_complete(&credentials) {
         ensure_agent_running(&state, &app)?;
     }
+    status(&state)
+}
+
+struct PendingDeviceTransfer {
+    tokens: AuthTokens,
+    hw_id: Uuid,
+    hw_secret: String,
+}
+
+/// The backend prefixes this 409 with a stable, language-independent code
+/// (the same one AppShell.tsx strips for display), which is what makes it
+/// safe to detect without matching translated prose.
+fn is_already_linked_error(error: &str) -> bool {
+    error.contains("HARDWARE_ALREADY_LINKED")
+}
+
+/// The user answered "yes" to "this PC belongs to another account - move it
+/// here?". Only now do we send proof of possession, and only for the login
+/// that produced the prompt.
+#[tauri::command]
+async fn confirm_device_transfer(
+    state: State<'_, AgentState>,
+    app: AppHandle,
+) -> Result<AgentStatus, String> {
+    let pending = state
+        .pending_device_transfer
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .take()
+        .ok_or_else(|| "Nenhuma migracao de PC pendente.".to_string())?;
+
+    let profile = {
+        let collector = TelemetryCollector::new();
+        collector.hardware_profile(state.config.telemetry_include_hostname)
+    };
+    let locale = state
+        .locale
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_else(|_| "pt-BR".to_string());
+
+    let registration = state
+        .api
+        .register_hardware_with_transfer(
+            &pending.tokens.access_token,
+            &profile,
+            Some(&locale),
+            pending.hw_id,
+            &pending.hw_secret,
+        )
+        .await?;
+
+    finish_registration(pending.tokens, registration, state, app).await
+}
+
+/// The user declined. The login is dropped entirely - nothing was saved, and
+/// the PC stays on the account it was already linked to.
+#[tauri::command]
+fn cancel_device_transfer(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
+    *state
+        .pending_device_transfer
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())? = None;
     status(&state)
 }
 
@@ -1648,12 +1759,35 @@ fn set_telemetry_mode(mode: String, state: State<'_, AgentState>) -> Result<Agen
 
 #[tauri::command]
 fn logout(app: AppHandle, state: State<'_, AgentState>) -> Result<AgentStatus, String> {
-    state.store.clear()?;
+    // Keep the device identity (hw_id + hw_secret) across logout - it's still
+    // the same physical machine. Holding the secret is what lets the app
+    // silently move this PC to another account on the next login if the user
+    // gets locked out of this one (see complete_auth_tokens / prior_device).
+    // The full wipe is `forget_device` (uninstall / "remove this computer").
+    let existing = state.store.load().unwrap_or_default();
+    state.store.save(&StoredCredentials {
+        hw_id: existing.hw_id,
+        hw_secret: existing.hw_secret,
+        ..StoredCredentials::default()
+    })?;
     if let Ok(mut telemetry_state) = state.telemetry_state.try_write() {
         *telemetry_state = None;
     }
     // A logged-out window has nothing useful to do minimized in the tray -
     // surface it so the user sees the login prompt right away.
+    show_main_window(&app);
+    status(&state)
+}
+
+#[tauri::command]
+fn forget_device(app: AppHandle, state: State<'_, AgentState>) -> Result<AgentStatus, String> {
+    // Full wipe including device identity. For uninstall or an explicit
+    // "remove this computer from my account" - after this, the next login
+    // registers the PC fresh instead of being able to move it silently.
+    state.store.clear()?;
+    if let Ok(mut telemetry_state) = state.telemetry_state.try_write() {
+        *telemetry_state = None;
+    }
     show_main_window(&app);
     status(&state)
 }
@@ -1756,6 +1890,7 @@ pub fn run() {
         announcements: Mutex::new(Vec::new()),
         game_mode_usage_cancel: Mutex::new(None),
         locale: Mutex::new("pt-BR".to_string()),
+        pending_device_transfer: Mutex::new(None),
     };
 
     let updater_api_base_url = state.config.api_base_url.clone();
@@ -1922,6 +2057,9 @@ pub fn run() {
             set_power_plan_power_saver,
             set_telemetry_mode,
             logout,
+            forget_device,
+            confirm_device_transfer,
+            cancel_device_transfer,
             collect_once,
             telemetry_snapshot,
             fetch_authenticated_insights,
@@ -2073,6 +2211,11 @@ fn status(state: &AgentState) -> Result<AgentStatus, String> {
         .lock()
         .map_err(|_| "Estado do agente bloqueado.".to_string())?
         .clone();
+    let device_transfer_pending = state
+        .pending_device_transfer
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .is_some();
 
     Ok(AgentStatus {
         authenticated: credentials.access_token.is_some(),
@@ -2093,9 +2236,37 @@ fn status(state: &AgentState) -> Result<AgentStatus, String> {
         focus_session: optimizations::focus::active_focus_session(),
         plan_synced_at: credentials.plan_synced_at,
         plan_sync_error,
+        device_transfer_pending,
         email_verified: account_profile.email_verified,
         email_verification_days_remaining: account_profile.email_verification_days_remaining,
     })
+}
+
+#[cfg(test)]
+mod device_transfer_tests {
+    use super::is_already_linked_error;
+
+    #[test]
+    fn recognizes_the_stable_code_the_backend_prefixes() {
+        assert!(is_already_linked_error(
+            "API retornou status 409: HARDWARE_ALREADY_LINKED::Este computador ja esta vinculado a outra conta."
+        ));
+    }
+
+    #[test]
+    fn does_not_confuse_other_hardware_errors_with_it() {
+        // These must fall through as plain errors: prompting "move this PC?"
+        // for a device-limit or inactive-device problem would offer the user
+        // an action that cannot fix what actually went wrong.
+        assert!(!is_already_linked_error(
+            "API retornou status 403: DEVICE_LIMIT_REACHED::Limite de dispositivos atingido."
+        ));
+        assert!(!is_already_linked_error(
+            "API retornou status 403: HARDWARE_INACTIVE::Dispositivo inativo."
+        ));
+        assert!(!is_already_linked_error("API retornou status 500"));
+        assert!(!is_already_linked_error(""));
+    }
 }
 
 #[cfg(test)]

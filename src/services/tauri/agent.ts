@@ -24,6 +24,10 @@ export type AgentStatus = {
   /** Set when the most recent sync attempt failed: "network" | "tls" |
    * "timeout" | "dns" | "unavailable" | "empty_profile" | "unknown". */
   plan_sync_error?: string | null;
+  /** Login concluido, mas este PC esta vinculado a outra conta e o usuario
+   * ainda nao decidiu se quer move-lo. Enquanto for true a UI mostra o
+   * dialogo "Mover este PC?" (confirmDeviceTransfer / cancelDeviceTransfer). */
+  device_transfer_pending?: boolean | null;
   /** Verificacao de e-mail. `null`/ausente = o servidor nao informou (backend
    * antigo) - a UI trata como verificado, pra nunca acusar falsamente que a
    * conta vai ser desativada. */
@@ -1349,6 +1353,20 @@ export async function setAgentTelemetryMode(mode: "normal" | "realtime") {
 export async function logoutAgent() {
   if (!isTauriRuntime()) return fallbackStatus;
   return invoke<AgentStatus>("logout");
+}
+
+/** Confirma "mover este PC para a conta que acabou de entrar". So chamar
+ * depois que o usuario respondeu ao dialogo - e ele quem autoriza a migracao,
+ * nao o app. */
+export async function confirmDeviceTransfer() {
+  if (!isTauriRuntime()) return fallbackStatus;
+  return invoke<AgentStatus>("confirm_device_transfer");
+}
+
+/** Recusa a migracao: o login e descartado e o PC continua na conta atual. */
+export async function cancelDeviceTransfer() {
+  if (!isTauriRuntime()) return fallbackStatus;
+  return invoke<AgentStatus>("cancel_device_transfer");
 }
 
 export async function collectAgentTelemetrySample(): Promise<AgentTelemetrySample> {

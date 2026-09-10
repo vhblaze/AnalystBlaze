@@ -241,18 +241,59 @@ impl ApiClient {
         profile: &HardwareProfile,
         accept_language: Option<&str>,
     ) -> Result<HardwareRegistration, String> {
+        let body = serde_json::to_value(profile).map_err(|error| error.to_string())?;
+        self.post_hardware_register(access_token, &body, accept_language)
+            .await?
+            .into_json::<HardwareRegistration>()
+            .await
+    }
+
+    /// Same registration, but carrying proof that we hold this machine's
+    /// current `hw_secret` - which authorizes the server to move the PC off
+    /// whichever account it is linked to today and onto this one.
+    ///
+    /// Deliberately a separate call rather than an automatic retry inside
+    /// `register_hardware`: moving a PC between accounts must be an explicit,
+    /// confirmed action by whoever is physically at the keyboard. Retrying on
+    /// our own would silently hand the PC (and its history) to the next person
+    /// who happens to sign in on a shared computer.
+    pub async fn register_hardware_with_transfer(
+        &self,
+        access_token: &str,
+        profile: &HardwareProfile,
+        accept_language: Option<&str>,
+        prev_hw_id: Uuid,
+        prev_hw_secret: &str,
+    ) -> Result<HardwareRegistration, String> {
+        let mut body = serde_json::to_value(profile).map_err(|error| error.to_string())?;
+        if let Value::Object(map) = &mut body {
+            map.insert(
+                "transfer_proof".to_string(),
+                build_transfer_proof(prev_hw_id, prev_hw_secret)?,
+            );
+        }
+        self.post_hardware_register(access_token, &body, accept_language)
+            .await?
+            .into_json::<HardwareRegistration>()
+            .await
+    }
+
+    async fn post_hardware_register(
+        &self,
+        access_token: &str,
+        body: &Value,
+        accept_language: Option<&str>,
+    ) -> Result<RawResponse, String> {
         let mut request = self
             .http
             .post(self.url("/api/v1/hardware/register"))
             .bearer_auth(access_token)
-            .json(profile);
+            .json(body);
         if let Some(language) = accept_language.filter(|value| !value.trim().is_empty()) {
             request = request.header("Accept-Language", language);
         }
-
         let response = request.send().await.map_err(|error| error.to_string())?;
-
-        ok_json::<HardwareRegistration>(response).await
+        Ok(RawResponse::read(response).await)
     }
 
     pub async fn account_profile(&self, access_token: &str) -> Result<Option<Value>, String> {
@@ -703,9 +744,13 @@ async fn ok_empty(response: reqwest::Response) -> Result<(), String> {
 
 async fn error_body(status: StatusCode, response: reqwest::Response) -> String {
     let text = response.text().await.unwrap_or_default();
+    error_text(status, &text)
+}
+
+fn error_text(status: StatusCode, text: &str) -> String {
     if text.trim().is_empty() {
         format!("API retornou status {status}")
-    } else if let Ok(value) = serde_json::from_str::<Value>(&text) {
+    } else if let Ok(value) = serde_json::from_str::<Value>(text) {
         value
             .get("detail")
             .and_then(Value::as_str)
@@ -717,6 +762,48 @@ async fn error_body(status: StatusCode, response: reqwest::Response) -> String {
     }
 }
 
+/// A fully-read HTTP response: status + body text, so the caller can inspect
+/// the status and body and still decode or turn it into an error afterwards.
+/// Used by hardware registration, which needs to peek for a 409
+/// `HARDWARE_ALREADY_LINKED` before deciding whether to retry as a device
+/// transfer.
+struct RawResponse {
+    status: StatusCode,
+    body: String,
+}
+
+impl RawResponse {
+    async fn read(response: reqwest::Response) -> Self {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        Self { status, body }
+    }
+
+    async fn into_json<T: for<'de> Deserialize<'de>>(self) -> Result<T, String> {
+        if !self.status.is_success() {
+            return Err(self.into_error());
+        }
+        serde_json::from_str::<T>(&self.body).map_err(|error| error.to_string())
+    }
+
+    fn into_error(self) -> String {
+        error_text(self.status, &self.body)
+    }
+}
+
+fn build_transfer_proof(hw_id: Uuid, hw_secret: &str) -> Result<Value, String> {
+    let nonce = Uuid::new_v4().simple().to_string();
+    let signature = hmac::sign_json(
+        &json!({ "nonce": nonce, "prev_hw_id": hw_id.to_string() }),
+        hw_secret,
+    )?;
+    Ok(json!({
+        "prev_hw_id": hw_id.to_string(),
+        "nonce": nonce,
+        "signature": signature,
+    }))
+}
+
 fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
@@ -726,4 +813,64 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
         .zip(right.iter())
         .fold(0u8, |acc, (left, right)| acc | (left ^ right))
         == 0
+}
+
+#[cfg(test)]
+mod transfer_proof_tests {
+    use super::*;
+
+    // Known-answer computed the way the server does it:
+    //   json.dumps({"nonce":..,"prev_hw_id":..}, sort_keys=True, separators=(",",":"))
+    //   then HMAC-SHA256 with the device hw_secret, hex.
+    // Pins the desktop's canonical form to the server's without importing the
+    // hmac crate here (its `Mac` trait collides with the local `hmac` module).
+    const KAT_SECRET: &str = "device-hw-secret";
+    const KAT_NONCE: &str = "fixednonce123456";
+    const KAT_HW_ID: &str = "11111111-2222-3333-4444-555555555555";
+    const KAT_SIGNATURE: &str =
+        "b70c9ffbe594b676d87c9414ff6b0f1e2564e6d6ffbbf6f840e694e7d5d4db51";
+
+    #[test]
+    fn signature_matches_the_server_known_answer() {
+        let signed = hmac::sign_json(
+            &json!({ "nonce": KAT_NONCE, "prev_hw_id": KAT_HW_ID }),
+            KAT_SECRET,
+        )
+        .unwrap();
+        assert_eq!(signed, KAT_SIGNATURE);
+    }
+
+    #[test]
+    fn build_transfer_proof_signs_exactly_nonce_and_prev_hw_id() {
+        let hw_id = Uuid::parse_str(KAT_HW_ID).unwrap();
+        let proof = build_transfer_proof(hw_id, KAT_SECRET).expect("proof");
+
+        let nonce = proof["nonce"].as_str().unwrap();
+        assert_eq!(proof["prev_hw_id"].as_str().unwrap(), KAT_HW_ID);
+        assert!(nonce.len() >= 8 && nonce.len() <= 128);
+        let mut keys = proof
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, vec!["nonce", "prev_hw_id", "signature"]);
+
+        let expected = hmac::sign_json(
+            &json!({ "nonce": nonce, "prev_hw_id": hw_id.to_string() }),
+            KAT_SECRET,
+        )
+        .unwrap();
+        assert_eq!(proof["signature"].as_str().unwrap(), expected);
+    }
+
+    #[test]
+    fn each_proof_carries_a_fresh_nonce() {
+        let hw_id = Uuid::new_v4();
+        let a = build_transfer_proof(hw_id, "s").unwrap();
+        let b = build_transfer_proof(hw_id, "s").unwrap();
+        assert_ne!(a["nonce"], b["nonce"]);
+        assert_ne!(a["signature"], b["signature"]);
+    }
 }

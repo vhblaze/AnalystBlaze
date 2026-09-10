@@ -10,6 +10,8 @@ import { useTelemetry } from "@/hooks/useTelemetry";
 import { isUpdateDismissedNow, useUpdater } from "@/hooks/useUpdater";
 import { useI18n } from "@/i18n";
 import {
+  cancelDeviceTransfer,
+  confirmDeviceTransfer,
   getActiveAnnouncements,
   getPrivilegedHelperStatus,
   getTodaysAutomaticActions,
@@ -34,6 +36,30 @@ const LocalControls = lazy(() => import("./views/LocalControls").then((module) =
 const DiskExplorer = lazy(() => import("./views/DiskExplorer").then((module) => ({ default: module.DiskExplorer })));
 const Network = lazy(() => import("./views/Network").then((module) => ({ default: module.Network })));
 const Settings = lazy(() => import("./views/Settings").then((module) => ({ default: module.Settings })));
+
+// The backend prefixes a handful of auth/hardware errors with a stable,
+// language-independent code (e.g. "DEVICE_LIMIT_REACHED::<translated
+// message>") specifically so the UI can strip it for display and react to it
+// (offer a way to fix it) without pattern-matching on prose that changes per
+// locale. Errors without a known prefix pass through untouched.
+const BACKEND_ERROR_CODES = [
+  "HARDWARE_INACTIVE",
+  "DEVICE_LIMIT_REACHED",
+  "HARDWARE_ALREADY_LINKED",
+  "DEVICE_TRANSFER_COOLDOWN",
+] as const;
+
+// No regex: the message half is free-form translated prose that can contain
+// newlines and regex metacharacters, and building a pattern from these codes
+// invites escaping bugs for no benefit over a plain prefix scan.
+export function splitBackendErrorCode(raw: string): { code: string | null; message: string } {
+  for (const code of BACKEND_ERROR_CODES) {
+    const marker = code + "::";
+    const at = raw.indexOf(marker);
+    if (at !== -1) return { code, message: raw.slice(at + marker.length).trim() };
+  }
+  return { code: null, message: raw };
+}
 
 export function AppShell() {
   const [view, setView] = useState<ViewKey>("dashboard");
@@ -75,17 +101,9 @@ export function AppShell() {
     void updater.dismiss();
   }, [updater]);
 
-  // The backend prefixes a handful of auth/hardware errors with a stable,
-  // language-independent code (e.g. "DEVICE_LIMIT_REACHED::<translated
-  // message>") specifically so this can strip it for display and react to
-  // it (offer a way to fix it) without pattern-matching on prose that
-  // changes per locale. Errors without a known prefix pass through as-is.
   const loggedOutError = useMemo(() => {
     if (auth.message.key !== "agent.messages.error") return null;
-    const raw = t(auth.message.key, auth.message.params);
-    const match = raw.match(/(HARDWARE_INACTIVE|DEVICE_LIMIT_REACHED|HARDWARE_ALREADY_LINKED)::(.+)$/);
-    if (!match) return { code: null as string | null, message: raw };
-    return { code: match[1], message: match[2].trim() };
+    return splitBackendErrorCode(t(auth.message.key, auth.message.params));
   }, [auth.message, t]);
 
   const titles = useMemo<Record<ViewKey, string>>(
@@ -529,6 +547,53 @@ export function AppShell() {
       dispose?.();
     };
   }, [requestConfirmation, t]);
+
+  // The login succeeded but this PC is linked to another account. Moving it
+  // is never automatic: only the person physically at this keyboard can
+  // authorize it, because on a shared computer an automatic move would hand
+  // the PC and its history to whoever signed in next. Declining drops the
+  // login and leaves the PC where it is.
+  useEffect(() => {
+    if (!auth.status?.device_transfer_pending) return;
+    let disposed = false;
+
+    const ask = async () => {
+      const approved = await requestConfirmation({
+        title: t("deviceTransfer.title"),
+        description: t("deviceTransfer.body"),
+        risk: t("deviceTransfer.risk"),
+        snapshot: false,
+      });
+      if (disposed) return;
+      try {
+        if (approved) {
+          await confirmDeviceTransfer();
+          toast({
+            title: t("deviceTransfer.doneTitle"),
+            description: t("deviceTransfer.doneBody"),
+          });
+        } else {
+          await cancelDeviceTransfer();
+        }
+      } catch (error) {
+        await cancelDeviceTransfer().catch(() => undefined);
+        toast({
+          title: t("deviceTransfer.failedTitle"),
+          description: splitBackendErrorCode(String(error)).message,
+          variant: "destructive",
+        });
+      }
+      if (!disposed) await auth.refreshStatus().catch(() => undefined);
+    };
+
+    void ask();
+    return () => {
+      disposed = true;
+    };
+    // Intentionally keyed on the flag alone: re-running on every auth change
+    // would reopen the prompt while it is still on screen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.status?.device_transfer_pending]);
 
   // Once per local day, if AnalystBlaze did anything on its own today,
   // surface a plain summary of it - the "here's what was done on your PC"

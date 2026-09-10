@@ -247,6 +247,16 @@ export const translations = {
         "O Windows esta apagando pontos de restauracao antigos porque o espaco reservado para eles chegou no limite. Da pra corrigir aumentando esse limite (o AnalystBlaze so faz isso se o disco tiver espaco sobrando). Quer que o AnalystBlaze faca isso automaticamente sempre que acontecer? Confirmar = sim, pode fazer. Cancelar = prefiro cuidar disso eu mesmo.",
       consentRisk: "seguro e reversivel",
     },
+    deviceTransfer: {
+      title: "Este PC esta vinculado a outra conta",
+      body:
+        "Voce entrou com uma conta diferente da que este computador esta vinculado hoje. Quer mover este PC para a sua conta? O historico de desempenho vem junto; a IA comeca do zero na sua conta (o que ela aprendeu com a conta anterior fica guardado la, caso o PC volte). A conta anterior perde o acesso a este computador e recebe um aviso por e-mail. Cancelar = nao mover, e a sessao e descartada.",
+      risk: "so quem esta neste PC pode autorizar",
+      doneTitle: "PC movido para a sua conta",
+      doneBody:
+        "Pronto. O historico veio junto e a IA vai aprender o perfil da sua conta neste computador nos proximos dias.",
+      failedTitle: "Nao foi possivel mover este PC",
+    },
     autoActionsSummary: {
       title: "O que o AnalystBlaze fez sozinho hoje",
     },
@@ -815,6 +825,16 @@ export const translations = {
       consentBody:
         "Windows is deleting older restore points because the space reserved for them has hit its cap. This can be fixed by raising that cap (AnalystBlaze only does so when the disk has room to spare). Want AnalystBlaze to do this automatically whenever it happens? Confirm = yes, go ahead. Cancel = I'll handle it myself.",
       consentRisk: "safe and reversible",
+    },
+    deviceTransfer: {
+      title: "This PC is linked to another account",
+      body:
+        "You signed in with a different account than the one this computer is linked to today. Move this PC to your account? Its performance history comes along; the AI starts fresh on your account (what it learned for the previous account stays with them, in case the PC goes back). The previous account loses access to this computer and gets an email about it. Cancel = don't move it, and this sign-in is discarded.",
+      risk: "only someone at this PC can authorize it",
+      doneTitle: "PC moved to your account",
+      doneBody:
+        "Done. The history came along, and the AI will learn your account's profile for this computer over the next few days.",
+      failedTitle: "Couldn't move this PC",
     },
     autoActionsSummary: {
       title: "What AnalystBlaze did on its own today",
