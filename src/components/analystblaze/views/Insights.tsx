@@ -97,6 +97,8 @@ export function Insights({
   onOpenNetwork,
   onApplyInsightActionLocally,
   onRequestAgentApplyInsight,
+  shadowConsentNeeded,
+  onResolveShadowConsent,
 }: {
   telemetry?: AgentTelemetrySnapshot | null;
   /** Set by DiskExplorer, on demand, the moment it detects some individual
@@ -112,6 +114,11 @@ export function Insights({
   /** "Let the agent do it" - enqueues the action server-side; the agent
    * applies it on its own next sync cycle (see applyInsightAction). */
   onRequestAgentApplyInsight?: (actionName: string, title: string, reason: string) => Promise<unknown>;
+  /** Shadow-copy storage hit its limit and the user hasn't yet chosen
+   * whether AnalystBlaze may raise the cap for them. Surfaces here as a
+   * two-choice card instead of a modal (see AppShell). */
+  shadowConsentNeeded?: boolean;
+  onResolveShadowConsent?: (choice: "auto" | "manual") => Promise<void>;
 }) {
   const { t, locale } = useI18n();
   const track = useTelemetry("insights");
@@ -302,13 +309,47 @@ export function Insights({
     };
   }, [diskOptimizationInsightData]);
 
+  const shadowStorageInsight = useMemo<Insight | null>(() => {
+    if (!shadowConsentNeeded || !onResolveShadowConsent) return null;
+    return {
+      title: t("shadowStorage.cardTitle"),
+      explanation: t("shadowStorage.cardBody"),
+      impact: t("shadowStorage.cardImpact"),
+      category: "limpeza",
+      risk: "baixo",
+      reversible: true,
+      confidence: 0.95,
+      reason: t("shadowStorage.cardReason"),
+      action: {
+        label: t("shadowStorage.cardAuto"),
+        onClick: () => void onResolveShadowConsent("auto"),
+      },
+      secondaryAction: {
+        label: t("shadowStorage.cardManual"),
+        onClick: () => void onResolveShadowConsent("manual"),
+      },
+    };
+  }, [shadowConsentNeeded, onResolveShadowConsent, t]);
+
   const visibleInsights = useMemo(() => {
-    const local = [diskUsageInsight, vpnLatencyInsight, diskNearFullInsight, scheduledDefragInsight].filter(
-      (insight): insight is Insight => insight != null,
-    );
+    const local = [
+      shadowStorageInsight,
+      diskUsageInsight,
+      vpnLatencyInsight,
+      diskNearFullInsight,
+      scheduledDefragInsight,
+    ].filter((insight): insight is Insight => insight != null);
     const all = [...local, ...insights];
     return all.filter((insight) => !(insightKey(insight) in dismissed));
-  }, [diskUsageInsight, vpnLatencyInsight, diskNearFullInsight, scheduledDefragInsight, insights, dismissed]);
+  }, [
+    shadowStorageInsight,
+    diskUsageInsight,
+    vpnLatencyInsight,
+    diskNearFullInsight,
+    scheduledDefragInsight,
+    insights,
+    dismissed,
+  ]);
 
   const generate = async () => {
     setLoading(true);
@@ -477,13 +518,23 @@ export function Insights({
                   </span>
                 </div>
                 {ins.action && (
-                  <button
-                    onClick={ins.action.onClick}
-                    className="group/action mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-200 transition hover:text-cyan-100"
-                  >
-                    {ins.action.label}
-                    <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover/action:translate-x-0.5" />
-                  </button>
+                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                    <button
+                      onClick={ins.action.onClick}
+                      className="group/action inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-200 transition hover:text-cyan-100"
+                    >
+                      {ins.action.label}
+                      <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover/action:translate-x-0.5" />
+                    </button>
+                    {ins.secondaryAction && (
+                      <button
+                        onClick={ins.secondaryAction.onClick}
+                        className="text-xs font-semibold text-slate-400 transition hover:text-slate-200"
+                      >
+                        {ins.secondaryAction.label}
+                      </button>
+                    )}
+                  </div>
                 )}
                 {(canRunLocally || canRequestAgent) && (
                   <div className="mt-3 flex flex-wrap gap-2">

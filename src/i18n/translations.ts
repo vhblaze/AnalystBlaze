@@ -242,10 +242,13 @@ export const translations = {
       removeFromSelection: "Tirar da selecao",
     },
     shadowStorage: {
-      consentTitle: "Espaco para pontos de restauracao no limite",
-      consentBody:
-        "O Windows esta apagando pontos de restauracao antigos porque o espaco reservado para eles chegou no limite. Da pra corrigir aumentando esse limite (o AnalystBlaze so faz isso se o disco tiver espaco sobrando). Quer que o AnalystBlaze faca isso automaticamente sempre que acontecer? Confirmar = sim, pode fazer. Cancelar = prefiro cuidar disso eu mesmo.",
-      consentRisk: "seguro e reversivel",
+      cardTitle: "Espaco para pontos de restauracao no limite",
+      cardBody:
+        "O Windows esta apagando pontos de restauracao antigos porque o espaco reservado para eles chegou no limite - com isso, um ponto de restauracao antigo pode nao estar mais la quando voce precisar. Da pra corrigir aumentando esse limite reservado, e o AnalystBlaze so faz isso quando o disco tem espaco de sobra. Quer que ele cuide disso automaticamente sempre que acontecer, ou prefere resolver por conta propria? A sua escolha fica salva e nao pergunto de novo.",
+      cardImpact: "pontos de restauracao mais antigos preservados",
+      cardReason: "O servico de copia de sombra (Volsnap) registrou que atingiu o limite de espaco reservado.",
+      cardAuto: "Pode cuidar disso por mim",
+      cardManual: "Prefiro cuidar eu mesmo",
     },
     helperHealth: {
       titleStopped: "O componente admin do AnalystBlaze esta parado",
@@ -850,10 +853,13 @@ export const translations = {
       removeFromSelection: "Remove from selection",
     },
     shadowStorage: {
-      consentTitle: "Restore-point storage is at its limit",
-      consentBody:
-        "Windows is deleting older restore points because the space reserved for them has hit its cap. This can be fixed by raising that cap (AnalystBlaze only does so when the disk has room to spare). Want AnalystBlaze to do this automatically whenever it happens? Confirm = yes, go ahead. Cancel = I'll handle it myself.",
-      consentRisk: "safe and reversible",
+      cardTitle: "Restore-point storage is at its limit",
+      cardBody:
+        "Windows is deleting older restore points because the space reserved for them has hit its cap - so an older restore point may not be there when you need it. This is fixed by raising that reserved cap, and AnalystBlaze only does it when the disk has room to spare. Want it to handle this automatically whenever it happens, or would you rather deal with it yourself? Your choice is saved and you won't be asked again.",
+      cardImpact: "older restore points kept around",
+      cardReason: "The shadow-copy service (Volsnap) logged that it hit its reserved-space limit.",
+      cardAuto: "Handle it for me",
+      cardManual: "I'll do it myself",
     },
     helperHealth: {
       titleStopped: "AnalystBlaze's admin component is stopped",

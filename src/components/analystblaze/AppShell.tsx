@@ -518,28 +518,20 @@ export function AppShell() {
     return () => dispose?.();
   }, []);
 
-  // Shadow-copy storage hit its limit and the user has never chosen
-  // whether AnalystBlaze may raise it for them - ask once. "Confirmar" =
-  // yes, do it automatically from now on; "Cancelar" = I'll handle it
-  // myself. Either answer is stored (backend) so this never asks twice.
+  // Shadow-copy storage hit its limit and the user has never chosen whether
+  // AnalystBlaze may raise it for them. This is a preference to decide, not
+  // an alert to acknowledge, so it surfaces as a two-choice card in Insights
+  // rather than a modal that interrupts. The listener just flips a flag; the
+  // card and its "handle it for me" / "I'll do it myself" buttons live in
+  // the Insights view. Either choice is stored on the device so it never
+  // asks again.
+  const [shadowConsentNeeded, setShadowConsentNeeded] = useState(false);
   useEffect(() => {
     let disposed = false;
     let dispose: (() => void) | undefined;
-    let asking = false;
-    const promptOnce = async () => {
-      if (disposed || asking) return;
-      asking = true;
-      const approved = await requestConfirmation({
-        title: t("shadowStorage.consentTitle"),
-        description: t("shadowStorage.consentBody"),
-        risk: t("shadowStorage.consentRisk"),
-        snapshot: false,
-      });
-      if (disposed) return;
-      await setShadowStorageConsent(approved ? "auto" : "manual").catch(() => undefined);
-      asking = false;
-    };
-    listenToShadowStorageNeedsConsent(promptOnce).then((unlisten) => {
+    listenToShadowStorageNeedsConsent(() => {
+      if (!disposed) setShadowConsentNeeded(true);
+    }).then((unlisten) => {
       if (disposed) unlisten();
       else dispose = unlisten;
     });
@@ -547,7 +539,11 @@ export function AppShell() {
       disposed = true;
       dispose?.();
     };
-  }, [requestConfirmation, t]);
+  }, []);
+  const resolveShadowConsent = useCallback(async (choice: "auto" | "manual") => {
+    await setShadowStorageConsent(choice).catch(() => undefined);
+    setShadowConsentNeeded(false);
+  }, []);
 
   // The login succeeded but this PC is linked to another account. Moving it
   // is never automatic: only the person physically at this keyboard can
@@ -925,6 +921,8 @@ export function AppShell() {
                   onOpenNetwork={openNetworkDetails}
                   onApplyInsightActionLocally={applyInsightActionLocally}
                   onRequestAgentApplyInsight={auth.requestAgentApplyInsight}
+                  shadowConsentNeeded={shadowConsentNeeded}
+                  onResolveShadowConsent={resolveShadowConsent}
                 />
               </Suspense>
             ) : view === "controls" ? (

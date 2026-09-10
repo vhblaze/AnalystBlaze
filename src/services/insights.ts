@@ -28,6 +28,11 @@ export type Insight = {
    * link to more detail elsewhere in the app - e.g. the disk-usage card
    * linking to Local Controls. */
   action?: { label: string; onClick: () => void };
+  /** A second inline choice on a local card, for cards that ask the user to
+   * pick between two options rather than "do this / dismiss" - e.g. the
+   * shadow-copy-storage card ("handle it for me" vs "I'll do it myself").
+   * Rendered right next to `action`. */
+  secondaryAction?: { label: string; onClick: () => void };
   /** Present only when the server paired this card with a recommended
    * action from its small validated allowlist (APPLY_GAME_MODE, EMPTY_TEMP,
    * ...) - lets the UI offer "let the agent do it" / "I'll do it myself"
