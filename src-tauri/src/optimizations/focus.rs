@@ -325,6 +325,18 @@ pub fn should_pause_heavy_scans_for_process_refresh() -> bool {
     focus_runtime_policy().is_some_and(|effects| effects.pause_heavy_scans)
 }
 
+/// Public name for the same passive signal `should_pause_heavy_scans()`
+/// uses, for callers outside this module deciding whether to interrupt
+/// the user right now (e.g. `updater.rs` deciding whether to force the
+/// main window forward for an update notice) - a real user report showed
+/// that happening mid-match, stealing focus from a fullscreen game.
+/// Deliberately reuses the exact same detection (known_game_process_running
+/// only, with the same staleness fallback) rather than inventing a second,
+/// possibly-inconsistent "is this a bad time" heuristic.
+pub fn is_user_likely_gaming() -> bool {
+    is_passive_gaming_detected()
+}
+
 pub fn should_delay_non_critical_uploads() -> bool {
     focus_runtime_policy().is_some_and(|effects| effects.delay_non_critical_uploads)
 }

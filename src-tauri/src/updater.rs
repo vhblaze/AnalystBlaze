@@ -263,7 +263,7 @@ async fn build_status(_app: &AppHandle, runtime: &UpdaterRuntimeState) -> Update
 
 fn emit_status_changed(app: &AppHandle, status: &UpdateStatus) {
     let _ = app.emit("update-status-changed", status.clone());
-    if should_surface_update_window(status) {
+    if should_surface_update_window(status, crate::optimizations::focus::is_user_likely_gaming()) {
         crate::show_main_window(app);
     }
 }
@@ -273,8 +273,22 @@ fn emit_status_changed(app: &AppHandle, status: &UpdateStatus) {
 /// bring the window forward - matches UpdateNotice.tsx's own gating
 /// (`isUpdateDismissedNow`) so the window only pops up when that popup would
 /// actually have something new to show.
-fn should_surface_update_window(status: &UpdateStatus) -> bool {
-    if !status.available {
+///
+/// Never true while `is_gaming` is set (a real report: the window
+/// force-focusing over a fullscreen match, stealing input) - even for a
+/// mandatory update. The download itself already runs in the background
+/// regardless (see `check_and_maybe_download`); only forcing the window
+/// forward is deferred, not the update becoming available. The periodic
+/// check (every `PERIODIC_CHECK_INTERVAL`) re-evaluates this on its own, so
+/// the notice surfaces the next time this runs after gaming stops - no
+/// separate "wake up the instant gaming ends" trigger needed.
+///
+/// Takes `is_gaming` as a parameter rather than reading
+/// `focus::is_user_likely_gaming()` directly - keeps this function a pure,
+/// easily-testable check with no shared global state to reset between
+/// tests (that signal is itself already covered in focus.rs's own tests).
+fn should_surface_update_window(status: &UpdateStatus, is_gaming: bool) -> bool {
+    if !status.available || is_gaming {
         return false;
     }
     if status.mandatory {
@@ -565,38 +579,50 @@ mod tests {
 
     #[test]
     fn does_not_surface_the_window_when_no_update_is_available() {
-        assert!(!should_surface_update_window(&status_stub(false, false, None)));
+        assert!(!should_surface_update_window(&status_stub(false, false, None), false));
     }
 
     #[test]
     fn surfaces_the_window_for_an_undismissed_optional_update() {
-        assert!(should_surface_update_window(&status_stub(true, false, None)));
+        assert!(should_surface_update_window(&status_stub(true, false, None), false));
     }
 
     #[test]
     fn stays_quiet_while_an_optional_update_is_still_within_its_dismiss_window() {
         let far_future = now_ts() + DISMISS_COOLDOWN_SECONDS;
-        assert!(!should_surface_update_window(&status_stub(
-            true,
-            false,
-            Some(far_future)
-        )));
+        assert!(!should_surface_update_window(
+            &status_stub(true, false, Some(far_future)),
+            false
+        ));
     }
 
     #[test]
     fn surfaces_again_once_the_dismiss_window_has_elapsed() {
         let past = now_ts() - 60;
-        assert!(should_surface_update_window(&status_stub(true, false, Some(past))));
+        assert!(should_surface_update_window(&status_stub(true, false, Some(past)), false));
     }
 
     #[test]
     fn always_surfaces_a_mandatory_update_even_if_marked_dismissed() {
         let far_future = now_ts() + DISMISS_COOLDOWN_SECONDS;
-        assert!(should_surface_update_window(&status_stub(
-            true,
-            true,
-            Some(far_future)
-        )));
+        assert!(should_surface_update_window(
+            &status_stub(true, true, Some(far_future)),
+            false
+        ));
+    }
+
+    #[test]
+    fn never_surfaces_the_window_while_gaming_even_for_a_mandatory_undismissed_update() {
+        // The exact case a real user report was about: an update notice
+        // force-focusing the window mid-match. Mandatory + never dismissed
+        // would surface it with is_gaming=false (see the test above) - must
+        // not with is_gaming=true.
+        assert!(!should_surface_update_window(&status_stub(true, true, None), true));
+    }
+
+    #[test]
+    fn optional_update_also_stays_quiet_while_gaming() {
+        assert!(!should_surface_update_window(&status_stub(true, false, None), true));
     }
 
     #[test]
