@@ -119,6 +119,11 @@ pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTeleme
     // needing its own cache.
     telemetry.service_usage_signals = crate::optimizations::service_usage::current_signals();
     telemetry.game_dvr_enabled = game_dvr_enabled();
+    crate::optimizations::shadow_storage::set_volsnap_detected(
+        crate::optimizations::shadow_storage::volsnap_storage_limited(
+            &telemetry.latest_event_log_errors,
+        ),
+    );
 
     telemetry
 }

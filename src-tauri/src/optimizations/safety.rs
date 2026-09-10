@@ -237,6 +237,19 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: false,
             requires_privileged_helper: true,
         }),
+        // Raises a volume's shadow-copy storage ceiling (vssadmin resize
+        // shadowstorage, needs elevation). Reversible by re-running with a
+        // smaller value, and shadow_storage.rs only ever raises it and
+        // only when the disk has headroom - so no snapshot, but still
+        // sensitive and helper-gated. The one-time user consent that
+        // authorises the automatic path lives in shadow_storage.rs, not
+        // here.
+        "RESIZE_SHADOW_STORAGE" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
         // Read-only (observes present events via ETW, changes nothing on
         // the system) and self-terminating (STOP kills the child process;
         // an orphaned one is reaped after MAX_CAPTURE_SECONDS - see

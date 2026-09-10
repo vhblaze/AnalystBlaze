@@ -164,6 +164,55 @@ async fn audit_log(limit: Option<usize>) -> Result<Vec<audit::AuditEvent>, Strin
         .map_err(|error| error.to_string())?
 }
 
+/// "auto" / "manual" / null - what the user chose, once, about letting
+/// AnalystBlaze fix a shadow-storage limit for them (see
+/// optimizations::shadow_storage).
+#[tauri::command]
+fn shadow_storage_consent_state() -> Option<String> {
+    optimizations::shadow_storage::consent_choice().map(|choice| {
+        serde_json::to_value(choice)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_default()
+    })
+}
+
+#[tauri::command]
+fn set_shadow_storage_consent(choice: String) -> Result<(), String> {
+    let choice = match choice.as_str() {
+        "auto" => optimizations::shadow_storage::ConsentChoice::Auto,
+        "manual" => optimizations::shadow_storage::ConsentChoice::Manual,
+        other => return Err(format!("escolha invalida: {other}")),
+    };
+    optimizations::shadow_storage::set_consent_choice(choice);
+    Ok(())
+}
+
+/// Today's (local calendar day) entries from the audit log that represent
+/// something AnalystBlaze did on its own - the "here's what was done on
+/// your PC" end-of-day summary. Kept to a short, explicit allowlist of
+/// event names so routine informational audit lines never show up here.
+#[tauri::command]
+async fn todays_automatic_actions() -> Result<Vec<audit::AuditEvent>, String> {
+    const AUTOMATIC_ACTION_EVENTS: &[&str] = &[
+        "shadow_storage.auto_resized",
+        "service_usage.auto_restored",
+    ];
+    let events = tokio::task::spawn_blocking(|| audit::recent_events(250))
+        .await
+        .map_err(|error| error.to_string())??;
+    let today = chrono::Local::now().date_naive();
+    Ok(events
+        .into_iter()
+        .filter(|event| AUTOMATIC_ACTION_EVENTS.contains(&event.event.as_str()))
+        .filter(|event| {
+            chrono::DateTime::from_timestamp(event.timestamp, 0)
+                .map(|dt| dt.with_timezone(&chrono::Local).date_naive() == today)
+                .unwrap_or(false)
+        })
+        .collect())
+}
+
 #[tauri::command]
 fn optimization_preview(
     action_name: String,
@@ -1880,6 +1929,9 @@ pub fn run() {
             check_for_update,
             apply_update,
             dismiss_update,
+            shadow_storage_consent_state,
+            set_shadow_storage_consent,
+            todays_automatic_actions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -241,6 +241,15 @@ export const translations = {
       bulkDeleteSuccess: "{{count}} itens apagados.",
       removeFromSelection: "Tirar da selecao",
     },
+    shadowStorage: {
+      consentTitle: "Espaco para pontos de restauracao no limite",
+      consentBody:
+        "O Windows esta apagando pontos de restauracao antigos porque o espaco reservado para eles chegou no limite. Da pra corrigir aumentando esse limite (o AnalystBlaze so faz isso se o disco tiver espaco sobrando). Quer que o AnalystBlaze faca isso automaticamente sempre que acontecer? Confirmar = sim, pode fazer. Cancelar = prefiro cuidar disso eu mesmo.",
+      consentRisk: "seguro e reversivel",
+    },
+    autoActionsSummary: {
+      title: "O que o AnalystBlaze fez sozinho hoje",
+    },
     network: {
       eyebrow: "conexao local",
       title: "Rede",
@@ -800,6 +809,15 @@ export const translations = {
       bulkPermanentWarning: "{{count}} of these are large and will be deleted directly, skipping quarantine. This can't be undone.",
       bulkDeleteSuccess: "{{count}} items deleted.",
       removeFromSelection: "Remove from selection",
+    },
+    shadowStorage: {
+      consentTitle: "Restore-point storage is at its limit",
+      consentBody:
+        "Windows is deleting older restore points because the space reserved for them has hit its cap. This can be fixed by raising that cap (AnalystBlaze only does so when the disk has room to spare). Want AnalystBlaze to do this automatically whenever it happens? Confirm = yes, go ahead. Cancel = I'll handle it myself.",
+      consentRisk: "safe and reversible",
+    },
+    autoActionsSummary: {
+      title: "What AnalystBlaze did on its own today",
     },
     network: {
       eyebrow: "local connection",

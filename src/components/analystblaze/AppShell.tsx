@@ -12,11 +12,14 @@ import { useI18n } from "@/i18n";
 import {
   getActiveAnnouncements,
   getPrivilegedHelperStatus,
+  getTodaysAutomaticActions,
   installPrivilegedHelper,
   isTauriRuntime,
   listenToAnnouncements,
   listenToRemoteCommandConfirmation,
+  listenToShadowStorageNeedsConsent,
   resolveRemoteCommandConfirmation,
+  setShadowStorageConsent,
   type Announcement,
   type RemoteCommandConfirmationRequest,
 } from "@/services/tauri/agent";
@@ -495,6 +498,69 @@ export function AppShell() {
     });
     return () => dispose?.();
   }, []);
+
+  // Shadow-copy storage hit its limit and the user has never chosen
+  // whether AnalystBlaze may raise it for them - ask once. "Confirmar" =
+  // yes, do it automatically from now on; "Cancelar" = I'll handle it
+  // myself. Either answer is stored (backend) so this never asks twice.
+  useEffect(() => {
+    let disposed = false;
+    let dispose: (() => void) | undefined;
+    let asking = false;
+    const promptOnce = async () => {
+      if (disposed || asking) return;
+      asking = true;
+      const approved = await requestConfirmation({
+        title: t("shadowStorage.consentTitle"),
+        description: t("shadowStorage.consentBody"),
+        risk: t("shadowStorage.consentRisk"),
+        snapshot: false,
+      });
+      if (disposed) return;
+      await setShadowStorageConsent(approved ? "auto" : "manual").catch(() => undefined);
+      asking = false;
+    };
+    listenToShadowStorageNeedsConsent(promptOnce).then((unlisten) => {
+      if (disposed) unlisten();
+      else dispose = unlisten;
+    });
+    return () => {
+      disposed = true;
+      dispose?.();
+    };
+  }, [requestConfirmation, t]);
+
+  // Once per local day, if AnalystBlaze did anything on its own today,
+  // surface a plain summary of it - the "here's what was done on your PC"
+  // end-of-day note. Dismissed-per-day via localStorage so it shows at
+  // most once daily, whenever the app is next open.
+  useEffect(() => {
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const seenKey = `analystblaze.autoActionsSummarySeen.${todayKey}`;
+    try {
+      if (localStorage.getItem(seenKey)) return;
+    } catch {
+      // storage unavailable - fall through and just show it
+    }
+    let cancelled = false;
+    getTodaysAutomaticActions()
+      .then((actions) => {
+        if (cancelled || actions.length === 0) return;
+        toast({
+          title: t("autoActionsSummary.title"),
+          description: actions.map((action) => `• ${action.message}`).join("\n"),
+        });
+        try {
+          localStorage.setItem(seenKey, "1");
+        } catch {
+          // non-critical
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [t]);
 
   const dismissAnnouncement = useCallback((id: string) => {
     setDismissedAnnouncementIds((current) => {

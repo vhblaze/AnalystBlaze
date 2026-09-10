@@ -1750,6 +1750,7 @@ fn supported_actions() -> &'static [&'static str] {
         "START_FRAME_CAPTURE",
         "STOP_FRAME_CAPTURE",
         "ENABLE_SCHEDULED_DEFRAG",
+        "RESIZE_SHADOW_STORAGE",
     ]
 }
 

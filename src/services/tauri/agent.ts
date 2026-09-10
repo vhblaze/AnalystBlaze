@@ -1469,6 +1469,38 @@ export async function resolveRemoteCommandConfirmation(requestId: string, approv
   return invoke<boolean>("resolve_remote_command_confirmation", { requestId, approved });
 }
 
+export type AutomaticActionEntry = {
+  timestamp: number;
+  level: string;
+  event: string;
+  message: string;
+  details: unknown;
+};
+
+/** Fires once when a shadow-copy storage limit is detected and the user has
+ * never chosen whether AnalystBlaze may fix it for them. */
+export async function listenToShadowStorageNeedsConsent(onNeeded: () => void) {
+  if (!isTauriRuntime()) return () => undefined;
+  return listen("shadow-storage-needs-consent", () => onNeeded());
+}
+
+export async function getShadowStorageConsentState(): Promise<"auto" | "manual" | null> {
+  if (!isTauriRuntime()) return null;
+  return invoke<"auto" | "manual" | null>("shadow_storage_consent_state");
+}
+
+export async function setShadowStorageConsent(choice: "auto" | "manual") {
+  if (!isTauriRuntime()) return;
+  return invoke<void>("set_shadow_storage_consent", { choice });
+}
+
+/** Today's audit-log entries for things AnalystBlaze did on its own - the
+ * end-of-day "here's what was done on your PC" summary. */
+export async function getTodaysAutomaticActions(): Promise<AutomaticActionEntry[]> {
+  if (!isTauriRuntime()) return [];
+  return invoke<AutomaticActionEntry[]>("todays_automatic_actions");
+}
+
 export async function registerDeepLinkHandlers(onUrl: (url: string) => void) {
   if (!isTauriRuntime()) return () => undefined;
 

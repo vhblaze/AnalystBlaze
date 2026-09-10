@@ -25,6 +25,10 @@ use super::state::{
 };
 
 pub const REMOTE_COMMAND_CONFIRMATION_EVENT: &str = "remote-command-confirmation-request";
+/// Emitted once when a Volsnap shadow-storage limit is detected and the
+/// user has never chosen whether AnalystBlaze may fix it automatically -
+/// the frontend shows the one-time consent prompt.
+pub const SHADOW_STORAGE_NEEDS_CONSENT_EVENT: &str = "shadow-storage-needs-consent";
 const REMOTE_COMMAND_CONFIRMATION_TIMEOUT: Duration = Duration::from_secs(120);
 const AGENT_EVENT_MAX_JSON_BYTES: usize = 10_000;
 static PENDING_REMOTE_COMMAND_CONFIRMATIONS: OnceLock<Mutex<HashMap<Uuid, oneshot::Sender<bool>>>> =
@@ -349,6 +353,22 @@ impl TelemetryEngine {
                         // can't just wait for the paused service's own
                         // usage evidence to reappear).
                         tokio::spawn(optimizations::service_usage::auto_restore_if_needed());
+                        // Volsnap "shadow storage hit its limit" - detects,
+                        // and (only with the user's stored one-time
+                        // consent) raises the limit via the elevated
+                        // helper. Emits SHADOW_STORAGE_NEEDS_CONSENT_EVENT
+                        // the first time so the frontend can ask.
+                        let shadow_app_handle = self.app_handle.clone();
+                        tokio::spawn(async move {
+                            let outcome =
+                                optimizations::shadow_storage::evaluate_and_maybe_fix().await;
+                            if outcome
+                                == optimizations::shadow_storage::ShadowStorageOutcome::NeedsConsent
+                            {
+                                let _ = shadow_app_handle
+                                    .emit(SHADOW_STORAGE_NEEDS_CONSENT_EVENT, ());
+                            }
+                        });
                     }
                 }
                 _ = batch_flush_tick.tick() => {

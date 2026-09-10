@@ -21,6 +21,7 @@ pub mod processes;
 pub mod protected_apps;
 pub mod safety;
 pub mod service_usage;
+pub mod shadow_storage;
 pub mod snapshot;
 pub mod storage_media;
 pub mod visual_effects;
@@ -349,6 +350,7 @@ async fn execute_command_checked_with_helper(
         "RESTORE_STARTUP_APP" => windows_actions::restore_startup_app(payload).await,
         "STOP_SERVICE" => windows_actions::stop_service(payload).await,
         "RESTORE_SERVICE" => windows_actions::restore_service(payload).await,
+        "RESIZE_SHADOW_STORAGE" => shadow_storage::resize_shadow_storage(payload).await,
         "START_FRAME_CAPTURE" => frame_capture_control::start_frame_capture(payload).await,
         "STOP_FRAME_CAPTURE" => frame_capture_control::stop_frame_capture(payload).await,
         other => ExecutionResult::unsupported(other),
