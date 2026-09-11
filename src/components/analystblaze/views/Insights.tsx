@@ -17,6 +17,13 @@ const DISK_USAGE_WARNING_THRESHOLD_PERCENT = 80;
 const NETWORK_LAG_FLAGS = ["packet_loss_detected", "jitter_high", "latency_high"] as const;
 const LATENCY_THRESHOLD_MS = 90;
 const INSIGHT_CONFIDENCE_THRESHOLD = 0.5;
+// A game-server reading only means something once it clears both bars: an
+// absolute gap (a slow connection to a nearby target can still be +30ms
+// worse just from noise) and a relative one (a target that's already at
+// 80ms doesn't need to double to be worth flagging the same way a 10ms one
+// does). Both must hold before this is treated as evidence of anything.
+const GAME_SERVER_LATENCY_GAP_MS = 60;
+const GAME_SERVER_LATENCY_RATIO = 2;
 /** DiskExplorer only reports a volume here once it's already over its own
  * (higher) threshold - this is just for confidence scaling, not a second
  * gate. */
@@ -255,6 +262,60 @@ export function Insights({
     };
   }, [networkDiagnostics, onOpenNetwork, track]);
 
+  // Explains the exact "AnalystBlaze says estavel, but my game shows 500ms"
+  // contradiction: external_latency_ms/jitter_ms above are always measured
+  // against 1.1.1.1/8.8.8.8, which stay fast regardless of which game server
+  // a match landed on - so a healthy general reading and a laggy match are
+  // not actually in conflict, they are two different questions. Only fires
+  // when the generic probes look genuinely healthy (no NETWORK_LAG_FLAGS) -
+  // if those are already flagging trouble, vpnLatencyInsight above is the
+  // more useful explanation and this would just be noise on top of it.
+  const gameServerLatencyInsight = useMemo<Insight | null>(() => {
+    const diagnostics = networkDiagnostics;
+    const server = diagnostics?.game_server;
+    if (!diagnostics || !server?.latency_ms || !onOpenNetwork) return null;
+
+    const recommendations = diagnostics.recommendations ?? [];
+    if (NETWORK_LAG_FLAGS.some((flag) => recommendations.includes(flag))) return null;
+
+    const baseline = diagnostics.external_latency_ms;
+    if (baseline == null) return null;
+    const gap = server.latency_ms - baseline;
+    if (gap < GAME_SERVER_LATENCY_GAP_MS || server.latency_ms < baseline * GAME_SERVER_LATENCY_RATIO) {
+      return null;
+    }
+
+    const confidence = server.best_guess ? 0.55 : 0.7;
+    const processLabel = server.process_name || "o jogo";
+    const serverMs = Math.round(server.latency_ms);
+    const baselineMs = Math.round(baseline);
+    const certainty = server.best_guess
+      ? "provavelmente o servidor do jogo, ou algo perto dele na rede da empresa"
+      : "o servidor que o jogo esta usando agora";
+
+    return {
+      title: "Sua internet esta bem - o servidor do jogo que esta longe ou sobrecarregado",
+      explanation: `Sua conexao geral esta saudavel: ${baselineMs}ms ate a internet, sem perda de pacote nem instabilidade. Mas ${processLabel} esta com ${serverMs}ms ate ${certainty} (${server.remote_ip}) - bem mais que o normal. Isso normalmente significa que o servidor daquela partida esta fisicamente longe, sobrecarregado, ou a rota especifica ate ele esta ruim - nada disso e algo que o AnalystBlaze ou ajustes na sua rede conseguem corrigir, porque o problema comeca do lado de fora da sua conexao.`,
+      impact: `+${Math.round(gap)}ms so nesse servidor`,
+      category: "rede",
+      risk: "baixo",
+      reversible: true,
+      confidence,
+      reason: `${serverMs}ms para ${server.remote_ip}:${server.remote_port} vs ${baselineMs}ms para a internet em geral`,
+      action: {
+        label: "Ver detalhes em Rede",
+        onClick: () => {
+          track("game_server_latency_insight_opened", {
+            confidence: Math.round(confidence * 100),
+            gapMs: Math.round(gap),
+            bestGuess: server.best_guess,
+          });
+          onOpenNetwork();
+        },
+      },
+    };
+  }, [networkDiagnostics, onOpenNetwork, track]);
+
   const diskNearFullInsight = useMemo<Insight | null>(() => {
     const info = diskNearFullInfo;
     if (!info || !onOpenDiskUsage) return null;
@@ -336,6 +397,7 @@ export function Insights({
       shadowStorageInsight,
       diskUsageInsight,
       vpnLatencyInsight,
+      gameServerLatencyInsight,
       diskNearFullInsight,
       scheduledDefragInsight,
     ].filter((insight): insight is Insight => insight != null);
@@ -345,6 +407,7 @@ export function Insights({
     shadowStorageInsight,
     diskUsageInsight,
     vpnLatencyInsight,
+    gameServerLatencyInsight,
     diskNearFullInsight,
     scheduledDefragInsight,
     insights,

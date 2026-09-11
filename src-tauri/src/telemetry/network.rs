@@ -86,6 +86,46 @@ pub struct NetworkDiagnostics {
     pub probes: Vec<NetworkProbe>,
     pub recommendations: Vec<String>,
     pub refreshed_at: i64,
+    /// A live ping to whatever server the currently-detected game process is
+    /// actually talking to, when one could be found - see
+    /// measure_game_server_latency for why this can be absent even with a
+    /// game running. None of the other fields on this struct say anything
+    /// about that specific connection: external_latency_ms/jitter_ms/
+    /// packet_loss_percent are all against 1.1.1.1/8.8.8.8, which stay fast
+    /// and stable regardless of which game server a match landed on, so a
+    /// "Rede estavel" summary and a laggy match are not a contradiction -
+    /// they are measuring different things. This field is what lets an
+    /// insight say which one is actually true.
+    pub game_server: Option<GameServerLatency>,
+}
+
+/// TCP only. Windows' UDP connection tables (Get-NetUDPEndpoint /
+/// GetExtendedUdpTable) never expose the remote peer - UDP has no OS-level
+/// "connection" for the table to report one for - so a game whose live
+/// gameplay traffic is pure UDP (most action/multiplayer titles, very
+/// plausibly including the one that prompted this) cannot be pinpointed this
+/// way; that would need an ETW network-flow consumer or packet capture, both
+/// a separate, heavier project. When the game process has at least one
+/// established TCP connection (matchmaking, chat, an API/auth channel - many
+/// games keep one open even when the real-time traffic is UDP) it is usually
+/// hosted near the same edge/region as the game server, so it is still a
+/// meaningfully better proxy than a fixed generic target - just not a
+/// certainty, hence `best_guess`. No connection found means no result at
+/// all: this never guesses at an IP, it only reports one it actually saw the
+/// game process using.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GameServerLatency {
+    pub process_name: Option<String>,
+    pub remote_ip: String,
+    pub remote_port: u16,
+    /// True when several TCP peers were tied and none looked more like the
+    /// core game connection than another (see game_server_candidate_score) -
+    /// still a real endpoint the game is talking to, just a weaker guess at
+    /// whether it is the *primary* one.
+    pub best_guess: bool,
+    pub latency_ms: Option<f64>,
+    pub jitter_ms: Option<f64>,
+    pub packet_loss_percent: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -186,9 +226,120 @@ pub fn collect_network_diagnostics() -> NetworkDiagnostics {
         probes,
         recommendations: Vec::new(),
         refreshed_at: chrono::Utc::now().timestamp(),
+        game_server: measure_game_server_latency(),
     };
     diagnostics.recommendations = network_recommendations(&diagnostics);
     diagnostics
+}
+
+/// Only ever called from collect_network_diagnostics's on-demand path (see
+/// its doc comment) - never the 30s telemetry cadence - so the extra
+/// PowerShell call this can make only happens when a user actually opens the
+/// network/performance view, not in the background. When no game process is
+/// detected this returns immediately with no PowerShell call at all.
+fn measure_game_server_latency() -> Option<GameServerLatency> {
+    let detection = crate::optimizations::detection::detect_game_process();
+    let pid = detection.pid.as_deref()?;
+    let (ip, port, best_guess) = detect_game_server_endpoint(pid)?;
+    let probe = probe_latency("game_server", &ip, 4);
+    if probe.received == 0 {
+        return None;
+    }
+    Some(GameServerLatency {
+        process_name: detection.process_name,
+        remote_ip: ip,
+        remote_port: port,
+        best_guess,
+        latency_ms: probe.avg_ms,
+        jitter_ms: probe.jitter_ms,
+        packet_loss_percent: Some(probe.packet_loss_percent),
+    })
+}
+
+/// Higher wins. Ports outside 80/443 are far more likely to be a
+/// game-specific protocol (custom game/voice/matchmaking ports) than a
+/// generic HTTPS API/CDN call that any process makes - not proof, just the
+/// best signal available without inspecting traffic content.
+fn game_server_candidate_score(port: u16) -> u8 {
+    if matches!(port, 80 | 443) {
+        0
+    } else {
+        1
+    }
+}
+
+/// Established TCP peers of `pid`, excluding anything private/loopback/
+/// link-local (that is LAN traffic, e.g. a local game-streaming companion
+/// app or a router admin page, never the actual game server). Returns the
+/// single best candidate by game_server_candidate_score; `best_guess` is
+/// true when it won only by being first among a tie, not by being the one
+/// non-web-port connection.
+fn detect_game_server_endpoint(pid: &str) -> Option<(String, u16, bool)> {
+    let script = format!(
+        "Get-NetTCPConnection -OwningProcess {pid} -State Established -ErrorAction SilentlyContinue | \
+         Select-Object RemoteAddress,RemotePort | ConvertTo-Json -Compress"
+    );
+    let value = powershell_json(&script)?;
+    let rows: Vec<Value> = match value {
+        Value::Array(items) => items,
+        Value::Object(_) => vec![value],
+        _ => return None,
+    };
+
+    let mut candidates: Vec<(String, u16)> = rows
+        .into_iter()
+        .filter_map(|row| {
+            let ip = row.get("RemoteAddress").and_then(Value::as_str)?.trim();
+            let port = row.get("RemotePort").and_then(Value::as_u64)? as u16;
+            if ip.is_empty() || is_private_or_local_ip(ip) {
+                return None;
+            }
+            sanitize_target(ip).map(|ip| (ip, port))
+        })
+        .collect();
+    candidates.dedup();
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let best_score = candidates
+        .iter()
+        .map(|(_, port)| game_server_candidate_score(*port))
+        .max()?;
+    let tied = candidates
+        .iter()
+        .filter(|(_, port)| game_server_candidate_score(*port) == best_score)
+        .count();
+    let (ip, port) = candidates
+        .into_iter()
+        .find(|(_, port)| game_server_candidate_score(*port) == best_score)?;
+    Some((ip, port, tied > 1))
+}
+
+/// RFC1918 private ranges, loopback and link-local - anything a game-related
+/// remote peer should never actually be. Deliberately string-based (no
+/// std::net::Ipv4Addr parse) since PowerShell can also hand back an IPv6
+/// literal, which this only needs to recognize the well-known local forms of
+/// (::1, fe80::/10), not fully parse.
+fn is_private_or_local_ip(ip: &str) -> bool {
+    if ip == "::1" || ip.starts_with("fe80:") {
+        return true;
+    }
+    let octets: Vec<&str> = ip.split('.').collect();
+    if octets.len() != 4 {
+        return false;
+    }
+    let Ok(first) = octets[0].parse::<u16>() else {
+        return false;
+    };
+    let Ok(second) = octets[1].parse::<u16>() else {
+        return false;
+    };
+    first == 10
+        || first == 127
+        || (first == 172 && (16..=31).contains(&second))
+        || (first == 192 && second == 168)
+        || (first == 169 && second == 254)
 }
 
 pub fn collect_network_sample() -> NetworkDiagnostics {
@@ -947,8 +1098,42 @@ fn build_dns_query(id: u16, qname: &str) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::{
-        network_recommendations, parse_ping_latencies, parse_traceroute_line, NetworkDiagnostics,
+        game_server_candidate_score, is_private_or_local_ip, network_recommendations,
+        parse_ping_latencies, parse_traceroute_line, NetworkDiagnostics,
     };
+
+    #[test]
+    fn private_and_local_addresses_are_never_reported_as_a_game_server() {
+        for ip in [
+            "10.0.0.5",
+            "172.16.4.1",
+            "172.31.255.254",
+            "192.168.1.1",
+            "127.0.0.1",
+            "169.254.1.5",
+            "::1",
+            "fe80::1",
+        ] {
+            assert!(is_private_or_local_ip(ip), "{ip} should be treated as local");
+        }
+    }
+
+    #[test]
+    fn real_internet_addresses_are_not_flagged_as_local() {
+        for ip in ["1.1.1.1", "8.8.8.8", "203.0.113.9", "172.32.0.1", "172.15.255.255"] {
+            assert!(!is_private_or_local_ip(ip), "{ip} should not be treated as local");
+        }
+    }
+
+    #[test]
+    fn candidate_scoring_prefers_a_non_web_port() {
+        // 80/443 look like any generic HTTPS/CDN call every process makes;
+        // a distinctive port is the best signal available that a
+        // connection is the game's own protocol, not proof either way.
+        assert!(game_server_candidate_score(7777) > game_server_candidate_score(443));
+        assert!(game_server_candidate_score(27015) > game_server_candidate_score(80));
+        assert_eq!(game_server_candidate_score(443), game_server_candidate_score(80));
+    }
 
     #[test]
     fn parses_traceroute_hop_with_three_replies() {
@@ -1039,5 +1224,28 @@ mod tests {
         healthy_idle.adapter_throughput_kbps = Some(5.0);
         assert!(!network_recommendations(&healthy_idle)
             .contains(&"possible_external_network_congestion".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod game_server_live_check {
+    /// Prints what this machine would report for game_server. With no game
+    /// running this should just print None - run something with an
+    /// established TCP connection (even a browser tab) and pass its PID to
+    /// see a real hit, since nothing here is faked.
+    /// cargo test --lib game_server_live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn live_game_server_probe_on_this_machine() {
+        let diagnostics = super::collect_network_diagnostics();
+        println!("game_server = {:#?}", diagnostics.game_server);
+        if let Some(server) = &diagnostics.game_server {
+            assert!(
+                !super::is_private_or_local_ip(&server.remote_ip),
+                "leaked a private/local address: {}",
+                server.remote_ip
+            );
+            assert!(server.latency_ms.is_some(), "reported with no latency reading");
+        }
     }
 }

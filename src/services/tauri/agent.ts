@@ -355,6 +355,21 @@ export type NetworkProbe = {
   jitter_ms?: number | null;
 };
 
+/** A live ping to whatever server the currently-detected game process is
+ * actually talking to (TCP peers only - see backend's detect_game_server_endpoint
+ * for why UDP-only gameplay traffic, common in action/multiplayer titles,
+ * can't be pinpointed this way). Absent means either no game is running or
+ * no non-local TCP peer was found - never a guess at an IP. */
+export type GameServerLatency = {
+  process_name?: string | null;
+  remote_ip: string;
+  remote_port: number;
+  best_guess: boolean;
+  latency_ms?: number | null;
+  jitter_ms?: number | null;
+  packet_loss_percent?: number | null;
+};
+
 export type NetworkDiagnostics = {
   connected: boolean;
   adapter_name?: string | null;
@@ -376,6 +391,7 @@ export type NetworkDiagnostics = {
   probes: NetworkProbe[];
   recommendations: string[];
   refreshed_at: number;
+  game_server?: GameServerLatency | null;
 };
 
 export type NetworkAdapterSummary = {
