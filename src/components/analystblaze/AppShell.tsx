@@ -1,3 +1,4 @@
+import { X } from "lucide-react";
 import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Sidebar } from "./Sidebar";
 import { TopBar, type TopBarNotification, type TopBarSearchItem } from "./TopBar";
@@ -1378,29 +1379,49 @@ function ConfirmationDialog({
   onConfirm: () => void;
 }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 py-8 backdrop-blur-sm">
       <section
         role="dialog"
         aria-modal="true"
         aria-label={request.title}
-        className="w-full max-w-lg rounded-2xl border border-cyan-400/20 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)]"
+        // Same fix as UpdateNotice: a long description (helper-health,
+        // device-transfer, ...) used to push "Cancelar"/"Confirmar" off the
+        // bottom of the screen with nothing to scroll and nothing to close -
+        // this dialog fires far more often than the update one (every 30min
+        // helper check, on every window focus), so it was the bigger source
+        // of users getting stuck. Body scrolls on its own; the button row
+        // stays outside that scroll region so it's never something you have
+        // to scroll past a wall of text to reach.
+        className="relative flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border border-cyan-400/20 bg-slate-950 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)]"
       >
-        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-300">
-          {request.remote ? "pedido recebido da web" : "confirmacao local"}
-        </div>
-        <h2 className="mt-2 text-xl font-semibold text-slate-50">{request.title}</h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-400">{request.description}</p>
-        <div className="mt-4 grid gap-2 sm:grid-cols-2">
-          <div className="rounded-xl border border-cyan-500/10 bg-slate-900/70 p-3">
-            <span className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">risco</span>
-            <strong className="mt-1 block text-sm text-slate-100">{request.risk}</strong>
+        <button
+          type="button"
+          onClick={onCancel}
+          aria-label="Fechar"
+          className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-slate-400 transition hover:bg-white/5 hover:text-slate-100"
+        >
+          <X className="h-4 w-4" />
+        </button>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-6 pb-4 pr-10">
+          <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-300">
+            {request.remote ? "pedido recebido da web" : "confirmacao local"}
           </div>
-          <div className="rounded-xl border border-cyan-500/10 bg-slate-900/70 p-3">
-            <span className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">snapshot</span>
-            <strong className="mt-1 block text-sm text-slate-100">{request.snapshot ? "obrigatorio" : "nao altera snapshot"}</strong>
+          <h2 className="mt-2 text-xl font-semibold text-slate-50">{request.title}</h2>
+          <p className="mt-2 text-sm leading-relaxed text-slate-400">{request.description}</p>
+          <div className="mt-4 grid gap-2 sm:grid-cols-2">
+            <div className="rounded-xl border border-cyan-500/10 bg-slate-900/70 p-3">
+              <span className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">risco</span>
+              <strong className="mt-1 block text-sm text-slate-100">{request.risk}</strong>
+            </div>
+            <div className="rounded-xl border border-cyan-500/10 bg-slate-900/70 p-3">
+              <span className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">snapshot</span>
+              <strong className="mt-1 block text-sm text-slate-100">{request.snapshot ? "obrigatorio" : "nao altera snapshot"}</strong>
+            </div>
           </div>
         </div>
-        <div className="mt-6 flex justify-end gap-2">
+
+        <div className="flex justify-end gap-2 border-t border-white/5 p-4">
           <button
             onClick={onCancel}
             className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70"
