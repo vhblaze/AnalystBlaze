@@ -66,6 +66,7 @@ export function splitBackendErrorCode(raw: string): { code: string | null; messa
 export function AppShell() {
   const [view, setView] = useState<ViewKey>("dashboard");
   const [focusDiskUsage, setFocusDiskUsage] = useState(false);
+  const [focusTracerouteTarget, setFocusTracerouteTarget] = useState<string | null>(null);
   const [diskNearFullInfo, setDiskNearFullInfo] = useState<DiskNearFullInfo | null>(null);
   const [confirmRequest, setConfirmRequest] = useState<ConfirmRequest | null>(null);
   const [remoteConfirmationQueue, setRemoteConfirmationQueue] = useState<RemoteCommandConfirmationRequest[]>([]);
@@ -134,9 +135,13 @@ export function AppShell() {
     handleViewChange("disk");
   }, [handleViewChange]);
 
-  const openNetworkDetails = useCallback(() => {
-    handleViewChange("network");
-  }, [handleViewChange]);
+  const openNetworkDetails = useCallback(
+    (autoTracerouteTarget?: string) => {
+      if (autoTracerouteTarget) setFocusTracerouteTarget(autoTracerouteTarget);
+      handleViewChange("network");
+    },
+    [handleViewChange],
+  );
 
   const requestConfirmation = useCallback((request: Omit<ConfirmRequest, "resolve" | "id">) => {
     return new Promise<boolean>((resolve) => {
@@ -1136,6 +1141,8 @@ export function AppShell() {
                 <Network
                   busy={auth.busy}
                   isReady={Boolean(auth.status?.authenticated && auth.status.registered)}
+                  autoTracerouteTarget={focusTracerouteTarget}
+                  onAutoTracerouteHandled={() => setFocusTracerouteTarget(null)}
                   onFlushDnsCache={() =>
                     runConfirmed(
                       {

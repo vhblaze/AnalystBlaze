@@ -168,18 +168,57 @@ struct WifiInfo {
     channel: Option<String>,
 }
 
+/// Runs every independent shell-out this collects (two PowerShell calls, a
+/// netsh call, up to four ping processes) concurrently on their own OS
+/// threads instead of one after another - this function is only ever called
+/// from inside a Tauri command's own spawn_blocking, so there is no async
+/// runtime here to cooperate with, just synchronous child processes that
+/// spend nearly all their time waiting on I/O. Sequentially, this used to
+/// take roughly the *sum* of every probe's own time - worst case (a lossy
+/// network, exactly the condition a user opening this screen is most likely
+/// investigating) each ping can burn several seconds waiting out Windows'
+/// own per-packet timeout, so a slow network made the diagnostics screen
+/// about it slow too. Concurrently it takes roughly the *slowest single*
+/// probe instead. Only two probes have a real dependency (the gateway probe
+/// needs the adapter's gateway IP, adapter health needs its name) so those
+/// two run as a second, smaller parallel batch right after the first.
 pub fn collect_network_diagnostics() -> NetworkDiagnostics {
-    let adapter = collect_active_adapter();
-    let wifi = collect_wifi_info();
-    let health = adapter.name.as_deref().and_then(measure_adapter_health);
-    let mut probes = Vec::new();
+    let (adapter, wifi, dns_cloudflare_probe, dns_google_probe, game_server) = std::thread::scope(
+        |scope| {
+            let adapter_handle = scope.spawn(collect_active_adapter);
+            let wifi_handle = scope.spawn(collect_wifi_info);
+            let dns_cloudflare_handle = scope.spawn(|| probe_latency("dns_cloudflare", "1.1.1.1", 4));
+            let dns_google_handle = scope.spawn(|| probe_latency("dns_google", "8.8.8.8", 4));
+            let game_server_handle = scope.spawn(measure_game_server_latency);
+            (
+                adapter_handle.join().unwrap_or_default(),
+                wifi_handle.join().unwrap_or_default(),
+                dns_cloudflare_handle.join().unwrap_or_default(),
+                dns_google_handle.join().unwrap_or_default(),
+                game_server_handle.join().unwrap_or_default(),
+            )
+        },
+    );
 
-    if let Some(gateway) = adapter.gateway.as_deref().and_then(sanitize_target) {
-        probes.push(probe_latency("gateway", &gateway, 3));
-    }
+    let (gateway_probe, health) = std::thread::scope(|scope| {
+        let gateway_handle = scope.spawn(|| {
+            adapter
+                .gateway
+                .as_deref()
+                .and_then(sanitize_target)
+                .map(|gateway| probe_latency("gateway", &gateway, 3))
+        });
+        let health_handle = scope.spawn(|| adapter.name.as_deref().and_then(measure_adapter_health));
+        (
+            gateway_handle.join().unwrap_or_default(),
+            health_handle.join().unwrap_or_default(),
+        )
+    });
 
-    probes.push(probe_latency("dns_cloudflare", "1.1.1.1", 4));
-    probes.push(probe_latency("dns_google", "8.8.8.8", 4));
+    let mut probes = Vec::with_capacity(3);
+    probes.extend(gateway_probe);
+    probes.push(dns_cloudflare_probe);
+    probes.push(dns_google_probe);
 
     let gateway_probe = probes.iter().find(|probe| probe.label == "gateway");
     let dns_probe = probes.iter().find(|probe| probe.label == "dns_cloudflare");
@@ -226,7 +265,7 @@ pub fn collect_network_diagnostics() -> NetworkDiagnostics {
         probes,
         recommendations: Vec::new(),
         refreshed_at: chrono::Utc::now().timestamp(),
-        game_server: measure_game_server_latency(),
+        game_server,
     };
     diagnostics.recommendations = network_recommendations(&diagnostics);
     diagnostics
@@ -272,8 +311,16 @@ fn game_server_candidate_score(port: u16) -> u8 {
 /// link-local (that is LAN traffic, e.g. a local game-streaming companion
 /// app or a router admin page, never the actual game server). Returns the
 /// single best candidate by game_server_candidate_score; `best_guess` is
-/// true when it won only by being first among a tie, not by being the one
-/// non-web-port connection.
+/// true whenever the winner isn't a confident, distinguishing signal - either
+/// it tied with another candidate, or it won only because everything found
+/// was a web port (80/443). That second case matters on its own: a game
+/// launcher sitting idle at its menu (not in any match) routinely keeps a
+/// single HTTPS connection open to its own API/chat/presence backend - the
+/// exact false positive this method used to report with full confidence
+/// (see the 2026-09 live check: Roblox not in any match still had one
+/// established connection on :443, and this returned it as a game server
+/// with best_guess=false). A lone web-port candidate is exactly as weak
+/// evidence as a tie, even though nothing "tied" with it.
 fn detect_game_server_endpoint(pid: &str) -> Option<(String, u16, bool)> {
     let script = format!(
         "Get-NetTCPConnection -OwningProcess {pid} -State Established -ErrorAction SilentlyContinue | \
@@ -286,7 +333,7 @@ fn detect_game_server_endpoint(pid: &str) -> Option<(String, u16, bool)> {
         _ => return None,
     };
 
-    let mut candidates: Vec<(String, u16)> = rows
+    let candidates: Vec<(String, u16)> = rows
         .into_iter()
         .filter_map(|row| {
             let ip = row.get("RemoteAddress").and_then(Value::as_str)?.trim();
@@ -297,6 +344,12 @@ fn detect_game_server_endpoint(pid: &str) -> Option<(String, u16, bool)> {
             sanitize_target(ip).map(|ip| (ip, port))
         })
         .collect();
+    pick_best_candidate(candidates)
+}
+
+/// Pure selection logic split out from detect_game_server_endpoint so it's
+/// testable without shelling out to PowerShell.
+fn pick_best_candidate(mut candidates: Vec<(String, u16)>) -> Option<(String, u16, bool)> {
     candidates.dedup();
     if candidates.is_empty() {
         return None;
@@ -313,7 +366,7 @@ fn detect_game_server_endpoint(pid: &str) -> Option<(String, u16, bool)> {
     let (ip, port) = candidates
         .into_iter()
         .find(|(_, port)| game_server_candidate_score(*port) == best_score)?;
-    Some((ip, port, tied > 1))
+    Some((ip, port, tied > 1 || best_score == 0))
 }
 
 /// RFC1918 private ranges, loopback and link-local - anything a game-related
@@ -1099,7 +1152,7 @@ fn build_dns_query(id: u16, qname: &str) -> Vec<u8> {
 mod tests {
     use super::{
         game_server_candidate_score, is_private_or_local_ip, network_recommendations,
-        parse_ping_latencies, parse_traceroute_line, NetworkDiagnostics,
+        parse_ping_latencies, parse_traceroute_line, pick_best_candidate, NetworkDiagnostics,
     };
 
     #[test]
@@ -1123,6 +1176,49 @@ mod tests {
         for ip in ["1.1.1.1", "8.8.8.8", "203.0.113.9", "172.32.0.1", "172.15.255.255"] {
             assert!(!is_private_or_local_ip(ip), "{ip} should not be treated as local");
         }
+    }
+
+    /// Regression test for the 2026-09 live-check false positive: Roblox not
+    /// in any match still had a single established HTTPS connection to its
+    /// own backend, and this used to come back as "the game server" with
+    /// best_guess=false (full confidence) purely because nothing tied with
+    /// it. A lone web-port candidate must always be flagged low-confidence.
+    #[test]
+    fn a_single_web_port_candidate_is_never_high_confidence() {
+        let (ip, port, best_guess) =
+            pick_best_candidate(vec![("128.116.86.3".to_string(), 443)]).unwrap();
+        assert_eq!(ip, "128.116.86.3");
+        assert_eq!(port, 443);
+        assert!(best_guess, "a lone :443 candidate must be marked best_guess");
+    }
+
+    #[test]
+    fn a_single_non_web_port_candidate_is_high_confidence() {
+        let (_, _, best_guess) =
+            pick_best_candidate(vec![("203.0.113.9".to_string(), 7777)]).unwrap();
+        assert!(!best_guess, "a lone distinctive-port candidate is a confident match");
+    }
+
+    #[test]
+    fn tied_non_web_ports_are_still_flagged_low_confidence() {
+        let (_, _, best_guess) = pick_best_candidate(vec![
+            ("203.0.113.9".to_string(), 7777),
+            ("203.0.113.10".to_string(), 9000),
+        ])
+        .unwrap();
+        assert!(best_guess, "a tie between two equally-good candidates is still a guess");
+    }
+
+    #[test]
+    fn a_non_web_port_wins_over_a_web_port_with_high_confidence() {
+        let (ip, port, best_guess) = pick_best_candidate(vec![
+            ("128.116.86.3".to_string(), 443),
+            ("203.0.113.9".to_string(), 7777),
+        ])
+        .unwrap();
+        assert_eq!(ip, "203.0.113.9");
+        assert_eq!(port, 7777);
+        assert!(!best_guess);
     }
 
     #[test]
@@ -1237,7 +1333,9 @@ mod game_server_live_check {
     #[test]
     #[ignore]
     fn live_game_server_probe_on_this_machine() {
+        let started = std::time::Instant::now();
         let diagnostics = super::collect_network_diagnostics();
+        eprintln!("TIMING collect_network_diagnostics = {:?}", started.elapsed());
         println!("game_server = {:#?}", diagnostics.game_server);
         if let Some(server) = &diagnostics.game_server {
             assert!(

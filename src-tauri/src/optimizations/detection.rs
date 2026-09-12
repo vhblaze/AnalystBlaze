@@ -318,6 +318,18 @@ fn is_never_game_process(normalized: &str) -> bool {
 /// terminal, or Discord happening to have focus says nothing about what
 /// the user is actually doing, unlike the heavy-workload tools below
 /// (where a manual click is a deliberate signal worth honoring).
+///
+/// Communication/media apps (WhatsApp, Teams, Zoom, Slack, Spotify, ...)
+/// belong here too, and matter more than the rest of this list: a real
+/// incident (2026-09) had WhatsApp's foreground window, mid video call
+/// (GPU decode + CPU both briefly spiking), trip evaluate_local_policy's
+/// unsupervised (high_gpu && high_cpu) heuristic and auto-activate Game
+/// Mode. Unlike a real game, these apps are routinely left open and in the
+/// foreground for hours with no natural "the user is done" exit event
+/// (Game Mode only auto-restores when its target process closes - see
+/// spawn_game_restore_monitor), so once mis-triggered against one, Game
+/// Mode reads as permanently "on" until the user manually deactivates it -
+/// which looks like a stuck/broken toggle, not a one-off false positive.
 fn is_common_foreground_non_game(normalized: &str) -> bool {
     matches!(
         normalized,
@@ -332,6 +344,19 @@ fn is_common_foreground_non_game(normalized: &str) -> bool {
             | "cmd.exe"
             | "windowsterminal.exe"
             | "discord.exe"
+            | "whatsapp.exe"
+            | "whatsapp.root.exe"
+            | "telegram.exe"
+            | "signal.exe"
+            | "skype.exe"
+            | "slack.exe"
+            | "teams.exe"
+            | "ms-teams.exe"
+            | "zoom.exe"
+            | "spotify.exe"
+            | "outlook.exe"
+            | "onenote.exe"
+            | "onedrive.exe"
     )
 }
 
@@ -438,6 +463,22 @@ mod tests {
         assert!(is_heavy_workload_tool("devenv.exe"));
         assert!(!is_heavy_workload_tool("cs2.exe"));
         assert!(!is_common_foreground_non_game("blender.exe"));
+    }
+
+    /// Regression test for the 2026-09 WhatsApp incident: a video call's
+    /// GPU+CPU spike, with WhatsApp in the foreground, auto-activated Game
+    /// Mode via evaluate_local_policy's unsupervised heuristic and then
+    /// never auto-restored (WhatsApp stayed open, so the process-exit
+    /// monitor never fired) - the toggle read as permanently stuck "on".
+    #[test]
+    fn excludes_common_communication_apps_from_unsupervised_game_guess() {
+        assert!(is_common_foreground_non_game("whatsapp.root.exe"));
+        assert!(is_common_foreground_non_game("whatsapp.exe"));
+        assert!(is_common_foreground_non_game("teams.exe"));
+        assert!(is_common_foreground_non_game("zoom.exe"));
+        assert!(is_common_foreground_non_game("slack.exe"));
+        assert!(is_common_foreground_non_game("spotify.exe"));
+        assert!(!is_common_foreground_non_game("valorant.exe"));
     }
 
     #[test]

@@ -49,16 +49,39 @@ import {
   type NetworkTuneRequest,
   type NetworkTuneSession,
   type PrivilegedHelperStatus,
+  type TracerouteHop,
   type TracerouteResult,
 } from "@/services/tauri/agent";
 
 const LIVE_MODE_SAMPLE_HISTORY = 60;
 const STREAMING_APP_POLL_MS = 15_000;
+// Mirrors Insights.tsx's GAME_SERVER_LATENCY_GAP_MS/RATIO - same "is this
+// actually worth flagging" bar, just reused here so the permanent
+// diagnostics-tab readout and the Insight card never disagree about what
+// counts as normal.
+const GAME_SERVER_LATENCY_GAP_MS = 60;
+const GAME_SERVER_LATENCY_RATIO = 2;
 
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
 }
+
+type NetworkDiagnosticsCache = {
+  diagnostics: NetworkDiagnostics;
+  adapters: NetworkAdapterSummary[];
+  allAdapters: NetworkAdapterSummary[];
+  helperStatus: PrivilegedHelperStatus | null;
+};
+
+/** Module-level (not component state), so it survives Network unmounting
+ * when the user switches to another view - only ever holds the single
+ * latest snapshot (a few dozen small fields, not a history), so the memory
+ * cost is negligible. Lets the view seed itself instantly from the last
+ * known-good read on return instead of a blank loading screen, while
+ * refreshNetwork still runs in the background to catch anything that
+ * changed while the user was away. */
+let networkDiagnosticsCache: NetworkDiagnosticsCache | null = null;
 
 /** Consolidated network home - diagnostics + admin actions (DNS/Winsock)
  * that used to live buried in Controles > Avancado, plus Modo Live (was in
@@ -74,6 +97,8 @@ export function Network({
   onSetAdapterEnabled,
   onApplyNetworkTune,
   onRestartWindows,
+  autoTracerouteTarget,
+  onAutoTracerouteHandled,
 }: {
   busy: boolean;
   isReady: boolean;
@@ -87,20 +112,33 @@ export function Network({
   ) => Promise<unknown>;
   onApplyNetworkTune: (request: NetworkTuneRequest) => Promise<unknown>;
   onRestartWindows: () => Promise<unknown>;
+  /** Set by Insights' "Diagnosticar causa" action on the game-server-latency
+   * card - when present, jumps straight to the route tab and runs the trace
+   * against this IP instead of leaving the user to copy/paste it in. */
+  autoTracerouteTarget?: string | null;
+  onAutoTracerouteHandled?: () => void;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("network");
   const runtimeAvailable = isTauriRuntime();
 
-  const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(null);
-  const [networkAdapters, setNetworkAdapters] = useState<NetworkAdapterSummary[]>([]);
-  const [allNetworkAdapters, setAllNetworkAdapters] = useState<NetworkAdapterSummary[]>([]);
+  const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(
+    () => networkDiagnosticsCache?.diagnostics ?? null,
+  );
+  const [networkAdapters, setNetworkAdapters] = useState<NetworkAdapterSummary[]>(
+    () => networkDiagnosticsCache?.adapters ?? [],
+  );
+  const [allNetworkAdapters, setAllNetworkAdapters] = useState<NetworkAdapterSummary[]>(
+    () => networkDiagnosticsCache?.allAdapters ?? [],
+  );
   const [adapterToggleBusyName, setAdapterToggleBusyName] = useState<string | null>(null);
   const [heroDisableBusy, setHeroDisableBusy] = useState(false);
   const [dnsAdapterName, setDnsAdapterName] = useState("");
   const [dnsPrimary, setDnsPrimary] = useState("");
   const [dnsSecondary, setDnsSecondary] = useState("");
-  const [helperStatus, setHelperStatus] = useState<PrivilegedHelperStatus | null>(null);
+  const [helperStatus, setHelperStatus] = useState<PrivilegedHelperStatus | null>(
+    () => networkDiagnosticsCache?.helperStatus ?? null,
+  );
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -146,6 +184,19 @@ export function Network({
     [networkDiagnostics?.recommendations, t],
   );
 
+  const routeVerdict = useMemo(
+    () => (tracerouteResult ? classifyRouteDiagnosis(tracerouteResult) : null),
+    [tracerouteResult],
+  );
+
+  const gameServer = networkDiagnostics?.game_server ?? null;
+  const gameServerIsHigh = Boolean(
+    gameServer?.latency_ms != null &&
+      networkDiagnostics?.external_latency_ms != null &&
+      gameServer.latency_ms - networkDiagnostics.external_latency_ms >= GAME_SERVER_LATENCY_GAP_MS &&
+      gameServer.latency_ms >= networkDiagnostics.external_latency_ms * GAME_SERVER_LATENCY_RATIO,
+  );
+
   const refreshNetwork = useCallback(async () => {
     setDiagnosticsBusy(true);
     setDiagnosticsError(null);
@@ -160,6 +211,12 @@ export function Network({
       setNetworkAdapters(nextAdapters);
       setAllNetworkAdapters(nextAllAdapters);
       setHelperStatus(nextHelper);
+      networkDiagnosticsCache = {
+        diagnostics: nextNetwork,
+        adapters: nextAdapters,
+        allAdapters: nextAllAdapters,
+        helperStatus: nextHelper,
+      };
       setDnsAdapterName((current) => {
         if (current && nextAdapters.some((adapter) => adapter.name === current)) return current;
         return nextNetwork.adapter_name ?? nextAdapters[0]?.name ?? "";
@@ -170,10 +227,15 @@ export function Network({
       });
       track("network_refreshed");
     } catch (error) {
-      setNetworkDiagnostics(null);
-      setNetworkAdapters([]);
-      setAllNetworkAdapters([]);
       setDiagnosticsError(errorMessage(error));
+      // A transient failure (e.g. the helper hiccuped mid-refresh) shouldn't
+      // blank out a perfectly good cached view - only clear when there was
+      // never a known-good snapshot to fall back to.
+      if (!networkDiagnosticsCache) {
+        setNetworkDiagnostics(null);
+        setNetworkAdapters([]);
+        setAllNetworkAdapters([]);
+      }
     } finally {
       setDiagnosticsBusy(false);
     }
@@ -562,11 +624,11 @@ export function Network({
     }
   };
 
-  const runTraceroute = async () => {
+  const runTraceroute = async (overrideTarget?: string) => {
     setTracerouteBusy(true);
     setTracerouteError(null);
     try {
-      const result = await runNetworkTraceroute(tracerouteTarget.trim() || undefined);
+      const result = await runNetworkTraceroute((overrideTarget ?? tracerouteTarget).trim() || undefined);
       setTracerouteResult(result);
       track("traceroute_run", { target: result.target, hops: result.hops.length });
     } catch (error) {
@@ -575,6 +637,17 @@ export function Network({
       setTracerouteBusy(false);
     }
   };
+
+  // Insights' game-server-latency card hands off a specific IP to diagnose
+  // rather than making the user copy/paste it - this is what picks that up.
+  useEffect(() => {
+    if (!autoTracerouteTarget) return;
+    setActiveTab("route");
+    setTracerouteTarget(autoTracerouteTarget);
+    void runTraceroute(autoTracerouteTarget);
+    onAutoTracerouteHandled?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoTracerouteTarget]);
 
   const runDnsBenchmark = async () => {
     setDnsBenchmarkBusy(true);
@@ -796,6 +869,58 @@ export function Network({
                   )}
                 </div>
               )}
+
+              <div className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
+                <div className="font-mono text-[9px] uppercase tracking-widest text-slate-500">
+                  {t("network.gameServerTitle")}
+                </div>
+                {gameServer?.latency_ms != null ? (
+                  <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-slate-100">
+                        {gameServer.process_name ?? t("network.gameServerUnknownProcess")}
+                        <span className="ml-2 font-mono text-xs text-slate-400">
+                          {gameServer.remote_ip}:{gameServer.remote_port}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-500">
+                        {Math.round(gameServer.latency_ms)} ms
+                        {networkDiagnostics?.external_latency_ms != null &&
+                          ` (${t("network.gameServerVsInternet")} ${Math.round(networkDiagnostics.external_latency_ms)} ms)`}
+                      </div>
+                      {gameServer.best_guess && (
+                        <div className="mt-0.5 text-[11px] text-slate-500">{t("network.gameServerBestGuess")}</div>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span
+                        className={`rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-widest ${
+                          gameServerIsHigh
+                            ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
+                            : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                        }`}
+                      >
+                        {gameServerIsHigh ? t("network.gameServerHigh") : t("network.gameServerNormal")}
+                      </span>
+                      {gameServerIsHigh && (
+                        <button
+                          disabled={tracerouteBusy || !runtimeAvailable}
+                          onClick={() => {
+                            setActiveTab("route");
+                            setTracerouteTarget(gameServer.remote_ip);
+                            void runTraceroute(gameServer.remote_ip);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2.5 py-1.5 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
+                        >
+                          {t("network.diagnoseCause")}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-sm text-slate-500">{t("network.gameServerNone")}</div>
+                )}
+              </div>
             </div>
           )}
 
@@ -819,6 +944,27 @@ export function Network({
                 <span className="text-xs text-slate-500">{t("network.routeDesc")}</span>
               </div>
               {tracerouteError && <Notice tone="danger" message={tracerouteError} />}
+
+              {routeVerdict && (
+                <div
+                  className={`rounded-xl border p-3 text-xs ${
+                    routeVerdict.kind === "normal"
+                      ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+                      : routeVerdict.kind === "inconclusive"
+                        ? "border-slate-500/30 bg-slate-500/10 text-slate-300"
+                        : "border-amber-400/30 bg-amber-400/10 text-amber-100"
+                  }`}
+                >
+                  <div className="font-semibold">{t(`network.verdict${verdictKeySuffix(routeVerdict.kind)}Title`)}</div>
+                  <div className="mt-1 text-slate-300">
+                    {t(`network.verdict${verdictKeySuffix(routeVerdict.kind)}Body`)}
+                    {routeVerdict.culpritHop != null &&
+                      ` (${t("network.verdictCulpritHop")} ${routeVerdict.culpritHop}${
+                        routeVerdict.culpritIp ? ` - ${routeVerdict.culpritIp}` : ""
+                      })`}
+                  </div>
+                </div>
+              )}
 
               {tracerouteResult && (
                 <div className="flex flex-col divide-y divide-cyan-500/5 overflow-hidden rounded-xl border border-cyan-500/10">
@@ -1255,6 +1401,79 @@ export function Network({
 }
 
 type NetworkTab = "diagnostics" | "route" | "dns" | "live";
+
+export type RouteVerdict = {
+  kind: "local" | "midRoute" | "serverSide" | "normal" | "inconclusive";
+  culpritHop: number | null;
+  culpritIp: string | null;
+};
+
+// A hop is only "the router responded slowly to this ping" (common - many
+// routers deprioritize their own ICMP replies below the traffic they're
+// forwarding, a well-known traceroute false positive) unless the elevated
+// level actually sticks for the hops after it. So this always needs at
+// least one hop *after* a jump to tell a real bottleneck from a single
+// deprioritized hop that says nothing about real game traffic.
+const ROUTE_LOCAL_HOP_THRESHOLD_MS = 35;
+const ROUTE_JUMP_THRESHOLD_MS = 25;
+
+function verdictKeySuffix(kind: RouteVerdict["kind"]): string {
+  return kind.charAt(0).toUpperCase() + kind.slice(1);
+}
+
+function hopAverageRtt(hop: TracerouteHop): number | null {
+  const values = hop.rttMs.filter((value): value is number => value != null);
+  if (values.length === 0) return null;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/** Pure, local interpretation of a TracerouteResult - never sent anywhere,
+ * just turns the raw hop list the user (or an Insight) already has into a
+ * best-effort answer to "is this my network, the route, or the server?".
+ * Heuristic, not a certainty - see each branch below for the reasoning, and
+ * network.verdict* translations for how this is phrased to the user. */
+export function classifyRouteDiagnosis(trace: TracerouteResult): RouteVerdict {
+  const responsive = trace.hops
+    .map((hop) => ({ hop: hop.hop, ip: hop.ip ?? null, rtt: hopAverageRtt(hop) }))
+    .filter((entry): entry is { hop: number; ip: string | null; rtt: number } => entry.rtt != null);
+
+  if (responsive.length < 2) {
+    return { kind: "inconclusive", culpritHop: null, culpritIp: null };
+  }
+
+  const first = responsive[0];
+  if (first.rtt >= ROUTE_LOCAL_HOP_THRESHOLD_MS) {
+    return { kind: "local", culpritHop: first.hop, culpritIp: first.ip };
+  }
+
+  let best: { index: number; jump: number } | null = null;
+  for (let i = 1; i < responsive.length; i += 1) {
+    const jump = responsive[i].rtt - responsive[i - 1].rtt;
+    if (jump >= ROUTE_JUMP_THRESHOLD_MS && (best == null || jump > best.jump)) {
+      best = { index: i, jump };
+    }
+  }
+
+  if (!best) {
+    return { kind: "normal", culpritHop: null, culpritIp: null };
+  }
+
+  const after = responsive.slice(best.index);
+  const sticks = after.every((entry) => entry.rtt >= responsive[best!.index].rtt - ROUTE_JUMP_THRESHOLD_MS / 2);
+  if (!sticks) {
+    // A one-hop spike that drops back down - almost always that hop's own
+    // ICMP reply being slow/deprioritized, not real traffic impact.
+    return { kind: "normal", culpritHop: null, culpritIp: null };
+  }
+
+  const culprit = responsive[best.index];
+  const isFinalHop = best.index === responsive.length - 1;
+  return {
+    kind: isFinalHop ? "serverSide" : "midRoute",
+    culpritHop: culprit.hop,
+    culpritIp: culprit.ip,
+  };
+}
 
 function summarizeHealth(recommendations: string[], t: (key: string) => string): { tone: "good" | "watch" | "critical"; headline: string; detail: string } {
   const priority: Array<{ code: string; tone: "good" | "watch" | "critical" }> = [

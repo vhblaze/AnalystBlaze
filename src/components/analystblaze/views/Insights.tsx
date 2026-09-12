@@ -114,7 +114,10 @@ export function Insights({
    * exists to fill this in ahead of time). */
   diskNearFullInfo?: DiskNearFullInfo | null;
   onOpenDiskUsage?: () => void;
-  onOpenNetwork?: () => void;
+  /** Optional target: when passed (see gameServerLatencyInsight), Network
+   * jumps straight to the route tab and runs a traceroute against it
+   * instead of opening on the general diagnostics tab. */
+  onOpenNetwork?: (autoTracerouteTarget?: string) => void;
   /** "I'll do it myself" - runs the action right now, locally, with the
    * same confirmation dialog its dedicated button elsewhere already uses. */
   onApplyInsightActionLocally?: (actionName: string) => Promise<unknown>;
@@ -303,14 +306,14 @@ export function Insights({
       confidence,
       reason: `${serverMs}ms para ${server.remote_ip}:${server.remote_port} vs ${baselineMs}ms para a internet em geral`,
       action: {
-        label: "Ver detalhes em Rede",
+        label: "Diagnosticar causa",
         onClick: () => {
           track("game_server_latency_insight_opened", {
             confidence: Math.round(confidence * 100),
             gapMs: Math.round(gap),
             bestGuess: server.best_guess,
           });
-          onOpenNetwork();
+          onOpenNetwork(server.remote_ip);
         },
       },
     };
