@@ -9,14 +9,15 @@ mod process_ext;
 mod telemetry;
 mod updater;
 
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
 use serde_json::json;
 use tauri::{
-    menu::{MenuBuilder, MenuItemBuilder},
+    menu::{MenuBuilder, MenuItem, MenuItemBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, State, WindowEvent,
+    AppHandle, Emitter, Manager, RunEvent, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder,
+    WindowEvent,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
 use telemetry::collector::TelemetryCollector;
@@ -365,8 +366,12 @@ fn test_privileged_helper(
 }
 
 #[tauri::command]
-async fn deep_clean_temp() -> Result<optimizations::ExecutionResult, String> {
-    Ok(optimizations::execute_command(
+async fn deep_clean_temp(
+    state: State<'_, AgentState>,
+) -> Result<optimizations::ExecutionResult, String> {
+    let mut collector = telemetry::collector::TelemetryCollector::new();
+    let before = collector.collect().await;
+    let result = optimizations::execute_command(
         "EMPTY_TEMP",
         Some(serde_json::json!({
             "mode": "deep_confirmed",
@@ -374,7 +379,19 @@ async fn deep_clean_temp() -> Result<optimizations::ExecutionResult, String> {
             "include_windows_temp": true,
         })),
     )
-    .await)
+    .await;
+    let after = collector.collect().await;
+    telemetry::engine::report_manual_agent_event(
+        &state.config,
+        &state.api,
+        &state.store,
+        "EMPTY_TEMP",
+        &before,
+        &after,
+        &result,
+    )
+    .await;
+    Ok(result)
 }
 
 /// See storage_media.rs's docs for why this needs the privileged helper -
@@ -386,15 +403,31 @@ async fn enable_scheduled_defrag() -> Result<optimizations::ExecutionResult, Str
 }
 
 #[tauri::command]
-async fn purge_cleanup_quarantine() -> Result<optimizations::ExecutionResult, String> {
-    Ok(optimizations::execute_command(
+async fn purge_cleanup_quarantine(
+    state: State<'_, AgentState>,
+) -> Result<optimizations::ExecutionResult, String> {
+    let mut collector = telemetry::collector::TelemetryCollector::new();
+    let before = collector.collect().await;
+    let result = optimizations::execute_command(
         "PURGE_CLEANUP_QUARANTINE",
         Some(serde_json::json!({
             "user_confirmed_purge": true,
             "confirmation": "purge_cleanup_quarantine",
         })),
     )
-    .await)
+    .await;
+    let after = collector.collect().await;
+    telemetry::engine::report_manual_agent_event(
+        &state.config,
+        &state.api,
+        &state.store,
+        "PURGE_CLEANUP_QUARANTINE",
+        &before,
+        &after,
+        &result,
+    )
+    .await;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -502,7 +535,20 @@ async fn apply_pc_clean_fast_profile(
         include_network: include_network.unwrap_or(false),
         include_gaming: include_gaming.unwrap_or(true),
     };
+    let mut collector = telemetry::collector::TelemetryCollector::new();
+    let before = collector.collect().await;
     let result = optimizations::performance_suite::apply_pc_clean_fast_profile(options).await;
+    let after = collector.collect().await;
+    telemetry::engine::report_manual_agent_event(
+        &state.config,
+        &state.api,
+        &state.store,
+        "APPLY_PC_CLEAN_FAST_PROFILE",
+        &before,
+        &after,
+        &result,
+    )
+    .await;
     if let Some(after_report) = result.details.get("afterReport").cloned() {
         if let Ok(mut report) = serde_json::from_value::<
             optimizations::performance_suite::PerformanceReport,
@@ -1639,7 +1685,20 @@ async fn activate_game_mode(
             });
         }
 
+        let mut collector = telemetry::collector::TelemetryCollector::new();
+        let before = collector.collect().await;
         let result = optimizations::execute_command("APPLY_GAME_MODE", None).await;
+        let after = collector.collect().await;
+        telemetry::engine::report_manual_agent_event(
+            &state.config,
+            &state.api,
+            &state.store,
+            "APPLY_GAME_MODE",
+            &before,
+            &after,
+            &result,
+        )
+        .await;
         let status_after = status(&state)?;
 
         if result.success {
@@ -1656,7 +1715,20 @@ async fn activate_game_mode(
         });
     }
 
+    let mut collector = telemetry::collector::TelemetryCollector::new();
+    let before = collector.collect().await;
     let result = optimizations::execute_command("APPLY_GAME_MODE", None).await;
+    let after = collector.collect().await;
+    telemetry::engine::report_manual_agent_event(
+        &state.config,
+        &state.api,
+        &state.store,
+        "APPLY_GAME_MODE",
+        &before,
+        &after,
+        &result,
+    )
+    .await;
     let status_after = status(&state)?;
 
     Ok(GameModeResult {
@@ -1950,6 +2022,16 @@ pub fn run() {
                 let _ = optimizations::autostart::set_autostart_enabled(policy.autostart_enabled);
             });
 
+            // A previous run's Game Mode restore monitor only lives as long
+            // as that process did - an app restart/crash while it was
+            // active leaves nobody watching to ever restore the power
+            // plan/process priorities it changed. Catches that on every
+            // launch: restores immediately if the game already closed while
+            // the app was down, or resumes watching if it's still running.
+            std::thread::spawn(optimizations::reconcile_orphaned_game_mode_session_on_startup);
+            // Same fix, for Modo Foco's own independent restore monitor.
+            std::thread::spawn(optimizations::focus::reconcile_orphaned_focus_session_on_startup);
+
             let reconcile_app_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 updater::reconcile_startup_outcome(&reconcile_app_handle).await;
@@ -1958,10 +2040,13 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+        .on_window_event(|_window, event| {
+            // No prevent_close/hide here anymore - closing genuinely
+            // destroys the window (see recreate_main_window/
+            // show_main_window). This listener only keeps the tray menu's
+            // toggle label in sync with that.
+            if let WindowEvent::Destroyed = event {
+                sync_tray_toggle_label(false);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -2071,12 +2156,65 @@ pub fn run() {
             set_shadow_storage_consent,
             todays_automatic_actions,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app_handle, event| {
+            // Closing the main window now actually destroys it (see
+            // recreate_main_window/show_main_window) to release its WebView2
+            // renderer + GPU process instead of just hiding a window that
+            // keeps paying full memory rent - but tauri-runtime-wry's default
+            // is to quit the whole app once its last window is gone (fired as
+            // ExitRequested with code: None). This app has to keep running in
+            // the tray for background telemetry/Game Mode monitoring
+            // regardless of whether a window is open, so that specific case
+            // has to be vetoed here. A REAL quit (the tray menu's "Quit",
+            // which calls AppHandle::exit) fires this same event but with
+            // code: Some(_) - see Message::RequestExit in tauri-runtime-wry -
+            // so it's left alone and still exits normally.
+            if let RunEvent::ExitRequested { api, code: None, .. } = event {
+                api.prevent_exit();
+            }
+        });
 }
 
 pub fn run_privileged_helper_service() {
     optimizations::privileged_helper::run_service();
+}
+
+/// The tray menu's "show"/"minimize" item - a single toggle rather than two
+/// separate items, so its label always names the action a click will
+/// actually take (see sync_tray_toggle_label/toggle_main_window). Kept as a
+/// process-wide handle because configure_tray only runs once at startup but
+/// show_main_window and the window-close listener both need to update this
+/// same live menu item afterward, from call sites that only have an
+/// AppHandle, not the MenuItem itself.
+static TRAY_TOGGLE_ITEM: OnceLock<MenuItem<tauri::Wry>> = OnceLock::new();
+
+fn sync_tray_toggle_label(is_open: bool) {
+    if let Some(item) = TRAY_TOGGLE_ITEM.get() {
+        let _ = item.set_text(if is_open {
+            "Minimizar AnalystBlaze"
+        } else {
+            "Abrir AnalystBlaze"
+        });
+    }
+}
+
+/// Closes the window (freeing its WebView2 renderer, same as clicking the
+/// window's own close button) when it's open, or shows/recreates it when
+/// it's not - the tray menu item's click always does whatever its current
+/// label says, rather than always meaning "show".
+fn toggle_main_window(app: &AppHandle) {
+    let is_open = app
+        .get_webview_window("main")
+        .is_some_and(|window| window.is_visible().unwrap_or(false));
+    if is_open {
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.close();
+        }
+    } else {
+        show_main_window(app);
+    }
 }
 
 fn configure_tray(app: &mut tauri::App) -> tauri::Result<()> {
@@ -2087,6 +2225,7 @@ fn configure_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .separator()
         .item(&quit)
         .build()?;
+    let _ = TRAY_TOGGLE_ITEM.set(show);
 
     let mut tray = TrayIconBuilder::with_id("main")
         .tooltip("AnalystBlaze")
@@ -2094,11 +2233,12 @@ fn configure_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| {
             if event.id() == "show" {
-                show_main_window(app);
+                toggle_main_window(app);
             } else if event.id() == "quit" {
                 let _ =
                     optimizations::latency::restore_latency_session(Some("app_exit".to_string()));
                 let _ = optimizations::focus::restore_focus_session(Some("app_exit".to_string()));
+                let _ = optimizations::restore_active_game_mode_session();
                 app.exit(0);
             }
         })
@@ -2123,12 +2263,41 @@ fn configure_tray(app: &mut tauri::App) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Rebuilds the "main" window exactly as tauri.conf.json's `app.windows[0]`
+/// entry defines it (title/size/min-size/centering) - the config only ever
+/// creates that window once, at startup, so recreating it after the close
+/// handler destroys it (see the run-loop's ExitRequested comment) has to
+/// replicate those fields by hand here. Keep the two in sync if that config
+/// entry ever changes.
+fn recreate_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
+        .title("AnalystBlaze")
+        .inner_size(1180.0, 760.0)
+        .min_inner_size(1040.0, 680.0)
+        .center()
+        .visible(false)
+        .build()
+}
+
+/// The single place every "bring the app to the front" path (login, tray
+/// click, single-instance relaunch, deep link, ...) goes through. Closing
+/// the window now destroys it outright to free its WebView2 renderer + GPU
+/// process (previously it was only ever hidden, which kept paying that
+/// memory cost - see the run-loop's ExitRequested comment for why the app
+/// itself still survives that) - so this is also the one place that has to
+/// notice the window is gone and rebuild it before showing it again.
 pub(crate) fn show_main_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
+    let window = match app.get_webview_window("main") {
+        Some(window) => window,
+        None => match recreate_main_window(app) {
+            Ok(window) => window,
+            Err(_) => return,
+        },
+    };
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    sync_tray_toggle_label(true);
 }
 
 const PLAN_SYNC_PERIODIC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30 * 60);

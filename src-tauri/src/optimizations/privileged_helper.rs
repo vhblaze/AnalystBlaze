@@ -153,6 +153,29 @@ pub fn status() -> PrivilegedHelperStatus {
     }
 }
 
+/// A freshly `New-Service`'d service has NO failure-recovery policy at all
+/// (RESET_PERIOD 0, no actions) - Windows' default is to take no action
+/// whatsoever if the process ever terminates unexpectedly (SCM event 7034).
+/// A real crash (2026-09) - triggered by an unrelated boot-time resource
+/// race, not a bug of the helper's own - proved just how bad that default
+/// is in practice: every admin action failed for close to two hours
+/// afterward, since nothing ever tried starting the service back up until a
+/// human noticed and intervened. `sc.exe failure` fixes that at the SCM
+/// level: an escalating 5s/15s/60s auto-restart after any unexpected exit,
+/// with the failure count itself resetting after a full day of healthy
+/// running (so a genuine crash loop still escalates rather than restarting
+/// forever at the fastest interval). Called from both install() and
+/// restart() - the two scripts that already need an elevation prompt -
+/// rather than needing a UAC prompt of its own, so any repair the user
+/// already does for an unrelated reason also picks this up.
+#[cfg(windows)]
+fn failure_recovery_script_snippet() -> String {
+    format!(
+        "sc.exe failure '{service_name}' reset= 86400 actions= restart/5000/restart/15000/restart/60000 | Out-Null",
+        service_name = SERVICE_NAME,
+    )
+}
+
 pub fn install() -> Result<PrivilegedHelperStatus, String> {
     #[cfg(not(windows))]
     {
@@ -210,6 +233,7 @@ if ($svc) {{
 }}
 $binPath = '"{exe}" --analystblaze-helper-service'
 New-Service -Name '{service_name}' -BinaryPathName $binPath -DisplayName '{display_name}' -Description 'Executes AnalystBlaze local privileged actions after app-side confirmation.' -StartupType Automatic | Out-Null
+{failure_recovery}
 Start-Service -Name '{service_name}'
 "#,
             helper_root = ps_escape(&helper_root.display().to_string()),
@@ -218,6 +242,7 @@ Start-Service -Name '{service_name}'
             service_name = SERVICE_NAME,
             display_name = SERVICE_DISPLAY_NAME,
             exe = ps_escape(&exe.display().to_string()),
+            failure_recovery = failure_recovery_script_snippet(),
         );
         fs::write(&script, script_body).map_err(|error| error.to_string())?;
         run_elevated_script(&script).inspect_err(|error| {
@@ -293,8 +318,10 @@ $ErrorActionPreference = 'SilentlyContinue'
 sc.exe stop '{service_name}' | Out-Null
 Start-Sleep -Milliseconds 800
 sc.exe start '{service_name}' | Out-Null
+{failure_recovery}
 "#,
             service_name = SERVICE_NAME,
+            failure_recovery = failure_recovery_script_snippet(),
         );
         fs::write(&script, script_body).map_err(|error| error.to_string())?;
         run_elevated_script(&script).inspect_err(|error| {

@@ -1646,6 +1646,74 @@ fn minimize_backend_value(value: &Value, privacy: TelemetryPrivacyPolicy) -> Val
     minimize_backend_value_inner(value, privacy, None, 0)
 }
 
+/// Reports a manually-triggered optimization (any button click -
+/// CommandSource::ManualUser, e.g. "PC Limpo/Rapido") to the same
+/// agent_optimization_events table that RemoteCommand/LocalPolicy actions
+/// already report to via poll_commands/run_local_policy_fallback above.
+/// Before this, the button most users actually click - not the automatic
+/// policy or a server-issued command - contributed nothing to what the AI
+/// trains on, even though it's real evidence of a before/after effect (see
+/// AnalystBlaze-server's app/services/data_archival.py and
+/// scripts/train_ai_models.py, which now consume this table).
+///
+/// Best-effort and silent on failure or missing credentials, same as every
+/// other backend sync in this file - never blocks or fails the local action
+/// itself. Called directly from lib.rs's Tauri command handlers, which have
+/// `AgentState`'s config/api/store but no running TelemetryEngine instance
+/// to route through.
+pub(crate) async fn report_manual_agent_event(
+    config: &AgentConfig,
+    api: &ApiClient,
+    store: &SecureStore,
+    action_name: &str,
+    before: &TelemetrySample,
+    after: &TelemetrySample,
+    execution: &optimizations::ExecutionResult,
+) {
+    let Ok(credentials) = store.load() else {
+        return;
+    };
+    let (Some(access_token), Some(hw_id), Some(hw_secret)) = (
+        credentials.access_token.clone(),
+        credentials.hw_id,
+        credentials.hw_secret.clone(),
+    ) else {
+        return;
+    };
+
+    let local_ai_policy = optimizations::local_ai_policy::load_local_ai_policy();
+    let privacy = TelemetryPrivacyPolicy::from_config_and_credentials(
+        config,
+        Some(&credentials),
+        &local_ai_policy,
+    );
+
+    let details = json!({
+        "agent": "analystblaze-desktop",
+        "source": "manual_user",
+        "message": execution.message,
+        "data": execution.details,
+    });
+    let backend_details = minimize_backend_value(&details, privacy);
+
+    let event_payload =
+        TelemetryEngine::agent_optimization_event_payload(AgentOptimizationEventInput {
+            hw_id,
+            app_version: config.app_version.clone(),
+            action_name,
+            command_id: None,
+            before,
+            after,
+            success: execution.success,
+            execution_details: backend_details,
+            privacy,
+        });
+
+    let _ = api
+        .post_agent_event(&access_token, &hw_secret, &event_payload)
+        .await;
+}
+
 fn minimize_backend_value_inner(
     value: &Value,
     privacy: TelemetryPrivacyPolicy,

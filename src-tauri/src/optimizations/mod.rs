@@ -537,26 +537,29 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
         None
     };
 
-    // Ground-truth frame capture starts for any activation EXCEPT
-    // LocalPolicy - that's the one source privileged_helper.rs's
-    // validate_request_execution_policy always rejects on the pipe side for
-    // any helper-required action (an unsupervised local heuristic must
-    // never reach the elevated helper on its own). ManualUser (the "Ativar
-    // Modo Gamer" button - see lib.rs's activate_game_mode) is deliberately
-    // included here: a live user click is, if anything, more supervised
-    // than RemoteCommand's already-automatic "learned_auto" mode, and nothing
-    // about the security boundary excludes it. The real, known coverage gap
-    // is just LocalPolicy's local fallback decision loop, which is most
-    // Modo Gamer activations day-to-day - those get every other training
-    // signal but not a PresentMon capture. Widening that further means
-    // either growing the fraction of activations the server decides
-    // (RemoteCommand) or deliberately relaxing the LocalPolicy boundary for
-    // this specifically read-only, self-terminating action pair - not
-    // something to do implicitly here.
-    if source != CommandSource::LocalPolicy {
-        if let (Some(pid), Some(session)) = (target_pid, restore_session.as_ref()) {
-            spawn_frame_capture_start(session.id.clone(), pid);
-        }
+    // Ground-truth frame capture now starts for every activation source,
+    // LocalPolicy (the unsupervised local fallback heuristic) included -
+    // this used to be the one excluded source, since privileged_helper.rs's
+    // validate_request_execution_policy hard-rejects LocalPolicy for any
+    // OTHER helper-required action (an unsupervised heuristic must never
+    // reach the elevated helper on its own for anything that changes system
+    // state - see the Blender/heavy-workload incident this codebase already
+    // guards against elsewhere). But LocalPolicy is also how most real Modo
+    // Gamer activations happen day-to-day (a live user rarely clicks "Ativar
+    // Modo Gamer" themselves once auto-detection is on), so excluding it
+    // here meant almost no real capture data ever got collected - the
+    // opposite of a security tradeoff, just wasted training signal for no
+    // safety benefit. The reason it's safe to open specifically for this
+    // action pair: spawn_frame_capture_start below always talks to the
+    // helper as CommandSource::RemoteCommand with local_confirmation forced
+    // true, regardless of what source activated Game Mode - so this was
+    // never actually a hole in the helper's own LocalPolicy defense, only
+    // an extra gate this function added on top of it. START_FRAME_CAPTURE/
+    // STOP_FRAME_CAPTURE stay the only two actions with that carve-out: pure
+    // ETW reads, nothing destructive, and self-terminating via
+    // MAX_CAPTURE_SECONDS even if nothing ever calls STOP.
+    if let (Some(pid), Some(session)) = (target_pid, restore_session.as_ref()) {
+        spawn_frame_capture_start(session.id.clone(), pid);
     }
 
     if let Some(session) = restore_session.as_ref() {
@@ -821,12 +824,9 @@ fn game_mode_session_path() -> std::path::PathBuf {
 /// round-trip to the helper.
 fn spawn_frame_capture_start(session_id: String, target_pid: u32) {
     tokio::spawn(async move {
-        let result = execute_command_checked(
-            CommandSource::RemoteCommand,
+        let result = execute_frame_capture_action_with_retry(
             "START_FRAME_CAPTURE",
-            Some(json!({ "targetPid": target_pid })),
-            None,
-            true,
+            json!({ "targetPid": target_pid }),
         )
         .await;
 
@@ -873,6 +873,61 @@ async fn attach_frame_capture_id_to_active_session(session_id: String, capture_i
     }
 }
 
+/// A dropped-pipe STOP_FRAME_CAPTURE (see execute_command_checked_with_helper's
+/// "helper_transiently_unavailable" case) means the helper's named pipe
+/// server was mid-cycle right when this call landed, not a real rejection -
+/// a live capture (2026-09) hit exactly this window and lost its data
+/// outright since nothing ever retried. Bounded to a few short attempts
+/// because the capture keeps running (and its buffered samples keep
+/// growing) on the helper side the whole time this loop waits, so there's
+/// no harm in trying a bit longer - just not forever.
+const FRAME_CAPTURE_HELPER_CALL_MAX_ATTEMPTS: u32 = 4;
+const FRAME_CAPTURE_HELPER_CALL_RETRY_DELAY: Duration = Duration::from_secs(3);
+
+fn is_transient_helper_unavailable(result: &ExecutionResult) -> bool {
+    result
+        .details
+        .get("blocked_by")
+        .and_then(Value::as_str)
+        == Some("helper_transiently_unavailable")
+}
+
+/// Shared by both START_FRAME_CAPTURE and STOP_FRAME_CAPTURE: a dropped-pipe
+/// call (see is_transient_helper_unavailable) means the helper's named pipe
+/// server was mid-cycle right when this call landed, not a real rejection -
+/// a live capture (2026-09) hit this on *both* ends (once on start, once on
+/// stop, in separate sessions) before either had a retry, losing the data
+/// outright each time. Only retries that specific, identified-safe case;
+/// anything else (denied, invalid payload, ...) returns on the first try.
+async fn execute_frame_capture_action_with_retry(
+    action_name: &'static str,
+    payload: Value,
+) -> ExecutionResult {
+    let mut result = ExecutionResult {
+        success: false,
+        message: String::new(),
+        details: Value::Null,
+    };
+    for attempt in 1..=FRAME_CAPTURE_HELPER_CALL_MAX_ATTEMPTS {
+        result = execute_command_checked(
+            CommandSource::RemoteCommand,
+            action_name,
+            Some(payload.clone()),
+            None,
+            true,
+        )
+        .await;
+
+        if result.success || !is_transient_helper_unavailable(&result) {
+            break;
+        }
+        if attempt < FRAME_CAPTURE_HELPER_CALL_MAX_ATTEMPTS {
+            tokio::time::sleep(FRAME_CAPTURE_HELPER_CALL_RETRY_DELAY).await;
+        }
+    }
+    result
+}
+
 /// Stops a running frame capture (again via the normal helper client path)
 /// and, if it produced any samples, queues the resulting stats for upload
 /// on the telemetry engine's next tick (see
@@ -880,12 +935,9 @@ async fn attach_frame_capture_id_to_active_session(session_id: String, capture_i
 /// only context with valid backend credentials, so this module can't POST
 /// it directly).
 async fn stop_frame_capture_and_queue_upload(capture_id: String, session_group_id: String) {
-    let result = execute_command_checked(
-        CommandSource::RemoteCommand,
+    let result = execute_frame_capture_action_with_retry(
         "STOP_FRAME_CAPTURE",
-        Some(json!({ "captureId": capture_id })),
-        None,
-        true,
+        json!({ "captureId": capture_id }),
     )
     .await;
 
@@ -898,6 +950,7 @@ async fn stop_frame_capture_and_queue_upload(capture_id: String, session_group_i
                 "capture_id": capture_id,
                 "session_group_id": session_group_id,
                 "message": result.message,
+                "attempts": FRAME_CAPTURE_HELPER_CALL_MAX_ATTEMPTS,
             }),
         );
         return;
@@ -937,6 +990,80 @@ async fn stop_frame_capture_and_queue_upload(capture_id: String, session_group_i
     }
 }
 
+/// How often the monitor polls whether the target process is still running.
+const GAME_RESTORE_MONITOR_POLL_INTERVAL: Duration = Duration::from_secs(5);
+
+/// This used to be 12*60 cycles (1 hour) - short enough that any real play
+/// session longer than that (extremely common) silently left the power plan
+/// and process priorities altered forever, since the monitor just gave up
+/// with no restore at all (see game_mode.monitor_timeout - it happened 4
+/// times on this machine alone, and a much larger number of sessions never
+/// even got that far because the monitor thread died with the app process
+/// itself on restart/crash, with nothing to pick the session back up - see
+/// reconcile_orphaned_game_mode_session_on_startup). 12 hours comfortably
+/// outlasts any real session; run_named_pipe_server-style "give up
+/// eventually rather than leak forever" logic still applies, but on
+/// Part 2, see: the monitor thread now performs the restore instead of
+/// abandoning it if this deadline is ever actually reached - a spurious
+/// early restore while a session might technically still be running is a
+/// minor, self-correcting inconvenience (click "Ativar Modo Gamer" again);
+/// leaving the system permanently altered is a much worse failure that goes
+/// unnoticed for days.
+const GAME_RESTORE_MONITOR_MAX_CYCLES: u32 =
+    (12 * 60 * 60) / GAME_RESTORE_MONITOR_POLL_INTERVAL.as_secs() as u32;
+
+/// Shared by the normal "game process exited" path and the timeout safety
+/// net: restores the session's snapshots, finalizes any running frame
+/// capture, marks the session restored on disk, and tears down the linked
+/// Modo Foco session (its own file/TTL - see focus.rs - so it doesn't keep
+/// suppressing notifications/uploads for up to its full TTL after the game
+/// is already gone).
+fn restore_game_mode_session(
+    session_id: &str,
+    snapshot_ids: &[String],
+    linked_focus_session: bool,
+    restore_reason: &str,
+) {
+    let report = snapshot::restore_snapshots_by_ids(snapshot_ids);
+    let capture_id = read_active_game_mode_session()
+        .filter(|current| current.id == session_id)
+        .and_then(|current| current.frame_capture_id);
+    mark_game_mode_session_restored(session_id, restore_reason);
+    if let Some(capture_id) = capture_id {
+        // A plain OS thread (this function is called from thread::spawn),
+        // not a Tokio task - no ambient runtime to tokio::spawn onto, so a
+        // short-lived current-thread runtime is built just for this one
+        // await, mirroring privileged_helper.rs's execute_request, which
+        // faces the same "async call from a bare thread" situation.
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(runtime) => runtime.block_on(stop_frame_capture_and_queue_upload(
+                capture_id,
+                session_id.to_string(),
+            )),
+            Err(error) => {
+                let _ = audit::record_event(
+                    "warn",
+                    "frame_capture.stop_runtime_failed",
+                    "Nao foi possivel criar runtime para finalizar a captura de frames.",
+                    json!({ "error": error.to_string() }),
+                );
+            }
+        }
+    }
+    let _ = audit::record_event(
+        "info",
+        "game_mode.restored_after_game_exit",
+        "Modo Gamer restaurado apos fechamento do jogo detectado.",
+        serde_json::to_value(&report).unwrap_or(Value::Null),
+    );
+    if linked_focus_session {
+        let _ = focus::restore_focus_session(Some(restore_reason.to_string()));
+    }
+}
+
 fn spawn_game_restore_monitor(
     session_id: String,
     pid: Option<u32>,
@@ -957,8 +1084,8 @@ fn spawn_game_restore_monitor(
         );
 
         let mut missing_cycles = 0_u8;
-        for _ in 0..(12 * 60) {
-            thread::sleep(Duration::from_secs(5));
+        for _ in 0..GAME_RESTORE_MONITOR_MAX_CYCLES {
+            thread::sleep(GAME_RESTORE_MONITOR_POLL_INTERVAL);
             if detection::process_still_running(
                 pid.map(|pid| pid.to_string()).as_deref(),
                 process_name.as_deref(),
@@ -972,69 +1099,144 @@ fn spawn_game_restore_monitor(
                 continue;
             }
 
-            let report = snapshot::restore_snapshots_by_ids(&snapshot_ids);
-            let capture_id = read_active_game_mode_session()
-                .filter(|current| current.id == session_id)
-                .and_then(|current| current.frame_capture_id);
-            mark_game_mode_session_restored(&session_id, "target_process_exit");
-            if let Some(capture_id) = capture_id {
-                // A plain OS thread (thread::spawn above), not a Tokio task -
-                // no ambient runtime to tokio::spawn onto, so a short-lived
-                // current-thread runtime is built just for this one await,
-                // mirroring privileged_helper.rs's execute_request, which
-                // faces the same "async call from a bare thread" situation.
-                match tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                {
-                    Ok(runtime) => runtime.block_on(stop_frame_capture_and_queue_upload(
-                        capture_id,
-                        session_id.clone(),
-                    )),
-                    Err(error) => {
-                        let _ = audit::record_event(
-                            "warn",
-                            "frame_capture.stop_runtime_failed",
-                            "Nao foi possivel criar runtime para finalizar a captura de frames.",
-                            json!({ "error": error.to_string() }),
-                        );
-                    }
-                }
-            }
-            let _ = audit::record_event(
-                "info",
-                "game_mode.restored_after_game_exit",
-                "Modo Gamer restaurado apos fechamento do jogo detectado.",
-                serde_json::to_value(&report).unwrap_or(Value::Null),
+            restore_game_mode_session(
+                &session_id,
+                &snapshot_ids,
+                linked_focus_session,
+                "target_process_exit",
             );
-            // The Modo Foco session this activation started is tracked
-            // separately (its own file, own TTL - see focus.rs) and doesn't
-            // get torn down by restoring game-mode snapshots above. Without
-            // this, effects like delaying telemetry uploads or suppressing
-            // notifications keep applying for up to the session's full TTL
-            // (up to 2h) after the game has already closed.
-            if linked_focus_session {
-                let _ = focus::restore_focus_session(Some("target_process_exit".to_string()));
-            }
             return;
         }
 
         let _ = audit::record_event(
             "warn",
             "game_mode.monitor_timeout",
-            "Monitor de Modo Gamer expirou sem detectar fechamento do jogo.",
+            "Monitor de Modo Gamer expirou sem detectar fechamento do jogo - restaurando por seguranca.",
             json!({
                 "pid": pid,
                 "process_name": process_name,
                 "snapshot_ids": snapshot_ids,
             }),
         );
+        restore_game_mode_session(
+            &session_id,
+            &snapshot_ids,
+            linked_focus_session,
+            "monitor_timeout_safety_restore",
+        );
     });
+}
+
+/// Startup-time safety net for the other way a session can be abandoned:
+/// the monitor above only lives as long as the app process does, so an app
+/// restart or crash while Game Mode is active kills the watching thread
+/// with nothing left to ever restore that session's snapshots - the same
+/// silent "stuck at High Performance forever" outcome the timeout fix above
+/// addresses, just via a different cause. Called once from lib.rs's
+/// setup(). Two cases: the target process already closed while the app was
+/// down (nobody will ever see it exit - restore right now), or it's still
+/// running (the in-memory monitor for it is gone - start a fresh one so it
+/// gets caught whenever it does close, and the previous one-hour-can't
+/// exist here since spawn_game_restore_monitor now runs for 12h anyway).
+pub fn reconcile_orphaned_game_mode_session_on_startup() {
+    let Some(session) = read_active_game_mode_session() else {
+        return;
+    };
+    if session.status != "monitoring" || session.restored_at.is_some() {
+        return;
+    }
+    if session.target_pid.is_none() && session.target_process_name.is_none() {
+        // Nothing to watch for - a manual activation with no detected
+        // process leaves this Some(session) but with no exit signal ever
+        // possible, same as before this fix (spawn_game_restore_monitor
+        // was never called for it in the first place either).
+        return;
+    }
+
+    let still_running = detection::process_still_running(
+        session.target_pid.map(|pid| pid.to_string()).as_deref(),
+        session.target_process_name.as_deref(),
+    );
+
+    // GameModeSession doesn't persist whether a Modo Foco session was
+    // linked to this activation (only the in-memory call that originally
+    // spawned the monitor knew that) - so this can't safely restore a
+    // focus session here without risking ending an unrelated one that
+    // happens to be active for some other reason. Not a real gap in
+    // practice: a focus session already carries its own TTL/expiry (see
+    // focus.rs) as a backstop independent of this reconciliation.
+    if still_running {
+        let _ = audit::record_event(
+            "info",
+            "game_mode.monitor_resumed_after_restart",
+            "Sessao de Modo Gamer encontrada ainda ativa ao iniciar o agente - retomando monitoramento.",
+            json!({
+                "session_id": session.id,
+                "pid": session.target_pid,
+                "process_name": session.target_process_name,
+            }),
+        );
+        spawn_game_restore_monitor(
+            session.id,
+            session.target_pid,
+            session.target_process_name,
+            session.snapshot_ids,
+            false,
+        );
+    } else {
+        let _ = audit::record_event(
+            "warn",
+            "game_mode.orphaned_session_found_at_startup",
+            "Sessao de Modo Gamer ficou sem monitor (app fechado/travado) e o jogo ja havia encerrado - restaurando agora.",
+            json!({
+                "session_id": session.id,
+                "pid": session.target_pid,
+                "process_name": session.target_process_name,
+            }),
+        );
+        restore_game_mode_session(
+            &session.id,
+            &session.snapshot_ids,
+            false,
+            "startup_reconciliation",
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression test for the 2026-09 incident: a real capture's
+    /// STOP_FRAME_CAPTURE landed exactly when the helper's named pipe was
+    /// mid-cycle, got a "helper_transiently_unavailable" rejection, and
+    /// (with no retry existing at the time) lost its data outright. This is
+    /// the classifier is_transient_helper_unavailable relies on to decide
+    /// whether stop_frame_capture_and_queue_upload's retry loop should keep
+    /// trying versus give up immediately.
+    #[test]
+    fn only_the_transient_helper_unavailable_reason_is_retryable() {
+        let transient = ExecutionResult {
+            success: false,
+            message: "O helper privilegiado estava reiniciando quando este comando chegou. Tente novamente em alguns segundos.".to_string(),
+            details: json!({ "blocked_by": "helper_transiently_unavailable" }),
+        };
+        assert!(is_transient_helper_unavailable(&transient));
+
+        let denied = ExecutionResult {
+            success: false,
+            message: "Acao recusada.".to_string(),
+            details: json!({ "blocked_by": "privileged_helper_unavailable" }),
+        };
+        assert!(!is_transient_helper_unavailable(&denied));
+
+        let no_details = ExecutionResult {
+            success: false,
+            message: "erro generico".to_string(),
+            details: Value::Null,
+        };
+        assert!(!is_transient_helper_unavailable(&no_details));
+    }
 
     #[test]
     fn focus_payload_for_game_mode_defaults_profile_to_game() {

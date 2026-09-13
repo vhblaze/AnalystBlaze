@@ -577,6 +577,48 @@ fn focus_restore_report(message: &str) -> snapshot::RestoreReport {
     }
 }
 
+/// Startup-time counterpart to spawn_focus_restore_monitor, for the same
+/// reason optimizations::mod.rs now needs one for Game Mode: the watching
+/// thread only lives as long as the process that spawned it does, so an app
+/// restart or crash while a Modo Foco session is active kills it with
+/// nobody left to ever restore that session once its TTL passes - it just
+/// sits "active" until, if ever, a later session happens to replace it (see
+/// "replaced_by_new_focus_session"). Called once from lib.rs's setup(): if
+/// the TTL already elapsed while the app was down, restore right now;
+/// otherwise resume watching for it.
+pub fn reconcile_orphaned_focus_session_on_startup() {
+    let Some(session) = read_focus_session() else {
+        return;
+    };
+    if session.restored_at.is_some() || session.status == "restored" {
+        return;
+    }
+
+    if chrono::Utc::now().timestamp() >= session.expires_at {
+        let _ = audit::record_event(
+            "warn",
+            "focus.orphaned_session_found_at_startup",
+            "Sessao de Modo Foco ficou sem monitor (app fechado/travado) e ja tinha vencido - restaurando agora.",
+            json!({ "session_id": session.id, "expires_at": session.expires_at }),
+        );
+        let report = restore_focus_session(Some("startup_reconciliation".to_string()));
+        let _ = audit::record_event(
+            "info",
+            "focus.restored_after_ttl",
+            "Modo Foco restaurado automaticamente apos expirar.",
+            serde_json::to_value(&report).unwrap_or(Value::Null),
+        );
+    } else {
+        let _ = audit::record_event(
+            "info",
+            "focus.monitor_resumed_after_restart",
+            "Sessao de Modo Foco encontrada ainda ativa ao iniciar o agente - retomando monitoramento.",
+            json!({ "session_id": session.id, "expires_at": session.expires_at }),
+        );
+        spawn_focus_restore_monitor(session.id, session.expires_at);
+    }
+}
+
 fn spawn_focus_restore_monitor(session_id: String, expires_at: i64) {
     thread::spawn(move || {
         let _ = audit::record_event(
