@@ -54,6 +54,12 @@ pub struct AdvancedTelemetry {
     /// platform default in that case, which this deliberately doesn't
     /// guess at) or on non-Windows.
     pub game_dvr_enabled: Option<bool>,
+    /// Set only while a game has bounced (opened and closed within seconds)
+    /// at least twice in the last 15 minutes AND a known cause was found on
+    /// this machine - see optimizations::game_launch. Categorical only: no
+    /// process name or path is ever included.
+    #[serde(default)]
+    pub game_launch_issue: Option<crate::optimizations::game_launch::GameLaunchIssue>,
     pub source: String,
     pub refreshed_at: Option<i64>,
 }
@@ -178,6 +184,7 @@ pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTeleme
     // needing its own cache.
     telemetry.service_usage_signals = crate::optimizations::service_usage::current_signals();
     telemetry.game_dvr_enabled = game_dvr_enabled();
+    telemetry.game_launch_issue = crate::optimizations::game_launch::current_issue();
     crate::optimizations::shadow_storage::set_volsnap_detected(
         crate::optimizations::shadow_storage::volsnap_storage_limited(
             &telemetry.latest_event_log_errors,

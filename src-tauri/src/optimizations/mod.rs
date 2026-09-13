@@ -9,6 +9,7 @@ pub mod disk_usage;
 pub mod energy;
 pub mod focus;
 pub mod frame_capture_control;
+pub mod game_launch;
 pub mod latency;
 pub mod local_ai_policy;
 pub mod memory;
@@ -807,9 +808,18 @@ fn mark_game_mode_session_restored(session_id: &str, reason: &str) {
         return;
     }
     session.status = "restored".to_string();
-    session.restored_at = Some(chrono::Utc::now().timestamp());
+    let restored_at = chrono::Utc::now().timestamp();
+    session.restored_at = Some(restored_at);
     session.restore_reason = Some(reason.to_string());
     let _ = write_active_game_mode_session(&session);
+    // Feeds the "game keeps closing right after opening" detector - see
+    // game_launch.rs. Local file only; the process name never leaves the PC.
+    game_launch::record_session_end(
+        session.target_process_name.as_deref(),
+        session.created_at,
+        restored_at,
+        reason,
+    );
 }
 
 fn game_mode_session_path() -> std::path::PathBuf {
