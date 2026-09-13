@@ -779,8 +779,20 @@ impl TelemetryEngine {
         for command in commands {
             let allowed_actions = self.usable_allowed_actions();
             let before = self.latest_or_collect().await;
-            let (local_confirmation, execution_mode) =
+            let (local_confirmation, mut execution_mode) =
                 Self::remote_command_execution_mode(self.app_handle.clone(), &command).await;
+
+            // The server already holds these back while its latest telemetry
+            // shows a session in progress, but its view is one batch stale -
+            // the game may have started since. This is the same check against
+            // the live local signal, so a disk sweep never lands mid-match.
+            if execution_mode != "automation_disabled"
+                && action_disrupts_gameplay(&command.action_name)
+                && optimizations::focus::should_pause_heavy_scans()
+            {
+                execution_mode = "deferred_gameplay";
+            }
+
             let execution = if command.hw_id != hw_id {
                 optimizations::ExecutionResult::rejected(
                     &command.action_name,
@@ -788,6 +800,24 @@ impl TelemetryEngine {
                     json!({
                         "command_hw_id": command.hw_id,
                         "local_hw_id": hw_id,
+                    }),
+                )
+            } else if execution_mode == "automation_disabled" {
+                optimizations::ExecutionResult::rejected(
+                    &command.action_name,
+                    "automatic_actions_disabled_by_user",
+                    json!({
+                        "command_id": command.id,
+                        "required_setting": "allow_automatic_sensitive_actions",
+                    }),
+                )
+            } else if execution_mode == "deferred_gameplay" {
+                optimizations::ExecutionResult::rejected(
+                    &command.action_name,
+                    "deferred_until_gameplay_ends",
+                    json!({
+                        "command_id": command.id,
+                        "action_name": command.action_name,
                     }),
                 )
             } else if command.requires_confirmation && !local_confirmation {
@@ -1079,6 +1109,15 @@ impl TelemetryEngine {
             if policy.enabled && policy.allow_automatic_sensitive_actions {
                 return (true, "learned_auto");
             }
+            // The user already taught the agent this action is welcome here,
+            // but has unattended automation switched off. Falling through to
+            // the prompt below would produce exactly the stream of popups
+            // that setting exists to prevent - the suggestion still reaches
+            // them through Insights, on their own terms. Reported under its
+            // own execution mode so the server reads it as a preference
+            // rather than a failure and leaves the learned approvals intact
+            // (see insight_authorization.NON_PENALISING_DECLINE_MODES).
+            return (false, "automation_disabled");
         }
 
         if command.requires_confirmation || command.authorization_mode.is_some() {
@@ -1273,6 +1312,18 @@ impl TelemetrySample {
 
 fn nonce() -> String {
     Uuid::new_v4().simple().to_string()
+}
+
+/// Actions whose cost lands on the player, so they wait for the session to
+/// end. Mirrors GAMEPLAY_DISRUPTIVE_ACTIONS in the server's decision_engine -
+/// EMPTY_TEMP walks and deletes from disk, which is exactly the I/O that
+/// surfaces as a stutter mid-match. APPLY_GAME_MODE is deliberately absent:
+/// it exists to be applied while gaming.
+fn action_disrupts_gameplay(action_name: &str) -> bool {
+    matches!(
+        action_name.trim().to_ascii_uppercase().as_str(),
+        "EMPTY_TEMP" | "PURGE_CLEANUP_QUARANTINE"
+    )
 }
 
 impl From<&TelemetrySample> for OptimizationMetrics {
@@ -2468,6 +2519,20 @@ mod tests {
             jitter_ms: Some(2.0),
         }];
         sample
+    }
+
+    #[test]
+    fn game_mode_is_never_deferred_for_gameplay_but_disk_sweeps_are() {
+        // The whole point of Modo Gamer is to run during a match, so
+        // deferring it would defeat the feature it belongs to.
+        assert!(!action_disrupts_gameplay("APPLY_GAME_MODE"));
+        assert!(action_disrupts_gameplay("EMPTY_TEMP"));
+        assert!(action_disrupts_gameplay("PURGE_CLEANUP_QUARANTINE"));
+        // Server and agent spell action names in different cases in places.
+        assert!(action_disrupts_gameplay("empty_temp"));
+        assert!(action_disrupts_gameplay("  Empty_Temp  "));
+        assert!(!action_disrupts_gameplay("ENTER_FOCUS_MODE"));
+        assert!(!action_disrupts_gameplay(""));
     }
 
     #[test]
