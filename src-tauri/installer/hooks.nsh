@@ -19,6 +19,12 @@
 ; (confirmed against the Tauri docs), so there's a single correct path here -
 ; no more guessing between $INSTDIR and $INSTDIR\resources.
 
+; Holds the pre-correction $INSTDIR only while NSIS_HOOK_PREINSTALL is
+; relocating an install found outside Program Files - see the comment
+; there. Declared at file scope because NSIS `Var` is not legal inside a
+; macro body.
+Var PerMachineInstDirBeforeFix
+
 !macro NSIS_HOOK_PREINSTALL
   nsExec::ExecToLog 'sc.exe stop AnalystBlazeHelper'
   Pop $0
@@ -44,29 +50,45 @@
     ; relaxed. The base template's Choose Directory page still lets a user
     ; type or browse to anywhere, and a real one did (Nely, 2026-09-14),
     ; leaving the helper permanently and silently unavailable - the only
-    ; sign a cryptic message buried in Settings. There is no legitimate
-    ; reason for THIS app's per-machine install to live anywhere else, so
-    ; the location is pinned here to the exact same default the template's
-    ; own .onInit computes (see MULTIUSER_USE_PROGRAMFILES64 above),
-    ; regardless of what the Directory page showed.
+    ; sign a cryptic message buried in Settings. This also self-heals an
+    ; already-broken install: the in-app auto-updater (updater.rs) runs
+    ; this exact installer passively, so a user in Nely's situation gets
+    ; fixed on their very next automatic update, with no action needed.
     ;
-    ; Skipped during a silent/passive run ($PassiveMode = 1, e.g. the
-    ; in-app auto-updater - see SkipIfPassive) on purpose: that path never
-    ; shows the Directory page at all and reuses whatever location is
-    ; already registered (RestorePreviousInstallLocation), so pinning here
-    ; too would silently relocate an already-broken existing install mid
-    ; background-update, leaving old files orphaned at the previous path
-    ; instead of actually fixing anything. A user in that situation needs to
-    ; run the downloaded installer by hand (non-passive) at least once,
-    ; which this DOES correct, before auto-update can take over safely.
-    ${IfNot} $PassiveMode = 1
+    ; StrCmp (the bare instruction, not LogicLib's ==) is case-insensitive,
+    ; matching how Windows itself treats paths - deliberate here since
+    ; $INSTDIR came from RestorePreviousInstallLocation (a registry value)
+    ; or free-form wizard text, neither guaranteed to match the casing
+    ; $PROGRAMFILES64/$PROGRAMFILES expand to.
+    StrLen $R7 "$PROGRAMFILES64"
+    StrCpy $R8 "$INSTDIR" $R7
+    StrLen $R9 "$PROGRAMFILES"
+    StrCpy $R6 "$INSTDIR" $R9
+    StrCmp $R8 "$PROGRAMFILES64" installdir_is_safe 0
+    StrCmp $R6 "$PROGRAMFILES" installdir_is_safe installdir_needs_fix
+    installdir_needs_fix:
+      StrCpy $PerMachineInstDirBeforeFix "$INSTDIR"
       ${If} ${RunningX64}
         StrCpy $INSTDIR "$PROGRAMFILES64\${PRODUCTNAME}"
       ${Else}
         StrCpy $INSTDIR "$PROGRAMFILES\${PRODUCTNAME}"
       ${EndIf}
+      DetailPrint "AnalystBlaze: instalacao anterior fora de Program Files ($PerMachineInstDirBeforeFix) - corrigindo para $INSTDIR"
       SetOutPath $INSTDIR
-    ${EndIf}
+
+      ; Files land in the new place, but a shortcut the user already has
+      ; still points at $PerMachineInstDirBeforeFix until retargeted - the
+      ; base template's own CreateOrUpdate*Shortcut functions don't handle
+      ; this (they only migrate a same-folder binary rename, and skip
+      ; entirely on a plain update). Only touch a shortcut that actually
+      ; exists; never create one that wasn't there.
+      ${If} ${FileExists} "$DESKTOP\${PRODUCTNAME}.lnk"
+        !insertmacro SetShortcutTarget "$DESKTOP\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+      ${EndIf}
+      ${If} ${FileExists} "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
+        !insertmacro SetShortcutTarget "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk" "$INSTDIR\${MAINBINARYNAME}.exe"
+      ${EndIf}
+    installdir_is_safe:
   !endif
 !macroend
 
