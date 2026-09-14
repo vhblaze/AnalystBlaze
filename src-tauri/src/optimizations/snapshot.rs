@@ -3,10 +3,28 @@ use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::audit;
 use crate::process_ext::{decode_console_bytes, CommandExt};
+
+/// Every mutator below does read_snapshots() -> modify -> write_snapshots(),
+/// which is a lost-update race if two callers overlap: whichever writes
+/// last wins, silently discarding whatever the other had already added or
+/// restored. A real incident (2026-09-13) had three STOP_SERVICE snapshots
+/// logged as created (optimization.snapshot_created fired, meaning their own
+/// save_snapshot call completed) that were then never found in the file -
+/// consistent with a concurrent write_snapshots from another call clobbering
+/// them. None of these functions ever await while holding this, so a plain
+/// std Mutex is enough; poisoning is recovered from rather than propagated,
+/// since a panic mid-write leaves the file itself (not this lock) as the
+/// only thing that can actually be inconsistent.
+static SNAPSHOT_FILE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_snapshot_file() -> std::sync::MutexGuard<'static, ()> {
+    SNAPSHOT_FILE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OptimizationSnapshot {
@@ -161,6 +179,7 @@ pub fn new_snapshot_id() -> String {
 }
 
 pub fn save_snapshot(snapshot: &OptimizationSnapshot) -> Result<(), String> {
+    let _guard = lock_snapshot_file();
     let mut snapshots = read_snapshots()?;
     snapshots.push(snapshot.clone());
     write_snapshots(&snapshots)?;
@@ -185,6 +204,7 @@ pub fn list_snapshots(limit: usize) -> Result<Vec<OptimizationSnapshot>, String>
 }
 
 pub fn restore_pending_snapshots() -> Result<RestoreReport, String> {
+    let _guard = lock_snapshot_file();
     let mut snapshots = read_snapshots()?;
     let mut pending: Vec<_> = snapshots
         .iter()
@@ -265,6 +285,7 @@ pub fn restore_visual_effect_snapshots() -> Result<RestoreReport, String> {
 }
 
 pub fn restore_snapshots_by_ids(snapshot_ids: &[String]) -> RestoreReport {
+    let _guard = lock_snapshot_file();
     let mut snapshots = match read_snapshots() {
         Ok(snapshots) => snapshots,
         Err(error) => {
@@ -320,6 +341,7 @@ pub fn restore_snapshots_by_ids(snapshot_ids: &[String]) -> RestoreReport {
 }
 
 pub fn discard_snapshot(snapshot_id: &str) -> Result<(), String> {
+    let _guard = lock_snapshot_file();
     let mut snapshots = read_snapshots()?;
     let before = snapshots.len();
     snapshots.retain(|snapshot| snapshot.id != snapshot_id);
@@ -330,6 +352,7 @@ pub fn discard_snapshot(snapshot_id: &str) -> Result<(), String> {
 }
 
 pub fn mark_cleanup_snapshots_purged() -> Result<usize, String> {
+    let _guard = lock_snapshot_file();
     let mut snapshots = read_snapshots()?;
     let now = chrono::Utc::now().timestamp();
     let mut changed = 0;
@@ -935,6 +958,7 @@ fn write_snapshots(snapshots: &[OptimizationSnapshot]) -> Result<(), String> {
 fn restore_snapshots_matching(
     predicate: impl Fn(&OptimizationSnapshot) -> bool,
 ) -> Result<RestoreReport, String> {
+    let _guard = lock_snapshot_file();
     let mut snapshots = read_snapshots()?;
     let mut pending: Vec<_> = snapshots
         .iter()
