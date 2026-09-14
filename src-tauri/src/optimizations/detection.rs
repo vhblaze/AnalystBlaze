@@ -357,6 +357,20 @@ fn is_common_foreground_non_game(normalized: &str) -> bool {
             | "outlook.exe"
             | "onenote.exe"
             | "onedrive.exe"
+            // System/diagnostic utilities a player routinely alt-tabs to
+            // WHILE gaming (checking GPU/CPU load, closing a stuck app,
+            // taking a screenshot) - a real incident (2026-09) had Modo
+            // Gamer lock onto Taskmgr.exe as "the game" via this same
+            // foreground-window fallback, then restore everything the
+            // moment Task Manager was closed, mid real play session.
+            | "taskmgr.exe"
+            | "resmon.exe"
+            | "perfmon.exe"
+            | "mmc.exe"
+            | "systemsettings.exe"
+            | "applicationframehost.exe"
+            | "snippingtool.exe"
+            | "screenclippinghost.exe"
     )
 }
 
@@ -478,6 +492,23 @@ mod tests {
         assert!(is_common_foreground_non_game("zoom.exe"));
         assert!(is_common_foreground_non_game("slack.exe"));
         assert!(is_common_foreground_non_game("spotify.exe"));
+        assert!(!is_common_foreground_non_game("valorant.exe"));
+    }
+
+    /// Regression test for a real incident (2026-09-13, RDR2): tabbing into
+    /// Task Manager mid-session got it detected as "the game" via the
+    /// foreground fallback, and closing Task Manager then restored Modo
+    /// Gamer - turning off the boost while the real game was still running.
+    #[test]
+    fn excludes_system_diagnostic_tools_from_unsupervised_game_guess() {
+        assert!(is_common_foreground_non_game("taskmgr.exe"));
+        assert!(is_common_foreground_non_game("resmon.exe"));
+        assert!(is_common_foreground_non_game("perfmon.exe"));
+        assert!(is_common_foreground_non_game("mmc.exe"));
+        assert!(is_common_foreground_non_game("systemsettings.exe"));
+        assert!(is_common_foreground_non_game("applicationframehost.exe"));
+        assert!(is_common_foreground_non_game("snippingtool.exe"));
+        assert!(is_common_foreground_non_game("screenclippinghost.exe"));
         assert!(!is_common_foreground_non_game("valorant.exe"));
     }
 
