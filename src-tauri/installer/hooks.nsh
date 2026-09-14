@@ -35,6 +35,39 @@
   ; it open (not just the helper service) while installing an update.
   nsExec::ExecToLog 'taskkill /F /IM analystblaze-desktop.exe'
   Pop $0
+
+  !if "${INSTALLMODE}" == "perMachine"
+    ; The privileged helper (privileged_helper.rs::exe_path_is_trusted_service_source)
+    ; refuses to register its Windows service unless AnalystBlaze runs from
+    ; Program Files/Program Files (x86) - a security boundary against any
+    ; arbitrary exe registering itself as a SYSTEM service, which must not be
+    ; relaxed. The base template's Choose Directory page still lets a user
+    ; type or browse to anywhere, and a real one did (Nely, 2026-09-14),
+    ; leaving the helper permanently and silently unavailable - the only
+    ; sign a cryptic message buried in Settings. There is no legitimate
+    ; reason for THIS app's per-machine install to live anywhere else, so
+    ; the location is pinned here to the exact same default the template's
+    ; own .onInit computes (see MULTIUSER_USE_PROGRAMFILES64 above),
+    ; regardless of what the Directory page showed.
+    ;
+    ; Skipped during a silent/passive run ($PassiveMode = 1, e.g. the
+    ; in-app auto-updater - see SkipIfPassive) on purpose: that path never
+    ; shows the Directory page at all and reuses whatever location is
+    ; already registered (RestorePreviousInstallLocation), so pinning here
+    ; too would silently relocate an already-broken existing install mid
+    ; background-update, leaving old files orphaned at the previous path
+    ; instead of actually fixing anything. A user in that situation needs to
+    ; run the downloaded installer by hand (non-passive) at least once,
+    ; which this DOES correct, before auto-update can take over safely.
+    ${IfNot} $PassiveMode = 1
+      ${If} ${RunningX64}
+        StrCpy $INSTDIR "$PROGRAMFILES64\${PRODUCTNAME}"
+      ${Else}
+        StrCpy $INSTDIR "$PROGRAMFILES\${PRODUCTNAME}"
+      ${EndIf}
+      SetOutPath $INSTDIR
+    ${EndIf}
+  !endif
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
