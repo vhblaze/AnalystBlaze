@@ -25,6 +25,7 @@ pub mod service_usage;
 pub mod shadow_storage;
 pub mod snapshot;
 pub mod storage_media;
+pub mod system_repair;
 pub mod visual_effects;
 pub mod windows_actions;
 pub mod windows_inventory;
@@ -354,6 +355,10 @@ async fn execute_command_checked_with_helper(
         "RESIZE_SHADOW_STORAGE" => shadow_storage::resize_shadow_storage(payload).await,
         "START_FRAME_CAPTURE" => frame_capture_control::start_frame_capture(payload).await,
         "STOP_FRAME_CAPTURE" => frame_capture_control::stop_frame_capture(payload).await,
+        "START_SYSTEM_FILE_CHECK" => system_repair::start_system_file_check(payload).await,
+        "SYSTEM_FILE_CHECK_STATUS" => system_repair::system_file_check_status(payload).await,
+        "START_DISM_RESTORE_HEALTH" => system_repair::start_dism_restore_health(payload).await,
+        "DISM_RESTORE_HEALTH_STATUS" => system_repair::system_file_check_status(payload).await,
         other => ExecutionResult::unsupported(other),
     };
 

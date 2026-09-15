@@ -1253,6 +1253,46 @@ async fn set_power_plan_high_performance() -> Result<optimizations::ExecutionRes
 }
 
 #[tauri::command]
+async fn start_system_file_check() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "START_SYSTEM_FILE_CHECK",
+        Some(serde_json::json!({ "confirm": "RUN_SYSTEM_FILE_CHECK" })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn system_file_check_status(
+    scan_id: String,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "SYSTEM_FILE_CHECK_STATUS",
+        Some(serde_json::json!({ "scanId": scan_id })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn start_dism_restore_health() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "START_DISM_RESTORE_HEALTH",
+        Some(serde_json::json!({ "confirm": "RUN_DISM_RESTORE_HEALTH" })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn dism_restore_health_status(
+    scan_id: String,
+) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "DISM_RESTORE_HEALTH_STATUS",
+        Some(serde_json::json!({ "scanId": scan_id })),
+    )
+    .await)
+}
+
+#[tauri::command]
 async fn set_power_plan_balanced() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command("SET_POWER_PLAN_BALANCED", None).await)
 }
@@ -2138,6 +2178,10 @@ pub fn run() {
             apply_visual_performance_mode,
             restore_visual_effects,
             set_power_plan_high_performance,
+            start_system_file_check,
+            system_file_check_status,
+            start_dism_restore_health,
+            dism_restore_health_status,
             set_power_plan_balanced,
             set_power_plan_power_saver,
             set_telemetry_mode,

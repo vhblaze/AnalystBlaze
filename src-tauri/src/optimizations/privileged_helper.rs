@@ -1850,6 +1850,10 @@ fn supported_actions() -> &'static [&'static str] {
         "STOP_FRAME_CAPTURE",
         "ENABLE_SCHEDULED_DEFRAG",
         "RESIZE_SHADOW_STORAGE",
+        "START_SYSTEM_FILE_CHECK",
+        "SYSTEM_FILE_CHECK_STATUS",
+        "START_DISM_RESTORE_HEALTH",
+        "DISM_RESTORE_HEALTH_STATUS",
     ]
 }
 

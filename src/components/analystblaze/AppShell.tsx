@@ -184,8 +184,13 @@ export function AppShell() {
     async (request: Omit<ConfirmRequest, "id" | "resolve">, action: () => Promise<unknown>) => {
       const approved = await requestConfirmation(request);
       if (!approved) return false;
-      await action();
-      return true;
+      // Returns whatever the action resolves to (not just a boolean) so a
+      // caller that needs the result - e.g. LocalControls reading the
+      // scanId out of START_SYSTEM_FILE_CHECK's OptimizationResult to poll
+      // it - can. Every existing caller already discards this return value
+      // (`await runConfirmed(...)` as a bare statement), so widening it is
+      // safe.
+      return await action();
     },
     [requestConfirmation],
   );
@@ -957,6 +962,28 @@ export function AppShell() {
                         snapshot: false,
                       },
                       auth.restoreOptimizations,
+                    )
+                  }
+                  onStartSystemFileCheck={() =>
+                    runConfirmed(
+                      {
+                        title: "Verificar arquivos de sistema (SFC)",
+                        description: "Executa sfc /scannow. Pode levar varios minutos e usa privilegios administrativos - nao interrompa nem reinicie o PC enquanto estiver em andamento.",
+                        risk: "sensivel",
+                        snapshot: false,
+                      },
+                      auth.startSystemFileCheck,
+                    )
+                  }
+                  onStartDismRestoreHealth={() =>
+                    runConfirmed(
+                      {
+                        title: "Reparar componentes do Windows (DISM)",
+                        description: "Executa DISM /Online /Cleanup-Image /RestoreHealth. Pode levar bem mais tempo que o SFC e precisa de conexao com a internet - nao interrompa nem reinicie o PC enquanto estiver em andamento.",
+                        risk: "sensivel",
+                        snapshot: false,
+                      },
+                      auth.startDismRestoreHealth,
                     )
                   }
                   onDisableStartup={(name, location) =>

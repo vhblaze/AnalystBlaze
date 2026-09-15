@@ -261,6 +261,26 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: false,
             requires_privileged_helper: true,
         }),
+        // sfc/DISM either fix corrupted system files or don't - nothing to
+        // roll back, so no snapshot - but they're long-running (many
+        // minutes) and invasive enough to need explicit local confirmation,
+        // same tier as RESET_WINSOCK_CATALOG. See system_repair.rs.
+        "START_SYSTEM_FILE_CHECK" | "START_DISM_RESTORE_HEALTH" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
+        // Read-only status polls for the scan above - the frontend calls
+        // these every few seconds while a scan runs, so no confirmation
+        // dialog per poll. Still helper-routed: the scan's in-progress
+        // state only exists in the helper process's own memory.
+        "SYSTEM_FILE_CHECK_STATUS" | "DISM_RESTORE_HEALTH_STATUS" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Safe,
+            requires_local_confirmation: false,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
         "APPLY_LATENCY_TWEAKS" => Some(CommandSafetyProfile {
             risk: RiskLevel::Critical,
             requires_local_confirmation: true,
@@ -322,6 +342,10 @@ pub fn supported_actions() -> &'static [&'static str] {
         "START_FRAME_CAPTURE",
         "STOP_FRAME_CAPTURE",
         "ENABLE_SCHEDULED_DEFRAG",
+        "START_SYSTEM_FILE_CHECK",
+        "SYSTEM_FILE_CHECK_STATUS",
+        "START_DISM_RESTORE_HEALTH",
+        "DISM_RESTORE_HEALTH_STATUS",
     ]
 }
 
@@ -784,6 +808,28 @@ fn validate_action_payload(
                 json!({ "confirmation": "RESET_WINSOCK" }),
             ));
         }
+        "START_SYSTEM_FILE_CHECK" if !typed_confirmation_matches(payload, "RUN_SYSTEM_FILE_CHECK") => {
+            return Err(safety_error(
+                "system_file_check_confirmation_required",
+                action_name,
+                payload,
+                context,
+                Some(profile),
+                json!({ "confirmation": "RUN_SYSTEM_FILE_CHECK" }),
+            ));
+        }
+        "START_DISM_RESTORE_HEALTH"
+            if !typed_confirmation_matches(payload, "RUN_DISM_RESTORE_HEALTH") =>
+        {
+            return Err(safety_error(
+                "dism_restore_health_confirmation_required",
+                action_name,
+                payload,
+                context,
+                Some(profile),
+                json!({ "confirmation": "RUN_DISM_RESTORE_HEALTH" }),
+            ));
+        }
         _ => {}
     }
 
@@ -856,6 +902,15 @@ fn purge_confirmed(payload: Option<&Value>) -> bool {
 }
 
 fn winsock_reset_confirmed(payload: Option<&Value>) -> bool {
+    typed_confirmation_matches(payload, "RESET_WINSOCK")
+}
+
+/// Shared by every action that needs an exact typed confirmation phrase in
+/// the payload before it's allowed to proceed (RESET_WINSOCK_CATALOG,
+/// START_SYSTEM_FILE_CHECK, START_DISM_RESTORE_HEALTH) - accepts either
+/// `confirm` or `confirmation` as the field name since callers have used
+/// both historically.
+fn typed_confirmation_matches(payload: Option<&Value>, expected: &str) -> bool {
     let Some(payload) = payload else {
         return false;
     };
@@ -863,7 +918,7 @@ fn winsock_reset_confirmed(payload: Option<&Value>) -> bool {
         .get("confirm")
         .or_else(|| payload.get("confirmation"))
         .and_then(Value::as_str)
-        .is_some_and(|value| value == "RESET_WINSOCK")
+        .is_some_and(|value| value == expected)
 }
 
 fn extract_target(payload: Option<&Value>) -> Option<String> {
@@ -1507,6 +1562,81 @@ mod tests {
 
         assert_eq!(profile.risk, super::RiskLevel::Sensitive);
         assert!(!profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn system_file_check_requires_exact_confirmation_phrase() {
+        let missing_confirmation =
+            validate_command("START_SYSTEM_FILE_CHECK", None, &context_with_helper(true));
+        assert_eq!(
+            missing_confirmation.unwrap_err().reason,
+            "system_file_check_confirmation_required"
+        );
+
+        let wrong_phrase = validate_command(
+            "START_SYSTEM_FILE_CHECK",
+            Some(&json!({ "confirm": "RESET_WINSOCK" })),
+            &context_with_helper(true),
+        );
+        assert_eq!(
+            wrong_phrase.unwrap_err().reason,
+            "system_file_check_confirmation_required"
+        );
+
+        let profile = validate_command(
+            "START_SYSTEM_FILE_CHECK",
+            Some(&json!({ "confirm": "RUN_SYSTEM_FILE_CHECK" })),
+            &context_with_helper(true),
+        )
+        .expect("sfc scan should be allowed after explicit confirmation");
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(!profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn dism_restore_health_requires_exact_confirmation_phrase() {
+        let missing_confirmation = validate_command(
+            "START_DISM_RESTORE_HEALTH",
+            None,
+            &context_with_helper(true),
+        );
+        assert_eq!(
+            missing_confirmation.unwrap_err().reason,
+            "dism_restore_health_confirmation_required"
+        );
+
+        let profile = validate_command(
+            "START_DISM_RESTORE_HEALTH",
+            Some(&json!({ "confirm": "RUN_DISM_RESTORE_HEALTH" })),
+            &context_with_helper(true),
+        )
+        .expect("dism restore health should be allowed after explicit confirmation");
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(!profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn system_file_check_status_needs_no_confirmation_but_still_needs_helper() {
+        // Polling is called every few seconds while a scan runs - it must
+        // never demand a confirmation dialog, but the scan's in-progress
+        // state only exists in the helper process's own memory, so it's
+        // still helper-routed.
+        let profile = validate_command(
+            "SYSTEM_FILE_CHECK_STATUS",
+            Some(&json!({ "scanId": "abc123" })),
+            &SafetyContext {
+                source: CommandSource::ManualUser,
+                allowed_actions: None,
+                local_confirmation: false,
+                privileged_helper_available: true,
+            },
+        )
+        .expect("status polling should not require local confirmation");
+        assert_eq!(profile.risk, super::RiskLevel::Safe);
+        assert!(!profile.requires_local_confirmation);
         assert!(profile.requires_privileged_helper);
     }
 }

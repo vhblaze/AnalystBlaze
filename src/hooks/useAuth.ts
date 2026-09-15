@@ -30,6 +30,8 @@ import {
   restoreWindowsService,
   purgeCleanupQuarantine,
   resetWinsockCatalog,
+  startSystemFileCheck as startSystemFileCheckAction,
+  startDismRestoreHealth as startDismRestoreHealthAction,
   restartWindowsNow as restartWindowsNowAction,
   setAgentTelemetryMode,
   setDnsServers as setDnsServersAction,
@@ -708,6 +710,44 @@ export function useAuth() {
     return result;
   }, [runAction]);
 
+  // These two only kick off the scan (sfc/DISM run for minutes in a
+  // background thread on the helper side and are polled separately - see
+  // LocalControls.tsx) - runAction's busy flag is only held for the fast
+  // "start" round-trip, not the whole scan.
+  const startSystemFileCheck = useCallback(async () => {
+    const result = await runAction(async () => {
+      const result = await startSystemFileCheckAction();
+      if (!result.success) {
+        setMessage({ key: "agent.messages.optimizationActionFailed", params: { message: result.message } });
+      }
+      captureTelemetry({
+        name: result.success ? "system_file_check_started" : "system_file_check_start_failed",
+        category: "agent",
+        properties: {},
+      });
+      return result;
+    }, { rethrow: true });
+    if (result && !result.success) throw new Error(result.message);
+    return result;
+  }, [runAction]);
+
+  const startDismRestoreHealth = useCallback(async () => {
+    const result = await runAction(async () => {
+      const result = await startDismRestoreHealthAction();
+      if (!result.success) {
+        setMessage({ key: "agent.messages.optimizationActionFailed", params: { message: result.message } });
+      }
+      captureTelemetry({
+        name: result.success ? "dism_restore_health_started" : "dism_restore_health_start_failed",
+        category: "agent",
+        properties: {},
+      });
+      return result;
+    }, { rethrow: true });
+    if (result && !result.success) throw new Error(result.message);
+    return result;
+  }, [runAction]);
+
   const applyVisualPerformance = useCallback(async () => {
     const result = await runAction(async () => {
       const result = await applyVisualPerformanceMode();
@@ -988,6 +1028,8 @@ export function useAuth() {
     applyNetworkTune,
     restartWindowsNow,
     resetWinsock,
+    startSystemFileCheck,
+    startDismRestoreHealth,
     applyVisualPerformance,
     restoreVisualPerformance,
     cleanTempDeep,

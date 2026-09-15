@@ -11,9 +11,11 @@ import {
   getActiveFocusSession,
   getEnergyDiagnostics,
   getActiveGameModeSession,
+  getDismRestoreHealthStatus,
   getOptimizationSnapshots,
   getPrivilegedHelperStatus,
   getProtectedApps,
+  getSystemFileCheckStatus,
   getWeeklyGameModeUsage,
   getWindowsInventory,
   isTauriRuntime,
@@ -30,11 +32,13 @@ import {
   type GameModeSession,
   type GameModeUsage,
   type LocalAiPolicy,
+  type OptimizationResult,
   type OptimizationSnapshot,
   type PerformanceReport,
   type PrivilegedHelperStatus,
   type ProtectedApp,
   type StartupImpact,
+  type SystemFileCheckStatus,
   type WindowsInventory,
 } from "@/services/tauri/agent";
 
@@ -59,6 +63,8 @@ export function LocalControls({
   onApplyCleanupCategory,
   onDelayStartupApp,
   onRestoreDelayedStartupApp,
+  onStartSystemFileCheck,
+  onStartDismRestoreHealth,
 }: {
   status: AgentStatus | null;
   automaticGameModeAllowed?: boolean;
@@ -80,6 +86,8 @@ export function LocalControls({
   onApplyCleanupCategory: (category: string, mode?: string | null) => Promise<unknown>;
   onDelayStartupApp: (name: string, location?: string | null) => Promise<unknown>;
   onRestoreDelayedStartupApp: (name?: string | null) => Promise<unknown>;
+  onStartSystemFileCheck: () => Promise<unknown>;
+  onStartDismRestoreHealth: () => Promise<unknown>;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("local_controls");
@@ -105,6 +113,12 @@ export function LocalControls({
   const [inventoryError, setInventoryError] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [sfcScanId, setSfcScanId] = useState<string | null>(null);
+  const [sfcStatus, setSfcStatus] = useState<SystemFileCheckStatus | null>(null);
+  const [sfcStarting, setSfcStarting] = useState(false);
+  const [dismScanId, setDismScanId] = useState<string | null>(null);
+  const [dismStatus, setDismStatus] = useState<SystemFileCheckStatus | null>(null);
+  const [dismStarting, setDismStarting] = useState(false);
   const runtimeAvailable = isTauriRuntime();
   const paidGameModeAllowed = canUsePaidGameMode(status);
   const autoGameModePlanAllowed = automaticGameModeAllowed ?? canUseAutomaticGameMode(status);
@@ -312,6 +326,104 @@ export function LocalControls({
       successMessage,
     );
   };
+
+  const startSystemFileCheck = async () => {
+    setActionMessage(null);
+    setSfcStarting(true);
+    try {
+      const result = await onStartSystemFileCheck();
+      if (result === false) {
+        setActionMessage(t("controls.actionCancelled"));
+        return;
+      }
+      const optimizationResult = result as OptimizationResult;
+      if (!optimizationResult.success) {
+        setActionMessage(optimizationResult.message);
+        return;
+      }
+      const scanId = (optimizationResult.details as { scanId?: string } | null)?.scanId;
+      if (scanId) {
+        setSfcStatus(null);
+        setSfcScanId(scanId);
+      }
+      track("system_file_check_started");
+    } catch (error) {
+      setActionMessage(errorMessage(error));
+    } finally {
+      setSfcStarting(false);
+    }
+  };
+
+  const startDismRestoreHealth = async () => {
+    setActionMessage(null);
+    setDismStarting(true);
+    try {
+      const result = await onStartDismRestoreHealth();
+      if (result === false) {
+        setActionMessage(t("controls.actionCancelled"));
+        return;
+      }
+      const optimizationResult = result as OptimizationResult;
+      if (!optimizationResult.success) {
+        setActionMessage(optimizationResult.message);
+        return;
+      }
+      const scanId = (optimizationResult.details as { scanId?: string } | null)?.scanId;
+      if (scanId) {
+        setDismStatus(null);
+        setDismScanId(scanId);
+      }
+      track("dism_restore_health_started");
+    } catch (error) {
+      setActionMessage(errorMessage(error));
+    } finally {
+      setDismStarting(false);
+    }
+  };
+
+  // Polls a running sfc/DISM scan every 5s until it reports done - the
+  // helper's request/response protocol can't push progress (see
+  // system_repair.rs), so this is the client-side half of that shape.
+  // Shared by the two effects below rather than duplicated.
+  const pollScan = async (
+    scanId: string,
+    getStatus: (scanId: string) => Promise<OptimizationResult>,
+    setStatus: (status: SystemFileCheckStatus) => void,
+    clearScanId: () => void,
+  ) => {
+    try {
+      const result = await getStatus(scanId);
+      if (!result.success) {
+        setActionMessage(result.message);
+        clearScanId();
+        return;
+      }
+      const status = result.details as unknown as SystemFileCheckStatus;
+      setStatus(status);
+      if (status.done) clearScanId();
+    } catch (error) {
+      setActionMessage(errorMessage(error));
+      clearScanId();
+    }
+  };
+
+  useEffect(() => {
+    if (!sfcScanId) return;
+    void pollScan(sfcScanId, getSystemFileCheckStatus, setSfcStatus, () => setSfcScanId(null));
+    const interval = setInterval(() => {
+      void pollScan(sfcScanId, getSystemFileCheckStatus, setSfcStatus, () => setSfcScanId(null));
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [sfcScanId]);
+
+  useEffect(() => {
+    if (!dismScanId) return;
+    void pollScan(dismScanId, getDismRestoreHealthStatus, setDismStatus, () => setDismScanId(null));
+    const interval = setInterval(() => {
+      void pollScan(dismScanId, getDismRestoreHealthStatus, setDismStatus, () => setDismScanId(null));
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [dismScanId]);
 
   const runPerformanceAction = async (action: () => Promise<unknown>, successMessage: string) => {
     await runControlAction(
@@ -654,6 +766,39 @@ export function LocalControls({
       <section className="glass-panel cyber-glow p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
+            <Wrench className="h-3.5 w-3.5 text-cyan-300" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Saude do Windows</h2>
+          </div>
+        </div>
+        {actionMessage && <div className="mb-3"><Notice tone="info" message={actionMessage} /></div>}
+        <p className="mb-4 text-xs text-slate-500">
+          Verifica arquivos de sistema corrompidos com as ferramentas oficiais do Windows (sfc/DISM). Pode levar varios minutos - o app continua utilizavel enquanto roda em segundo plano.
+        </p>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <SystemRepairPanel
+            title="Verificacao de arquivos (SFC)"
+            description="sfc /scannow - verifica e repara arquivos de sistema protegidos."
+            starting={sfcStarting}
+            status={sfcStatus}
+            onStart={() => void startSystemFileCheck()}
+            startDisabled={busy || sfcStarting || Boolean(sfcScanId) || !runtimeAvailable}
+            startLabel="Verificar agora"
+          />
+          <SystemRepairPanel
+            title="Reparo de componentes (DISM)"
+            description="DISM /Online /Cleanup-Image /RestoreHealth - repara o repositorio de componentes do Windows. Recomendado quando o SFC nao consegue corrigir sozinho."
+            starting={dismStarting}
+            status={dismStatus}
+            onStart={() => void startDismRestoreHealth()}
+            startDisabled={busy || dismStarting || Boolean(dismScanId) || !runtimeAvailable}
+            startLabel="Reparar agora"
+          />
+        </div>
+      </section>
+
+      <section className="glass-panel cyber-glow p-6">
+        <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
+          <div className="flex items-center gap-2">
             <ListChecks className="h-3.5 w-3.5 text-cyan-300" />
             <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.windowsControls")}</h2>
           </div>
@@ -942,6 +1087,80 @@ function Notice({ message, tone }: { message: string; tone: "danger" | "info" | 
   return (
     <div className={`rounded-xl border px-4 py-3 text-sm ${toneClass}`}>
       {message}
+    </div>
+  );
+}
+
+function systemRepairOutcomeLabel(status: SystemFileCheckStatus | null): string {
+  if (!status?.result) return "";
+  switch (status.result.outcome) {
+    case "clean":
+      return "Nenhum arquivo corrompido encontrado";
+    case "repaired":
+      return "Arquivos corrompidos encontrados e reparados";
+    case "needs_dism_repair":
+      return "Corrupcao encontrada - o SFC nao conseguiu corrigir sozinho";
+    case "could_not_perform":
+      return "Nao foi possivel concluir a verificacao";
+    case "failed":
+      return "A verificacao encerrou com erro";
+    default:
+      return "Resultado nao reconhecido - veja o texto original abaixo";
+  }
+}
+
+function systemRepairOutcomeTone(status: SystemFileCheckStatus | null): "danger" | "info" | "warning" {
+  if (!status?.result) return "info";
+  if (status.result.success) return "info";
+  if (status.result.outcome === "needs_dism_repair") return "warning";
+  return "danger";
+}
+
+function SystemRepairPanel({
+  title,
+  description,
+  starting,
+  status,
+  onStart,
+  startDisabled,
+  startLabel,
+}: {
+  title: string;
+  description: string;
+  starting: boolean;
+  status: SystemFileCheckStatus | null;
+  onStart: () => void;
+  startDisabled: boolean;
+  startLabel: string;
+}) {
+  const running = Boolean(status && !status.done) || starting;
+  return (
+    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
+          <p className="mt-1 text-xs text-slate-500">{description}</p>
+        </div>
+        <PowerButton disabled={startDisabled} onClick={onStart} label={startLabel} />
+      </div>
+      {running && (
+        <div className="mt-3 flex items-center gap-2 text-xs text-cyan-200">
+          <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+          {starting
+            ? "Iniciando..."
+            : `Em andamento - ${Math.round((status?.elapsedSeconds ?? 0) / 60)} min decorridos. Nao feche o app nem reinicie o PC.`}
+        </div>
+      )}
+      {status?.done && status.result && (
+        <div className="mt-3 space-y-2">
+          <Notice tone={systemRepairOutcomeTone(status)} message={systemRepairOutcomeLabel(status)} />
+          {status.result.outcome === "unknown" && status.result.rawTail && (
+            <pre className="max-h-32 overflow-auto rounded-lg border border-cyan-500/10 bg-black/40 p-2 text-[11px] text-slate-400">
+              {status.result.rawTail}
+            </pre>
+          )}
+        </div>
+      )}
     </div>
   );
 }

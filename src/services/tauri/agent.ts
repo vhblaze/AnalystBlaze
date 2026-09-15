@@ -978,6 +978,51 @@ export async function resetWinsockCatalog(): Promise<OptimizationResult> {
   return invoke<OptimizationResult>("reset_winsock_catalog");
 }
 
+export type SystemFileCheckOutcome =
+  | "clean"
+  | "repaired"
+  | "needs_dism_repair"
+  | "could_not_perform"
+  | "failed"
+  | "unknown";
+
+/** Shape of `details.result` once a scan reports `done: true` - absent
+ * while the scan is still running (`details.done === false`). */
+export type SystemFileCheckResult = {
+  success: boolean;
+  outcome: SystemFileCheckOutcome;
+  message: string;
+  rawTail: string;
+};
+
+export type SystemFileCheckStatus = {
+  scanId: string;
+  kind: "sfc" | "dism_restore_health";
+  done: boolean;
+  elapsedSeconds: number;
+  result: SystemFileCheckResult | null;
+};
+
+export async function startSystemFileCheck(): Promise<OptimizationResult> {
+  requireTauriRuntime("Verificacao de arquivos de sistema");
+  return invoke<OptimizationResult>("start_system_file_check");
+}
+
+export async function getSystemFileCheckStatus(scanId: string): Promise<OptimizationResult> {
+  requireTauriRuntime("Verificacao de arquivos de sistema");
+  return invoke<OptimizationResult>("system_file_check_status", { scanId });
+}
+
+export async function startDismRestoreHealth(): Promise<OptimizationResult> {
+  requireTauriRuntime("Reparo DISM");
+  return invoke<OptimizationResult>("start_dism_restore_health");
+}
+
+export async function getDismRestoreHealthStatus(scanId: string): Promise<OptimizationResult> {
+  requireTauriRuntime("Reparo DISM");
+  return invoke<OptimizationResult>("dism_restore_health_status", { scanId });
+}
+
 export async function setInterfaceMetric(adapterName: string, metric: number): Promise<OptimizationResult> {
   requireTauriRuntime("Prioridade de adaptador de rede");
   return invoke<OptimizationResult>("set_interface_metric", { adapterName, metric });
