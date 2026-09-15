@@ -10,7 +10,6 @@ import {
   MonitorPlay,
   ShieldCheck,
   Sparkles,
-  Thermometer,
   Wifi,
 } from "lucide-react";
 import { TiltCard } from "../TiltCard";
@@ -274,10 +273,9 @@ export function Dashboard({
       </TiltCard>
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
-        <MetricCard icon={Cpu} label={t("dashboard.cpuInfo")} value={telemetry?.cpu_name || "--"} detail={telemetry ? `${formatPercent(telemetry.cpu_usage)} - ${formatGhz(telemetry.cpu_frequency_mhz)}` : t("common.unavailable")} />
+        <MetricCard icon={Cpu} label={t("dashboard.cpuInfo")} value={shortCpuName(telemetry?.cpu_name)} detail={telemetry ? `${formatPercent(telemetry.cpu_usage)} - ${formatGhz(telemetry.cpu_frequency_mhz)}` : t("common.unavailable")} />
         <MetricCard icon={MemoryStick} label={t("dashboard.ramLoad")} value={telemetry ? formatPercent(telemetry.ram_usage_percent) : "--"} detail={telemetry ? `${formatMb(telemetry.ram_usage_mb)} / ${formatMb(telemetry.ram_total_mb ?? 0)}` : t("common.unavailable")} />
-        <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={telemetry?.gpu_name || "--"} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} ${t("dashboard.gpuLoad")}` : t("dashboard.gpuLoadUnavailable")} />
-        <MetricCard icon={Thermometer} label={t("dashboard.gpuTemp")} value={formatTemp(telemetry?.gpu_temperature, telemetry?.gpu_temperature_available)} detail={telemetry ? `${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")} / ${thermalStateLabel(telemetry.thermal_state)}` : t("common.unavailable")} />
+        <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={shortGpuName(telemetry?.gpu_name)} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} - ${formatTemp(telemetry.gpu_temperature, telemetry.gpu_temperature_available)}` : t("dashboard.gpuLoadUnavailable")} />
         <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
         <MetricCard
           icon={Wifi}
@@ -431,17 +429,40 @@ function formatGhz(value: number | null | undefined) {
   return `${(value / 1000).toFixed(2)} GHz`;
 }
 
+/** Strips vendor/marketing boilerplate off a raw CPU brand string so the
+ * card shows "Ryzen 5 5600X" instead of "AMD Ryzen 5 5600X 6-Core
+ * Processor" (or "i7-10700K" instead of "Intel(R) Core(TM) i7-10700K CPU
+ * @ 3.80GHz") - a real user found the full string got cut off in the card. */
+function shortCpuName(raw: string | undefined) {
+  if (!raw || !raw.trim()) return "--";
+  return raw
+    .trim()
+    .replace(/^AMD\s+/i, "")
+    .replace(/^Intel\(R\)\s*Core\(TM\)\s*/i, "")
+    .replace(/^(Genuine\s+)?Intel\(R\)\s*/i, "")
+    .replace(/\s*\d+-Core Processor\s*$/i, "")
+    .replace(/\s*Processor\s*$/i, "")
+    .replace(/\s*CPU\s*@\s*[\d.]+\s*GHz\s*$/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim() || raw.trim();
+}
+
+/** Same idea for GPU names - "RTX 3060" instead of "NVIDIA GeForce RTX 3060". */
+function shortGpuName(raw: string | undefined) {
+  if (!raw || !raw.trim()) return "--";
+  return raw
+    .trim()
+    .replace(/^NVIDIA\s+GeForce\s+/i, "")
+    .replace(/^NVIDIA\s+/i, "")
+    .replace(/^AMD\s+Radeon\s+/i, "")
+    .replace(/^Radeon\s+/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim() || raw.trim();
+}
+
 function formatTemp(value: number | undefined, available: boolean | undefined) {
   if (!available || typeof value !== "number" || !Number.isFinite(value)) return "--";
   return `${Math.round(value)} C`;
-}
-
-function thermalStateLabel(value?: string) {
-  if (value === "critical") return "critico";
-  if (value === "hot") return "quente";
-  if (value === "watch") return "atencao";
-  if (value === "normal") return "normal";
-  return "sem leitura";
 }
 
 function formatGameModeMinutes(seconds: number) {
