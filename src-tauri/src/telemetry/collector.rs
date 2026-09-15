@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
-use sysinfo::{Components, Disks, ProcessesToUpdate, System};
+use sysinfo::{Components, CpuRefreshKind, Disks, ProcessesToUpdate, System};
 
 use crate::optimizations::detection;
 use crate::process_ext::{decode_console_bytes, CommandExt};
@@ -285,8 +285,18 @@ impl TelemetryCollector {
 
     fn begin_collection_tick(&mut self) {
         self.collection_count = self.collection_count.saturating_add(1);
-        self.system.refresh_cpu_usage();
-        self.system.refresh_cpu_frequency();
+        // cpu_usage only - frequency comes from cpu_frequency_mhz()'s own
+        // PDH counter now (see its doc comment for why: sysinfo's
+        // CallNtPowerInformation-based frequency() reads stuck at base
+        // clock on Ryzen under real boost). Calling refresh_cpu_usage()
+        // and refresh_cpu_frequency() back-to-back was also its own bug
+        // while both lived here - Windows' refresh_cpu_specifics always
+        // re-samples the same "% Idle Time" PDH counter regardless of
+        // which refresh_kind flags were requested, so two calls a few
+        // microseconds apart gave the usage delta a near-zero time
+        // window on the second one, corrupting it on every tick.
+        self.system
+            .refresh_cpu_specifics(CpuRefreshKind::nothing().with_cpu_usage());
         self.system.refresh_memory();
         self.components.refresh(false);
         // Full process/disk enumeration is heavier than the per-tick refreshes
@@ -317,12 +327,12 @@ impl TelemetryCollector {
             .map(|cpu| cpu.brand().trim().to_string())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "Unknown CPU".to_string());
-        let cpu_frequency_mhz = self
-            .system
-            .cpus()
-            .first()
-            .map(|cpu| cpu.frequency() as f64)
-            .filter(|value| *value > 0.0);
+        // Reads the exact counter Task Manager's "Speed" is built from -
+        // see current_cpu_frequency_mhz()'s doc comment. Tried core-0-only
+        // and an all-core average/max from sysinfo's frequency() first;
+        // both undershot Task Manager on this Ryzen system because the
+        // underlying Windows API doesn't see AMD boost states reliably.
+        let cpu_frequency_mhz = current_cpu_frequency_mhz();
         let ram_usage_mb = bytes_to_mb(self.system.used_memory());
         let ram_total_mb = bytes_to_mb(self.system.total_memory());
         let ram_usage_percent = if ram_total_mb > 0.0 {
@@ -1264,6 +1274,31 @@ fn machine_id_hash() -> Option<String> {
     None
 }
 
+/// The CPU's rated base clock in MHz, straight from the registry
+/// (`~MHz` under CentralProcessor\0) - a static value the firmware writes
+/// once at boot, so it's safe to read a single time and cache forever
+/// rather than re-reading it every telemetry tick.
+#[cfg(windows)]
+fn base_cpu_mhz() -> Option<f64> {
+    static BASE_MHZ: std::sync::OnceLock<Option<f64>> = std::sync::OnceLock::new();
+    *BASE_MHZ.get_or_init(|| {
+        use winreg::enums::HKEY_LOCAL_MACHINE;
+        use winreg::RegKey;
+
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        let cpu0 = hklm
+            .open_subkey("HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0")
+            .ok()?;
+        let mhz: u32 = cpu0.get_value("~MHz").ok()?;
+        (mhz > 0).then_some(mhz as f64)
+    })
+}
+
+#[cfg(not(windows))]
+fn base_cpu_mhz() -> Option<f64> {
+    None
+}
+
 fn sha256_hex(value: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(value);
@@ -2079,6 +2114,118 @@ impl GpuUsageReader {
 #[cfg(not(windows))]
 fn gpu_usage_percent() -> Option<f64> {
     None
+}
+
+/// Reads `\Processor Information(_Total)\% Processor Performance` - the
+/// exact counter Task Manager's own "Speed" figure is built from (base
+/// clock x this percentage). A real user compared our card against Task
+/// Manager and caught the mismatch: sysinfo's per-core frequency() goes
+/// through CallNtPowerInformation, which on this Ryzen system kept
+/// reporting base clock even under real boost - a known AMD/Windows gap
+/// (the OS's generic P-state query doesn't see AMD's CPPC2-managed boost
+/// states reliably). This counter is what Task Manager itself reads, so
+/// matching it means reading the same source, not approximating it.
+#[cfg(windows)]
+struct CpuPerformanceReader {
+    query: windows::Win32::System::Performance::PDH_HQUERY,
+    counter: windows::Win32::System::Performance::PDH_HCOUNTER,
+    has_baseline: bool,
+}
+
+#[cfg(windows)]
+unsafe impl Send for CpuPerformanceReader {}
+
+#[cfg(windows)]
+impl CpuPerformanceReader {
+    fn new() -> Option<Self> {
+        use windows::core::PCWSTR;
+        use windows::Win32::System::Performance::{
+            PdhAddEnglishCounterW, PdhCloseQuery, PdhCollectQueryData, PdhOpenQueryW, PDH_HCOUNTER,
+            PDH_HQUERY,
+        };
+
+        let mut query = PDH_HQUERY::default();
+        if unsafe { PdhOpenQueryW(PCWSTR::null(), 0, &mut query) } != 0 {
+            return None;
+        }
+
+        let path = widestring(r"\Processor Information(_Total)\% Processor Performance");
+        let mut counter = PDH_HCOUNTER::default();
+        if unsafe { PdhAddEnglishCounterW(query, PCWSTR(path.as_ptr()), 0, &mut counter) } != 0 {
+            unsafe {
+                PdhCloseQuery(query);
+            }
+            return None;
+        }
+
+        unsafe {
+            PdhCollectQueryData(query);
+        }
+
+        Some(Self {
+            query,
+            counter,
+            has_baseline: false,
+        })
+    }
+
+    /// Returns the raw performance percentage (can exceed 100 during
+    /// boost) - the caller multiplies by base_cpu_mhz() to get MHz.
+    fn sample(&mut self) -> Option<f64> {
+        use windows::Win32::System::Performance::{
+            PdhCollectQueryData, PdhGetFormattedCounterValue, PDH_FMT_COUNTERVALUE, PDH_FMT_DOUBLE,
+        };
+
+        if unsafe { PdhCollectQueryData(self.query) } != 0 {
+            return None;
+        }
+
+        if !self.has_baseline {
+            self.has_baseline = true;
+            return None;
+        }
+
+        let mut value = PDH_FMT_COUNTERVALUE::default();
+        let status = unsafe {
+            PdhGetFormattedCounterValue(self.counter, PDH_FMT_DOUBLE, None, &mut value)
+        };
+        if status != 0 || value.CStatus != 0 {
+            return None;
+        }
+
+        let percent = unsafe { value.Anonymous.doubleValue };
+        percent.is_finite().then_some(percent)
+    }
+}
+
+// Same singleton shape as GPU_USAGE_READER/gpu_usage_percent() above, for
+// the same reasons - a process-wide warm query rather than one recreated
+// (and re-cold-started) every telemetry tick.
+#[cfg(windows)]
+static CPU_PERFORMANCE_READER: std::sync::OnceLock<std::sync::Mutex<Option<CpuPerformanceReader>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn cpu_performance_percent() -> Option<f64> {
+    let mut guard = CPU_PERFORMANCE_READER
+        .get_or_init(|| std::sync::Mutex::new(CpuPerformanceReader::new()))
+        .lock()
+        .ok()?;
+    guard.as_mut().and_then(CpuPerformanceReader::sample)
+}
+
+#[cfg(not(windows))]
+fn cpu_performance_percent() -> Option<f64> {
+    None
+}
+
+/// Current clock in MHz the same way Task Manager computes its "Speed"
+/// figure: base clock (static, from the registry) x live "% Processor
+/// Performance" (can exceed 100 during boost, go below 100 when parked).
+fn current_cpu_frequency_mhz() -> Option<f64> {
+    let base = base_cpu_mhz()?;
+    let performance_percent = cpu_performance_percent()?;
+    Some(base * performance_percent / 100.0)
 }
 
 #[cfg(windows)]
