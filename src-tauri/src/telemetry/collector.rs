@@ -44,6 +44,14 @@ pub struct HardwareProfile {
 pub struct TelemetrySample {
     pub event_timestamp: i64,
     pub cpu_usage: f64,
+    /// CPU brand string (e.g. "AMD Ryzen 9 5900X 12-Core Processor"), read
+    /// via sysinfo - the same safe, driver-free source hardware_profile()
+    /// already uses, just surfaced per-tick instead of once at registration.
+    pub cpu_name: String,
+    /// Current clock speed in MHz, from sysinfo's per-core frequency
+    /// reading - no kernel driver involved, same category as cpu_usage
+    /// itself. None only if sysinfo has no CPU entries at all.
+    pub cpu_frequency_mhz: Option<f64>,
     pub cpu_temperature: f64,
     pub cpu_temperature_available: bool,
     pub cpu_temperature_source: Option<String>,
@@ -278,6 +286,7 @@ impl TelemetryCollector {
     fn begin_collection_tick(&mut self) {
         self.collection_count = self.collection_count.saturating_add(1);
         self.system.refresh_cpu_usage();
+        self.system.refresh_cpu_frequency();
         self.system.refresh_memory();
         self.components.refresh(false);
         // Full process/disk enumeration is heavier than the per-tick refreshes
@@ -301,6 +310,19 @@ impl TelemetryCollector {
         network: NetworkDiagnostics,
     ) -> TelemetrySample {
         let cpu_usage = self.system.global_cpu_usage() as f64;
+        let cpu_name = self
+            .system
+            .cpus()
+            .first()
+            .map(|cpu| cpu.brand().trim().to_string())
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "Unknown CPU".to_string());
+        let cpu_frequency_mhz = self
+            .system
+            .cpus()
+            .first()
+            .map(|cpu| cpu.frequency() as f64)
+            .filter(|value| *value > 0.0);
         let ram_usage_mb = bytes_to_mb(self.system.used_memory());
         let ram_total_mb = bytes_to_mb(self.system.total_memory());
         let ram_usage_percent = if ram_total_mb > 0.0 {
@@ -410,6 +432,8 @@ impl TelemetryCollector {
         TelemetrySample {
             event_timestamp: chrono::Utc::now().timestamp(),
             cpu_usage: clamp_percent(cpu_usage),
+            cpu_name,
+            cpu_frequency_mhz,
             cpu_temperature,
             cpu_temperature_available,
             cpu_temperature_source: cpu_temperature_source.clone(),

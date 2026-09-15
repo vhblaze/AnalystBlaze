@@ -274,6 +274,7 @@ export function Dashboard({
       </TiltCard>
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+        <MetricCard icon={Cpu} label={t("dashboard.cpuInfo")} value={telemetry?.cpu_name || "--"} detail={telemetry ? `${formatPercent(telemetry.cpu_usage)} - ${formatGhz(telemetry.cpu_frequency_mhz)}` : t("common.unavailable")} />
         <MetricCard icon={MemoryStick} label={t("dashboard.ramLoad")} value={telemetry ? formatPercent(telemetry.ram_usage_percent) : "--"} detail={telemetry ? `${formatMb(telemetry.ram_usage_mb)} / ${formatMb(telemetry.ram_total_mb ?? 0)}` : t("common.unavailable")} />
         <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={telemetry?.gpu_name || "--"} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} ${t("dashboard.gpuLoad")}` : t("dashboard.gpuLoadUnavailable")} />
         <MetricCard icon={Thermometer} label={t("dashboard.gpuTemp")} value={formatTemp(telemetry?.gpu_temperature, telemetry?.gpu_temperature_available)} detail={telemetry ? `${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")} / ${thermalStateLabel(telemetry.thermal_state)}` : t("common.unavailable")} />
@@ -423,6 +424,11 @@ function formatMb(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 MB";
   if (value >= 1024) return formatGb(value / 1024);
   return `${Math.round(value)} MB`;
+}
+
+function formatGhz(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "--";
+  return `${(value / 1000).toFixed(2)} GHz`;
 }
 
 function formatTemp(value: number | undefined, available: boolean | undefined) {

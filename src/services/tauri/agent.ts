@@ -39,6 +39,8 @@ export type AgentStatus = {
 export type AgentTelemetrySample = {
   event_timestamp: number;
   cpu_usage: number;
+  cpu_name?: string;
+  cpu_frequency_mhz?: number | null;
   cpu_temperature?: number;
   cpu_temperature_available?: boolean;
   cpu_temperature_source?: string | null;

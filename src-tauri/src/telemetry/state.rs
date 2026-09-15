@@ -41,6 +41,8 @@ pub struct TelemetryHealth {
 pub struct TelemetryDashboardSnapshot {
     pub event_timestamp: i64,
     pub cpu_usage: f64,
+    pub cpu_name: String,
+    pub cpu_frequency_mhz: Option<f64>,
     pub cpu_temperature: f64,
     pub cpu_temperature_available: bool,
     pub cpu_temperature_source: Option<String>,
@@ -106,6 +108,8 @@ impl TelemetryDashboardSnapshot {
         Self {
             event_timestamp: sample.event_timestamp,
             cpu_usage: sample.cpu_usage,
+            cpu_name: sample.cpu_name.clone(),
+            cpu_frequency_mhz: sample.cpu_frequency_mhz,
             cpu_temperature: sample.cpu_temperature,
             cpu_temperature_available: sample.cpu_temperature_available,
             cpu_temperature_source: sample.cpu_temperature_source.clone(),

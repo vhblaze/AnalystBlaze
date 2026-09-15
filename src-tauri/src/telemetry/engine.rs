@@ -2401,6 +2401,8 @@ mod tests {
         TelemetrySample {
             event_timestamp: chrono::Utc::now().timestamp(),
             cpu_usage: 42.0,
+            cpu_name: "Test CPU".to_string(),
+            cpu_frequency_mhz: Some(4200.0),
             cpu_temperature: 61.0,
             cpu_temperature_available: true,
             cpu_temperature_source: Some("test".to_string()),
