@@ -245,6 +245,17 @@ export function AppShell() {
           auth.enableScheduledDefrag,
         );
       }
+      if (actionName === "START_SYSTEM_FILE_CHECK") {
+        return runConfirmed(
+          {
+            title: "Verificar arquivos de sistema (SFC)",
+            description: "Executa sfc /scannow. Pode levar varios minutos e usa privilegios administrativos - nao interrompa nem reinicie o PC enquanto estiver em andamento.",
+            risk: "sensivel",
+            snapshot: false,
+          },
+          auth.startSystemFileCheck,
+        );
+      }
       return Promise.reject(new Error(`Acao nao suportada localmente: ${actionName}`));
     },
     [runConfirmed, activateGameModeWithUpsell, auth],

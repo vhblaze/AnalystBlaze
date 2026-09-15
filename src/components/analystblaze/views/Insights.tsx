@@ -46,7 +46,23 @@ const DISMISS_TTL_MS = 24 * 60 * 60 * 1000;
  * validated allowlist (see safe_action_policy.py) - these are the ones the
  * desktop already knows how to run locally, so "I'll do it myself" has
  * something real to call. Anything else server-side is display-only for now. */
-const LOCALLY_EXECUTABLE_ACTIONS = new Set(["APPLY_GAME_MODE", "EMPTY_TEMP", "ENABLE_SCHEDULED_DEFRAG"]);
+const LOCALLY_EXECUTABLE_ACTIONS = new Set(["APPLY_GAME_MODE", "EMPTY_TEMP", "ENABLE_SCHEDULED_DEFRAG", "START_SYSTEM_FILE_CHECK"]);
+/** Actions that only ever run on the user's own machine, never queued to
+ * the server - either because the action isn't (yet) registered in the
+ * server's SUPPORTED_REMOTE_ACTIONS/AGENT_COMMAND_ALLOWLIST, or, as with
+ * START_SYSTEM_FILE_CHECK, deliberately: sfc/DISM already run entirely
+ * locally through the privileged helper, so routing "let the agent do it"
+ * through the server would just add a network round-trip and server load
+ * for zero benefit. "Deixar o agente fazer" is hidden for these rather
+ * than shown and left to fail with COMMAND_NOT_IN_AGENT_ALLOWLIST. */
+const LOCAL_ONLY_ACTIONS = new Set(["START_SYSTEM_FILE_CHECK"]);
+/** How many Critical-level (level 1) Windows Event Log entries in the last
+ * 24h are worth mentioning. This is deliberately conservative and paired
+ * with "pode (nao necessariamente) indicar" wording below, not "seu Windows
+ * esta com problema" - a healthy PC can log a handful of criticals from
+ * completely unrelated one-off causes, so this is a prompt to check, not a
+ * diagnosis. */
+const EVENT_LOG_CRITICAL_THRESHOLD = 10;
 
 function insightKey(insight: Pick<Insight, "category" | "actionName" | "title">): string {
   return `${insight.category}:${insight.actionName ?? insight.title}`;
@@ -170,6 +186,9 @@ export function Insights({
     try {
       await onApplyInsightActionLocally(insight.actionName);
       track("insight_action_applied_locally", { actionName: insight.actionName });
+      if (insight.actionName === "START_SYSTEM_FILE_CHECK") {
+        setActionMessage("Verificacao iniciada em segundo plano. Acompanhe o progresso em Controles > Avancado > Saude do Windows.");
+      }
       dismissInsight(insight);
     } catch (e: any) {
       setActionMessage(e?.message ?? "Falha ao aplicar a acao.");
@@ -373,6 +392,55 @@ export function Insights({
     };
   }, [diskOptimizationInsightData]);
 
+  const systemHealthInsight = useMemo<Insight | null>(() => {
+    const advanced = telemetry?.advanced as
+      | {
+          event_log_critical_errors_24h?: number | null;
+          failing_services?: Array<{ name: string; kind: string }>;
+          shell_crashes?: Array<{ process: string }>;
+        }
+      | null
+      | undefined;
+    if (!advanced) return null;
+
+    const criticalErrors = advanced.event_log_critical_errors_24h ?? 0;
+    const failingServices = advanced.failing_services ?? [];
+    const shellCrashes = advanced.shell_crashes ?? [];
+    if (criticalErrors < EVENT_LOG_CRITICAL_THRESHOLD && failingServices.length === 0) {
+      return null;
+    }
+
+    const signals: string[] = [];
+    if (criticalErrors >= EVENT_LOG_CRITICAL_THRESHOLD) {
+      signals.push(`${criticalErrors} erros criticos no Visualizador de Eventos nas ultimas 24h`);
+    }
+    if (failingServices.length > 0) {
+      const names = failingServices.slice(0, 3).map((service) => service.name).join(", ");
+      signals.push(`${failingServices.length} servico(s) do Windows falhando (${names})`);
+    }
+    if (shellCrashes.length > 0) {
+      signals.push(`${shellCrashes.length} travamento(s) recente(s) do shell do Windows`);
+    }
+
+    // More independent signals firing together raises confidence a bit -
+    // still capped well below "certain", since none of this confirms actual
+    // file corruption, only correlates with the kind of problem sfc/DISM
+    // can rule in or out.
+    const confidence = Math.min(0.65, 0.35 + signals.length * 0.1);
+
+    return {
+      title: "Possivel problema no Windows",
+      explanation: `Detectamos ${signals.join(" e ")}. Isso pode (nao necessariamente) indicar arquivos de sistema corrompidos. Uma verificacao com as ferramentas oficiais do Windows (sfc, e DISM se precisar) confirma e corrige - leva alguns minutos rodando em segundo plano.`,
+      impact: "Possivel corrupcao de arquivos de sistema",
+      category: "performance",
+      risk: "baixo",
+      reversible: true,
+      confidence,
+      reason: signals.join("; "),
+      actionName: "START_SYSTEM_FILE_CHECK",
+    };
+  }, [telemetry?.advanced]);
+
   const shadowStorageInsight = useMemo<Insight | null>(() => {
     if (!shadowConsentNeeded || !onResolveShadowConsent) return null;
     return {
@@ -403,6 +471,7 @@ export function Insights({
       gameServerLatencyInsight,
       diskNearFullInsight,
       scheduledDefragInsight,
+      systemHealthInsight,
     ].filter((insight): insight is Insight => insight != null);
     const all = [...local, ...insights];
     return all.filter((insight) => !(insightKey(insight) in dismissed));
@@ -413,6 +482,7 @@ export function Insights({
     gameServerLatencyInsight,
     diskNearFullInsight,
     scheduledDefragInsight,
+    systemHealthInsight,
     insights,
     dismissed,
   ]);
@@ -546,7 +616,9 @@ export function Insights({
             const canRunLocally = Boolean(
               ins.actionName && LOCALLY_EXECUTABLE_ACTIONS.has(ins.actionName) && onApplyInsightActionLocally,
             );
-            const canRequestAgent = Boolean(ins.actionName && onRequestAgentApplyInsight);
+            const canRequestAgent = Boolean(
+              ins.actionName && !LOCAL_ONLY_ACTIONS.has(ins.actionName) && onRequestAgentApplyInsight,
+            );
             return (
               <article
                 key={key}
