@@ -51,10 +51,11 @@ const LOCALLY_EXECUTABLE_ACTIONS = new Set(["APPLY_GAME_MODE", "EMPTY_TEMP", "EN
  * the server - either because the action isn't (yet) registered in the
  * server's SUPPORTED_REMOTE_ACTIONS/AGENT_COMMAND_ALLOWLIST, or, as with
  * START_SYSTEM_FILE_CHECK, deliberately: sfc/DISM already run entirely
- * locally through the privileged helper, so routing "let the agent do it"
- * through the server would just add a network round-trip and server load
- * for zero benefit. "Deixar o agente fazer" is hidden for these rather
- * than shown and left to fail with COMMAND_NOT_IN_AGENT_ALLOWLIST. */
+ * through the local privileged helper, so there's nothing for the server
+ * to add - a network round-trip and server load for zero benefit. For
+ * these, "Deixar o agente fazer" still shows (the local AnalystBlaze agent
+ * is still "the agent"), but routes to the same local call as "Fazer eu
+ * mesmo" instead of POSTing to /insights/actions - see requestAgentApply. */
 const LOCAL_ONLY_ACTIONS = new Set(["START_SYSTEM_FILE_CHECK"]);
 /** How many Critical-level (level 1) Windows Event Log entries in the last
  * 24h are worth mentioning. This is deliberately conservative and paired
@@ -198,10 +199,30 @@ export function Insights({
   };
 
   const requestAgentApply = async (insight: Insight) => {
-    if (!insight.actionName || !onRequestAgentApplyInsight) return;
+    if (!insight.actionName) return;
     const key = insightKey(insight);
     setActionBusyKey(key);
     setActionMessage(null);
+    // LOCAL_ONLY_ACTIONS never leave the machine - the action already runs
+    // entirely through the local privileged helper (see system_repair.rs),
+    // so "let the agent do it" means the local AnalystBlaze agent, not a
+    // server-queued RemoteCommand. Same call as "fazer eu mesmo", just
+    // reached from this button.
+    if (LOCAL_ONLY_ACTIONS.has(insight.actionName)) {
+      if (!onApplyInsightActionLocally) return;
+      try {
+        await onApplyInsightActionLocally(insight.actionName);
+        track("insight_action_applied_by_local_agent", { actionName: insight.actionName });
+        setActionMessage("O agente local esta cuidando disso. Acompanhe o progresso em Controles > Avancado > Saude do Windows.");
+        dismissInsight(insight);
+      } catch (e: any) {
+        setActionMessage(e?.message ?? "Falha ao aplicar a acao.");
+      } finally {
+        setActionBusyKey(null);
+      }
+      return;
+    }
+    if (!onRequestAgentApplyInsight) return;
     try {
       await onRequestAgentApplyInsight(insight.actionName, insight.title, insight.explanation);
       track("insight_action_requested_from_agent", { actionName: insight.actionName });
@@ -617,7 +638,8 @@ export function Insights({
               ins.actionName && LOCALLY_EXECUTABLE_ACTIONS.has(ins.actionName) && onApplyInsightActionLocally,
             );
             const canRequestAgent = Boolean(
-              ins.actionName && !LOCAL_ONLY_ACTIONS.has(ins.actionName) && onRequestAgentApplyInsight,
+              ins.actionName &&
+                (LOCAL_ONLY_ACTIONS.has(ins.actionName) ? onApplyInsightActionLocally : onRequestAgentApplyInsight),
             );
             return (
               <article
