@@ -462,21 +462,6 @@ export function Settings({
           </div>
         </div>
 
-        <div className="mt-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-          <div className="mb-3 text-sm font-semibold text-slate-100">{t("settings.aiRules")}</div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <NumberRule label={t("settings.aiGameConfidence")} value={aiPolicy.game_min_confidence} min={0.5} max={0.98} step={0.01} onChange={(game_min_confidence) => updateAiPolicy({ game_min_confidence })} />
-            <NumberRule label={t("settings.aiGameCooldown")} value={aiPolicy.game_cooldown_seconds} min={60} max={21600} step={60} onChange={(game_cooldown_seconds) => updateAiPolicy({ game_cooldown_seconds })} />
-            <NumberRule label={t("settings.aiPcCleanCooldown")} value={aiPolicy.pc_clean_cooldown_seconds} min={600} max={86400} step={300} onChange={(pc_clean_cooldown_seconds) => updateAiPolicy({ pc_clean_cooldown_seconds })} />
-            <NumberRule label={t("settings.aiCleanupIdle")} value={aiPolicy.cleanup_min_idle_seconds} min={60} max={43200} step={60} onChange={(cleanup_min_idle_seconds) => updateAiPolicy({ cleanup_min_idle_seconds })} />
-            <NumberRule label={t("settings.aiCleanupDisk")} value={aiPolicy.cleanup_disk_threshold_percent} min={70} max={99} step={1} suffix="%" onChange={(cleanup_disk_threshold_percent) => updateAiPolicy({ cleanup_disk_threshold_percent })} />
-            <NumberRule label={t("settings.aiCpuThermal")} value={aiPolicy.thermal_cpu_limit_c} min={70} max={105} step={1} suffix="C" onChange={(thermal_cpu_limit_c) => updateAiPolicy({ thermal_cpu_limit_c })} />
-            <NumberRule label={t("settings.aiGpuThermal")} value={aiPolicy.thermal_gpu_limit_c} min={70} max={100} step={1} suffix="C" onChange={(thermal_gpu_limit_c) => updateAiPolicy({ thermal_gpu_limit_c })} />
-            <NumberRule label={t("settings.aiBatterySaver")} value={aiPolicy.battery_saver_threshold_percent} min={5} max={50} step={1} suffix="%" onChange={(battery_saver_threshold_percent) => updateAiPolicy({ battery_saver_threshold_percent })} />
-            <NumberRule label={t("settings.aiNetworkLatency")} value={aiPolicy.network_latency_threshold_ms} min={40} max={500} step={5} suffix="ms" onChange={(network_latency_threshold_ms) => updateAiPolicy({ network_latency_threshold_ms })} />
-          </div>
-        </div>
-
         <div className="mt-4 flex flex-col gap-3">
           <PolicyGroup
             icon={<Trash2 className="h-4 w-4 text-cyan-300" />}
