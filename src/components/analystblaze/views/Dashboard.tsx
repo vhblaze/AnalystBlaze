@@ -8,7 +8,6 @@ import {
   HardDrive,
   MemoryStick,
   MonitorPlay,
-  PlugZap,
   ShieldCheck,
   Sparkles,
   Thermometer,
@@ -28,7 +27,6 @@ import {
 } from "@/services/tauri/agent";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useI18n } from "@/i18n";
-import { temperatureSourceLabel } from "@/lib/telemetry-labels";
 
 const HISTORY_LEN = 28;
 
@@ -278,9 +276,7 @@ export function Dashboard({
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
         <MetricCard icon={MemoryStick} label={t("dashboard.ramLoad")} value={telemetry ? formatPercent(telemetry.ram_usage_percent) : "--"} detail={telemetry ? `${formatMb(telemetry.ram_usage_mb)} / ${formatMb(telemetry.ram_total_mb ?? 0)}` : t("common.unavailable")} />
         <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={telemetry?.gpu_name || "--"} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} ${t("dashboard.gpuLoad")}` : t("dashboard.gpuLoadUnavailable")} />
-        <MetricCard icon={Thermometer} label={t("dashboard.cpuTemp")} value={formatTemp(telemetry?.cpu_temperature, telemetry?.cpu_temperature_available)} detail={telemetry ? thermalDetail(telemetry) : t("common.unavailable")} />
         <MetricCard icon={Thermometer} label={t("dashboard.gpuTemp")} value={formatTemp(telemetry?.gpu_temperature, telemetry?.gpu_temperature_available)} detail={telemetry ? `${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")} / ${thermalStateLabel(telemetry.thermal_state)}` : t("common.unavailable")} />
-        <MetricCard icon={PlugZap} label="Energia" value={formatWatts(telemetry?.watts)} detail={telemetry ? energyDetail(telemetry) : t("common.unavailable")} />
         <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
         <MetricCard
           icon={Wifi}
@@ -434,40 +430,12 @@ function formatTemp(value: number | undefined, available: boolean | undefined) {
   return `${Math.round(value)} C`;
 }
 
-function formatWatts(value?: number | null) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "--";
-  return `${Math.round(value)} W`;
-}
-
-function thermalDetail(telemetry: AgentTelemetrySnapshot) {
-  const source = telemetry.cpu_temperature_source ? temperatureSourceLabel(telemetry.cpu_temperature_source) : "sensor indisponivel";
-  const sensors = telemetry.thermal_sensors?.length ? `${telemetry.thermal_sensors.length} sensores` : source;
-  return `${thermalStateLabel(telemetry.thermal_state)} / ${trendLabel(telemetry.thermal_trend)} / ${sensors}`;
-}
-
-function energyDetail(telemetry: AgentTelemetrySnapshot) {
-  const confidence = typeof telemetry.energy_confidence === "number"
-    ? `${Math.round(telemetry.energy_confidence * 100)}%`
-    : "--";
-  const source = telemetry.is_estimated ? "estimado" : "sensor";
-  const power = telemetry.power_sensors?.length ? ` / ${telemetry.power_sensors.length} sensores W` : "";
-  return `${source}${power} / ${confidence} confianca / ${telemetry.power_profile ?? "perfil atual"}`;
-}
-
 function thermalStateLabel(value?: string) {
   if (value === "critical") return "critico";
   if (value === "hot") return "quente";
   if (value === "watch") return "atencao";
   if (value === "normal") return "normal";
   return "sem leitura";
-}
-
-function trendLabel(value?: string) {
-  if (value === "rising") return "subindo";
-  if (value === "falling") return "caindo";
-  if (value === "stable") return "estavel";
-  if (value === "warming_up") return "aquecendo";
-  return "tendencia indisponivel";
 }
 
 function formatGameModeMinutes(seconds: number) {

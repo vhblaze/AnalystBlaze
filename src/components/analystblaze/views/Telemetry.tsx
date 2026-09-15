@@ -46,7 +46,6 @@ const metrics: Metric[] = [
     max: 100,
     hue: 187,
     read: (s) => s.cpu_usage,
-    detail: cpuTemperatureDetail,
     status: percentStatus,
   },
   {
@@ -94,18 +93,6 @@ const metrics: Metric[] = [
     available: (s) => Boolean(s.latency_ms && s.latency_ms > 0),
     detail: (s) => networkDetail(s.network),
     status: (value) => (value == null ? "good" : value >= 110 ? "critical" : value >= 70 ? "watch" : "good"),
-  },
-  {
-    key: "cpu_temp",
-    labelKey: "telemetry.cpuTemp",
-    icon: Thermometer,
-    unit: "C",
-    max: 100,
-    hue: 12,
-    read: (s) => s.cpu_temperature ?? 0,
-    available: (s) => Boolean(s.cpu_temperature_available),
-    detail: cpuTemperatureDetail,
-    status: tempStatus,
   },
   {
     key: "gpu_temp",
@@ -571,12 +558,6 @@ function sampleRate(timestamps: number[]) {
 function systemSignalsFor(sample: AgentTelemetrySample | null, t: (key: string) => string) {
   return [
     {
-      icon: Thermometer,
-      label: t("telemetry.cpuTemp"),
-      value: cpuTemperatureMethodSummary(sample),
-      tone: tempStatus(sample?.cpu_temperature_available ? sample?.cpu_temperature ?? null : null),
-    },
-    {
       icon: Activity,
       label: t("telemetry.processes"),
       value: sample?.active_processes?.toString() ?? "--",
@@ -652,38 +633,11 @@ function formatTemp(value?: number | null, available?: boolean) {
   return `${Math.round(value)} C`;
 }
 
-function cpuTemperatureDetail(sample: AgentTelemetrySample) {
-  const temp = formatTemp(sample.cpu_temperature, sample.cpu_temperature_available);
-  if (temp === "--") return "sensor indisponivel";
-  return `${temp} - ${temperatureSourceLabel(sample.cpu_temperature_source)}`;
-}
-
 function gpuTemperatureDetail(sample: AgentTelemetrySample) {
   const temp = formatTemp(sample.gpu_temperature, sample.gpu_temperature_available);
   if (temp === "--") return "sensor GPU indisponivel";
   return `${temp} - ${temperatureSourceLabel(sample.gpu_temperature_source)}`;
 }
-
-function cpuTemperatureMethodSummary(sample: AgentTelemetrySample | null) {
-  if (!sample?.cpu_temperature_methods?.length) {
-    return sample?.cpu_temperature_available
-      ? `${formatTemp(sample.cpu_temperature, true)} - ${temperatureSourceLabel(sample.cpu_temperature_source)}`
-      : "--";
-  }
-
-  const available = sample.cpu_temperature_methods
-    .filter((method) => method.available && method.value_c != null && Number.isFinite(method.value_c))
-    .slice(0, 2);
-
-  if (!available.length) {
-    return sample.cpu_temperature_methods[0]?.label || "--";
-  }
-
-  return available
-    .map((method) => `${temperatureSourceLabel(method.source)} ${formatTemp(method.value_c, true)}`)
-    .join(" / ");
-}
-
 
 function formatDuration(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "--";
