@@ -275,7 +275,7 @@ export function Dashboard({
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
         <MetricCard icon={Cpu} label={t("dashboard.cpuInfo")} value={shortCpuName(telemetry?.cpu_name)} detail={telemetry ? `${formatPercent(telemetry.cpu_usage)} - ${formatGhz(telemetry.cpu_frequency_mhz)}` : t("common.unavailable")} />
         <MetricCard icon={MemoryStick} label={t("dashboard.ramLoad")} value={telemetry ? formatPercent(telemetry.ram_usage_percent) : "--"} detail={telemetry ? `${formatMb(telemetry.ram_usage_mb)} / ${formatMb(telemetry.ram_total_mb ?? 0)}` : t("common.unavailable")} />
-        <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={shortGpuName(telemetry?.gpu_name)} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} - ${formatTemp(telemetry.gpu_temperature, telemetry.gpu_temperature_available)}` : t("dashboard.gpuLoadUnavailable")} />
+        <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={shortGpuName(telemetry?.gpu_name)} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} - ${formatTemp(telemetry.gpu_temperature, telemetry.gpu_temperature_available)} - ${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")}` : t("dashboard.gpuLoadUnavailable")} />
         <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
         <MetricCard
           icon={Wifi}
