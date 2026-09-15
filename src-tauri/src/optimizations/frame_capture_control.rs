@@ -98,12 +98,12 @@ fn presentmon_path() -> Result<std::path::PathBuf, String> {
     let dir = exe
         .parent()
         .ok_or_else(|| "Nao foi possivel resolver o diretorio de instalacao.".to_string())?;
-    let candidate = dir.join("PresentMon.exe");
+    let candidate = dir.join("analystblaze-frame-engine.exe");
     if candidate.is_file() {
         Ok(candidate)
     } else {
         Err(format!(
-            "PresentMon.exe nao encontrado em {}",
+            "Motor de captura de frames nao encontrado em {}",
             candidate.display()
         ))
     }
@@ -133,7 +133,7 @@ fn start_frame_capture_sync(payload: Option<Value>) -> ExecutionResult {
         Err(error) => {
             return ExecutionResult {
                 success: false,
-                message: "PresentMon nao esta instalado nesta maquina.".to_string(),
+                message: "O motor de captura de frames nao esta instalado nesta maquina.".to_string(),
                 details: json!({ "implemented": true, "error": error }),
             };
         }
@@ -158,7 +158,7 @@ fn start_frame_capture_sync(payload: Option<Value>) -> ExecutionResult {
         Err(error) => {
             return ExecutionResult {
                 success: false,
-                message: "Nao foi possivel iniciar o PresentMon.".to_string(),
+                message: "Nao foi possivel iniciar a captura de frames.".to_string(),
                 details: json!({ "implemented": true, "error": error.to_string() }),
             };
         }
@@ -168,7 +168,7 @@ fn start_frame_capture_sync(payload: Option<Value>) -> ExecutionResult {
         let _ = child.kill();
         return ExecutionResult {
             success: false,
-            message: "PresentMon iniciou sem stdout capturavel.".to_string(),
+            message: "A captura de frames iniciou sem stdout capturavel.".to_string(),
             details: json!({ "implemented": true }),
         };
     };
@@ -208,7 +208,7 @@ fn start_frame_capture_sync(payload: Option<Value>) -> ExecutionResult {
     );
 
     ExecutionResult::ok(
-        "Captura de frames iniciada via PresentMon.",
+        "Captura de frames iniciada.",
         json!({
             "implemented": true,
             "captureId": capture_id,
@@ -358,7 +358,7 @@ fn write_pending_uploads(queued: &[Value]) -> Result<(), String> {
 fn start_frame_capture_sync(_payload: Option<Value>) -> ExecutionResult {
     ExecutionResult {
         success: false,
-        message: "Captura de frames via PresentMon disponivel apenas no Windows.".to_string(),
+        message: "Captura de frames disponivel apenas no Windows.".to_string(),
         details: json!({ "implemented": true }),
     }
 }
@@ -367,7 +367,7 @@ fn start_frame_capture_sync(_payload: Option<Value>) -> ExecutionResult {
 fn stop_frame_capture_sync(_payload: Option<Value>) -> ExecutionResult {
     ExecutionResult {
         success: false,
-        message: "Captura de frames via PresentMon disponivel apenas no Windows.".to_string(),
+        message: "Captura de frames disponivel apenas no Windows.".to_string(),
         details: json!({ "implemented": true }),
     }
 }

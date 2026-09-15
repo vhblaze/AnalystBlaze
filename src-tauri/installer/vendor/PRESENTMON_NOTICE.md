@@ -12,6 +12,15 @@ This is the small (~950KB) console-only executable, not the ~150MB
 service+GUI+overlay MSI installer the same project also publishes - we only
 need one-shot capture, not the persistent background service.
 
+Shipped to users as `analystblaze-frame-engine.exe` (renamed from
+`PresentMon.exe` at bundle time - see `tauri.conf.json`'s
+`bundle.resources`), so a bare third-party product name doesn't sit
+unexplained in the install folder; a real user assumed AnalystBlaze was
+"copying" someone else's app from seeing it (2026-09-15). The MIT license's
+attribution requirement is still satisfied via
+`installer/THIRD-PARTY-NOTICES.txt`, which ships alongside it in every
+install.
+
 ## Provenance (verified 2026-09-06)
 
 - **Source**: https://github.com/GameTechDev/PresentMon/releases/tag/v2.5.1

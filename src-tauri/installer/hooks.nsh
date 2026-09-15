@@ -29,13 +29,16 @@ Var PerMachineInstDirBeforeFix
   nsExec::ExecToLog 'sc.exe stop AnalystBlazeHelper'
   Pop $0
   ; sc.exe stop only signals the SERVICE process (analystblaze-desktop.exe
-  ; --analystblaze-helper-service) - it does NOT terminate PresentMon.exe,
-  ; which that service spawns as its own child process for ground-truth FPS
-  ; capture during Game Mode (see frame_capture_control.rs). A capture still
-  ; in flight (or one that never self-terminated) is left running, orphaned,
-  ; holding PresentMon.exe locked - a real user (Nicholas Maack, 2026-09) hit
-  ; exactly this: "Error opening file for writing: ...\PresentMon.exe".
-  nsExec::ExecToLog 'taskkill /F /IM PresentMon.exe'
+  ; --analystblaze-helper-service) - it does NOT terminate
+  ; analystblaze-frame-engine.exe (vendored PresentMon, renamed - see
+  ; installer/THIRD-PARTY-NOTICES.txt - to avoid a bare third-party binary
+  ; name sitting in the install folder), which that service spawns as its
+  ; own child process for ground-truth FPS capture during Game Mode (see
+  ; frame_capture_control.rs). A capture still in flight (or one that never
+  ; self-terminated) is left running, orphaned, holding the file locked -
+  ; a real user (Nicholas Maack, 2026-09) hit exactly this: "Error opening
+  ; file for writing: ...\PresentMon.exe" (before the rename).
+  nsExec::ExecToLog 'taskkill /F /IM analystblaze-frame-engine.exe'
   Pop $0
   ; Same reasoning for the main app's own executable, in case the user has
   ; it open (not just the helper service) while installing an update.
