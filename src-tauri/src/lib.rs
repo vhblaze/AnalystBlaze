@@ -1302,6 +1302,29 @@ async fn restart_pnp_device(device_id: String) -> Result<optimizations::Executio
 }
 
 #[tauri::command]
+async fn disable_game_dvr() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("DISABLE_GAME_DVR", None).await)
+}
+
+#[tauri::command]
+async fn repair_service(service_name: String) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "REPAIR_SERVICE",
+        Some(serde_json::json!({ "service_name": service_name })),
+    )
+    .await)
+}
+
+#[tauri::command]
+async fn disable_service_permanently(service_name: String) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "DISABLE_SERVICE_PERMANENTLY",
+        Some(serde_json::json!({ "service_name": service_name })),
+    )
+    .await)
+}
+
+#[tauri::command]
 async fn set_power_plan_balanced() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command("SET_POWER_PLAN_BALANCED", None).await)
 }
@@ -2192,6 +2215,9 @@ pub fn run() {
             start_dism_restore_health,
             dism_restore_health_status,
             restart_pnp_device,
+            disable_game_dvr,
+            repair_service,
+            disable_service_permanently,
             set_power_plan_balanced,
             set_power_plan_power_saver,
             set_telemetry_mode,

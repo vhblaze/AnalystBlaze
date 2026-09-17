@@ -293,6 +293,35 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: false,
             requires_privileged_helper: true,
         }),
+        // One HKCU DWORD (see windows_actions::disable_game_dvr_sync) -
+        // never needs admin, but still asks first since it changes user
+        // settings outside AnalystBlaze itself.
+        "DISABLE_GAME_DVR" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: true,
+            requires_privileged_helper: false,
+        }),
+        // Stop+start dance on an already-broken service - same
+        // unprivileged-first posture as STOP_SERVICE (many services grant
+        // stop/start to authenticated users; repair_service_sync reports
+        // requires_admin honestly when the SCM refuses).
+        "REPAIR_SERVICE" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: true,
+            requires_privileged_helper: false,
+        }),
+        // Changes the service's Start registry value (ChangeServiceConfig),
+        // which almost every service restricts to Administrators - routed
+        // through the privileged helper for reliability, unlike the plain
+        // stop/start actions above.
+        "DISABLE_SERVICE_PERMANENTLY" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: true,
+            requires_privileged_helper: true,
+        }),
         "APPLY_LATENCY_TWEAKS" => Some(CommandSafetyProfile {
             risk: RiskLevel::Critical,
             requires_local_confirmation: true,
@@ -359,6 +388,9 @@ pub fn supported_actions() -> &'static [&'static str] {
         "START_DISM_RESTORE_HEALTH",
         "DISM_RESTORE_HEALTH_STATUS",
         "RESTART_PNP_DEVICE",
+        "DISABLE_GAME_DVR",
+        "REPAIR_SERVICE",
+        "DISABLE_SERVICE_PERMANENTLY",
     ]
 }
 
@@ -593,7 +625,7 @@ fn validate_action_payload(
                 ));
             }
         }
-        "STOP_SERVICE" => {
+        "STOP_SERVICE" | "REPAIR_SERVICE" | "DISABLE_SERVICE_PERMANENTLY" => {
             let target = extract_target(payload).ok_or_else(|| {
                 safety_error(
                     "service_target_required",
@@ -1671,5 +1703,69 @@ mod tests {
         assert_eq!(profile.risk, super::RiskLevel::Safe);
         assert!(!profile.requires_local_confirmation);
         assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn disable_game_dvr_requires_local_confirmation_but_not_the_helper() {
+        let profile = validate_command("DISABLE_GAME_DVR", None, &context(CommandSource::ManualUser, None, true))
+            .expect("disabling Game DVR should be allowed with local confirmation");
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(profile.requires_snapshot);
+        assert!(!profile.requires_privileged_helper);
+
+        let unconfirmed = validate_command("DISABLE_GAME_DVR", None, &context(CommandSource::ManualUser, None, false));
+        assert!(unconfirmed.is_err());
+    }
+
+    #[test]
+    fn repair_service_and_disable_service_permanently_protect_critical_services() {
+        // DISABLE_SERVICE_PERMANENTLY requires the privileged helper;
+        // REPAIR_SERVICE doesn't - each needs the matching context or the
+        // helper-availability check would short-circuit before ever
+        // reaching the critical-service check this test is about.
+        for (action, ctx) in [
+            ("REPAIR_SERVICE", context(CommandSource::ManualUser, None, true)),
+            ("DISABLE_SERVICE_PERMANENTLY", context_with_helper(true)),
+        ] {
+            let result = validate_command(action, Some(&json!({ "service_name": "WinDefend" })), &ctx);
+            assert_eq!(
+                result.unwrap_err().reason,
+                "critical_service_protected",
+                "{action} should refuse a critical service target"
+            );
+
+            let missing_target = validate_command(action, None, &ctx);
+            assert_eq!(missing_target.unwrap_err().reason, "service_target_required");
+        }
+    }
+
+    #[test]
+    fn repair_service_needs_only_local_confirmation_disable_service_needs_the_helper_too() {
+        let repair = validate_command(
+            "REPAIR_SERVICE",
+            Some(&json!({ "service_name": "SomeVendorUpdater" })),
+            &context(CommandSource::ManualUser, None, true),
+        )
+        .expect("repairing a non-critical service should be allowed with local confirmation alone");
+        assert_eq!(repair.risk, super::RiskLevel::Sensitive);
+        assert!(repair.requires_snapshot);
+        assert!(!repair.requires_privileged_helper);
+
+        let disable = validate_command(
+            "DISABLE_SERVICE_PERMANENTLY",
+            Some(&json!({ "service_name": "SomeVendorUpdater" })),
+            &context_with_helper(true),
+        )
+        .expect("disabling a non-critical service should be allowed with helper and local confirmation");
+        assert_eq!(disable.risk, super::RiskLevel::Sensitive);
+        assert!(disable.requires_snapshot);
+        assert!(disable.requires_privileged_helper);
+
+        let disable_without_helper = validate_command(
+            "DISABLE_SERVICE_PERMANENTLY",
+            Some(&json!({ "service_name": "SomeVendorUpdater" })),
+            &context(CommandSource::ManualUser, None, true),
+        );
+        assert!(disable_without_helper.is_err());
     }
 }

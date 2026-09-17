@@ -43,6 +43,18 @@ export type Insight = {
    * failing devices it's about from actionName alone. Never sent to the
    * server (only LOCAL_ONLY_ACTIONS ever read this - see Insights.tsx). */
   actionContext?: Record<string, unknown>;
+  /** Overrides the generic "Fazer eu mesmo" button text when the server's
+   * card wants something more specific ("Tentar corrigir") - falls back to
+   * the generic label when absent, so every existing actionName keeps its
+   * current wording. */
+  actionLabel?: string;
+  /** A second, distinct local action on the same card - e.g. "tentar
+   * corrigir" (REPAIR_SERVICE) next to "desativar"
+   * (DISABLE_SERVICE_PERMANENTLY) for the same named service. Always
+   * local-only, same as actionName's LOCAL_ONLY_ACTIONS case. */
+  secondaryActionName?: string;
+  secondaryActionContext?: Record<string, unknown>;
+  secondaryActionLabel?: string;
   /** Required for locally-generated insights (not the server's, which don't
    * carry these yet): every local insight must be explicit about how risky
    * it is, whether it can be undone, how confident the detection is, and
@@ -67,6 +79,12 @@ type ServerCard = {
   recommendation?: string | null;
   severity?: string;
   metrics?: Record<string, unknown>;
+  actionName?: string;
+  actionContext?: Record<string, unknown>;
+  actionLabel?: string;
+  secondaryActionName?: string;
+  secondaryActionContext?: Record<string, unknown>;
+  secondaryActionLabel?: string;
 };
 
 type ServerAction = {
@@ -111,7 +129,16 @@ function normalizeServerInsights(payload: unknown): Insight[] {
       explanation: [card.message, card.recommendation].filter(Boolean).join(" ") || pairedAction?.reason || "",
       impact: impactFrom(card.metrics, pairedAction),
       category: categoryFrom(card, pairedAction),
-      actionName: pairedAction?.actionName,
+      // A card that names its own action (see InsightCard.actionName server-side)
+      // always wins over the legacy positional pairing below - that pairing
+      // was only ever meant for the always-present first card + the one
+      // generic APPLY_GAME_MODE/EMPTY_TEMP suggestion.
+      actionName: card.actionName ?? pairedAction?.actionName,
+      actionContext: card.actionContext,
+      actionLabel: card.actionLabel,
+      secondaryActionName: card.secondaryActionName,
+      secondaryActionContext: card.secondaryActionContext,
+      secondaryActionLabel: card.secondaryActionLabel,
     };
   });
 

@@ -52,6 +52,9 @@ const LOCALLY_EXECUTABLE_ACTIONS = new Set([
   "ENABLE_SCHEDULED_DEFRAG",
   "START_SYSTEM_FILE_CHECK",
   "RESTART_PNP_DEVICE",
+  "DISABLE_GAME_DVR",
+  "REPAIR_SERVICE",
+  "DISABLE_SERVICE_PERMANENTLY",
 ]);
 /** Actions that only ever run on the user's own machine, never queued to
  * the server - either because the action isn't (yet) registered in the
@@ -62,7 +65,18 @@ const LOCALLY_EXECUTABLE_ACTIONS = new Set([
  * these, "Deixar o agente fazer" still shows (the local AnalystBlaze agent
  * is still "the agent"), but routes to the same local call as "Fazer eu
  * mesmo" instead of POSTing to /insights/actions - see requestAgentApply. */
-const LOCAL_ONLY_ACTIONS = new Set(["START_SYSTEM_FILE_CHECK", "RESTART_PNP_DEVICE"]);
+const LOCAL_ONLY_ACTIONS = new Set([
+  "START_SYSTEM_FILE_CHECK",
+  "RESTART_PNP_DEVICE",
+  "DISABLE_GAME_DVR",
+  "REPAIR_SERVICE",
+  "DISABLE_SERVICE_PERMANENTLY",
+]);
+/** Actions whose useAuth wrapper resolves with the real outcome instead of
+ * throwing on failure (see restartPnpDevice's comment in useAuth.ts) -
+ * "didn't fix it" is legitimate information to show, not an exception, so
+ * these only dismiss the card when the outcome actually says success. */
+const HONEST_OUTCOME_ACTIONS = new Set(["RESTART_PNP_DEVICE", "REPAIR_SERVICE", "DISABLE_SERVICE_PERMANENTLY"]);
 /** How many Critical-level (level 1) Windows Event Log entries in the last
  * 24h are worth mentioning. This is deliberately conservative and paired
  * with "pode (nao necessariamente) indicar" wording below, not "seu Windows
@@ -208,25 +222,19 @@ export function Insights({
     });
   };
 
-  const applyLocally = async (insight: Insight) => {
-    if (!insight.actionName || !onApplyInsightActionLocally) return;
-    const key = insightKey(insight);
-    setActionBusyKey(key);
+  const applyAction = async (insight: Insight, actionName: string, actionContext: Record<string, unknown> | undefined, busyKey: string) => {
+    if (!onApplyInsightActionLocally) return;
+    setActionBusyKey(busyKey);
     setActionMessage(null);
     try {
-      const result = await onApplyInsightActionLocally(insight.actionName, insight.actionContext);
-      track("insight_action_applied_locally", { actionName: insight.actionName });
-      if (insight.actionName === "START_SYSTEM_FILE_CHECK") {
+      const result = await onApplyInsightActionLocally(actionName, actionContext);
+      track("insight_action_applied_locally", { actionName });
+      if (actionName === "START_SYSTEM_FILE_CHECK") {
         setActionMessage("Verificacao iniciada em segundo plano. Acompanhe o progresso em Controles > Avancado > Saude do Windows.");
         dismissInsight(insight);
-      } else if (insight.actionName === "RESTART_PNP_DEVICE") {
-        // Resolves with the real outcome (unlike most other local actions,
-        // useAuth's restartPnpDevice doesn't throw on failure - see its
-        // comment) - only dismiss the card if it actually worked, so a
-        // "didn't fix it" result stays visible with the right message
-        // instead of the card just vanishing.
+      } else if (HONEST_OUTCOME_ACTIONS.has(actionName)) {
         const outcome = result as { success?: boolean; message?: string } | null;
-        setActionMessage(outcome?.message ?? "Falha ao reiniciar o dispositivo.");
+        setActionMessage(outcome?.message ?? "Falha ao aplicar a acao.");
         if (outcome?.success) dismissInsight(insight);
       } else {
         dismissInsight(insight);
@@ -236,6 +244,16 @@ export function Insights({
     } finally {
       setActionBusyKey(null);
     }
+  };
+
+  const applyLocally = async (insight: Insight) => {
+    if (!insight.actionName) return;
+    await applyAction(insight, insight.actionName, insight.actionContext, insightKey(insight));
+  };
+
+  const applySecondaryLocally = async (insight: Insight) => {
+    if (!insight.secondaryActionName) return;
+    await applyAction(insight, insight.secondaryActionName, insight.secondaryActionContext, `${insightKey(insight)}:secondary`);
   };
 
   const requestAgentApply = async (insight: Insight) => {
@@ -698,6 +716,10 @@ export function Insights({
               ins.actionName &&
                 (LOCAL_ONLY_ACTIONS.has(ins.actionName) ? onApplyInsightActionLocally : onRequestAgentApplyInsight),
             );
+            const secondaryBusy = actionBusyKey === `${key}:secondary`;
+            const canRunSecondaryLocally = Boolean(
+              ins.secondaryActionName && LOCALLY_EXECUTABLE_ACTIONS.has(ins.secondaryActionName) && onApplyInsightActionLocally,
+            );
             return (
               <article
                 key={key}
@@ -753,7 +775,7 @@ export function Insights({
                     )}
                   </div>
                 )}
-                {(canRunLocally || canRequestAgent) && (
+                {(canRunLocally || canRequestAgent || canRunSecondaryLocally) && (
                   <div className="mt-3 flex flex-wrap gap-2">
                     {canRequestAgent && (
                       <button
@@ -772,7 +794,16 @@ export function Insights({
                         className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
                       >
                         <User className="h-3.5 w-3.5" />
-                        Fazer eu mesmo
+                        {ins.actionLabel ?? "Fazer eu mesmo"}
+                      </button>
+                    )}
+                    {canRunSecondaryLocally && (
+                      <button
+                        disabled={secondaryBusy}
+                        onClick={() => void applySecondaryLocally(ins)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
+                      >
+                        {ins.secondaryActionLabel ?? "Desativar"}
                       </button>
                     )}
                   </div>

@@ -271,6 +271,47 @@ export function AppShell() {
           () => auth.restartPnpDevice(deviceId),
         );
       }
+      if (actionName === "DISABLE_GAME_DVR") {
+        return runConfirmed(
+          {
+            title: "Desativar gravacao do Game Bar",
+            description: "Desliga a gravacao em segundo plano do Xbox Game Bar (Game DVR). Reversivel - a chave anterior fica salva no historico de acoes.",
+            risk: "sensivel",
+            snapshot: true,
+          },
+          auth.disableGameDvr,
+        );
+      }
+      if (actionName === "REPAIR_SERVICE") {
+        const serviceName = typeof context?.serviceName === "string" ? context.serviceName : null;
+        if (!serviceName) {
+          return Promise.reject(new Error("serviceName ausente para REPAIR_SERVICE."));
+        }
+        return runConfirmed(
+          {
+            title: "Tentar corrigir servico",
+            description: "Para e reinicia o servico, depois confere se ele realmente continua ativo antes de dizer que funcionou. Pode nao resolver causas mais profundas (instalacao corrompida, dependencia ausente).",
+            risk: "sensivel",
+            snapshot: true,
+          },
+          () => auth.repairService(serviceName),
+        );
+      }
+      if (actionName === "DISABLE_SERVICE_PERMANENTLY") {
+        const serviceName = typeof context?.serviceName === "string" ? context.serviceName : null;
+        if (!serviceName) {
+          return Promise.reject(new Error("serviceName ausente para DISABLE_SERVICE_PERMANENTLY."));
+        }
+        return runConfirmed(
+          {
+            title: "Desativar servico permanentemente",
+            description: "O servico para de iniciar sozinho (Tipo de inicializacao = Desativado). Reversivel pelo historico de acoes, mas so use se tiver certeza de que nao precisa dele.",
+            risk: "sensivel",
+            snapshot: true,
+          },
+          () => auth.disableServicePermanently(serviceName),
+        );
+      }
       return Promise.reject(new Error(`Acao nao suportada localmente: ${actionName}`));
     },
     [runConfirmed, activateGameModeWithUpsell, auth],

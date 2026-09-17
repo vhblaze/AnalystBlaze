@@ -33,6 +33,9 @@ import {
   startSystemFileCheck as startSystemFileCheckAction,
   startDismRestoreHealth as startDismRestoreHealthAction,
   restartPnpDevice as restartPnpDeviceAction,
+  disableGameDvr as disableGameDvrAction,
+  repairService as repairServiceAction,
+  disableServicePermanently as disableServicePermanentlyAction,
   restartWindowsNow as restartWindowsNowAction,
   setAgentTelemetryMode,
   setDnsServers as setDnsServersAction,
@@ -772,6 +775,64 @@ export function useAuth() {
     return result;
   }, [runAction]);
 
+  // One HKCU DWORD, effectively can't fail for a reason the user could act
+  // on - still routed through runAction for the busy flag and audit trail
+  // consistency with every other local action.
+  const disableGameDvr = useCallback(async () => {
+    const result = await runAction(async () => {
+      const result = await disableGameDvrAction();
+      setMessage({
+        key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+        params: { message: result.message },
+      });
+      captureTelemetry({
+        name: result.success ? "game_dvr_disabled" : "game_dvr_disable_failed",
+        category: "agent",
+        properties: {},
+      });
+      return result;
+    }, { rethrow: true });
+    return result;
+  }, [runAction]);
+
+  // Same "the real outcome matters" shape as restartPnpDevice above -
+  // repair_service_sync verifies the service is genuinely still up before
+  // reporting success, so a false result here is honest "didn't fix it"
+  // information the UI should show, not an exception.
+  const repairService = useCallback(async (serviceName: string) => {
+    const result = await runAction(async () => {
+      const result = await repairServiceAction(serviceName);
+      setMessage({
+        key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+        params: { message: result.message },
+      });
+      captureTelemetry({
+        name: result.success ? "service_repaired" : "service_repair_failed",
+        category: "agent",
+        properties: {},
+      });
+      return result;
+    }, { rethrow: true });
+    return result;
+  }, [runAction]);
+
+  const disableServicePermanently = useCallback(async (serviceName: string) => {
+    const result = await runAction(async () => {
+      const result = await disableServicePermanentlyAction(serviceName);
+      setMessage({
+        key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+        params: { message: result.message },
+      });
+      captureTelemetry({
+        name: result.success ? "service_disabled_permanently" : "service_disable_permanently_failed",
+        category: "agent",
+        properties: {},
+      });
+      return result;
+    }, { rethrow: true });
+    return result;
+  }, [runAction]);
+
   const applyVisualPerformance = useCallback(async () => {
     const result = await runAction(async () => {
       const result = await applyVisualPerformanceMode();
@@ -1055,6 +1116,9 @@ export function useAuth() {
     startSystemFileCheck,
     startDismRestoreHealth,
     restartPnpDevice,
+    disableGameDvr,
+    repairService,
+    disableServicePermanently,
     applyVisualPerformance,
     restoreVisualPerformance,
     cleanTempDeep,

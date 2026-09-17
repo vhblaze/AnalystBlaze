@@ -1855,6 +1855,9 @@ fn supported_actions() -> &'static [&'static str] {
         "START_DISM_RESTORE_HEALTH",
         "DISM_RESTORE_HEALTH_STATUS",
         "RESTART_PNP_DEVICE",
+        "DISABLE_GAME_DVR",
+        "REPAIR_SERVICE",
+        "DISABLE_SERVICE_PERMANENTLY",
     ]
 }
 

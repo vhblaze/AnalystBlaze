@@ -1028,6 +1028,21 @@ export async function restartPnpDevice(deviceId: string): Promise<OptimizationRe
   return invoke<OptimizationResult>("restart_pnp_device", { deviceId });
 }
 
+export async function disableGameDvr(): Promise<OptimizationResult> {
+  requireTauriRuntime("Desativar Game DVR");
+  return invoke<OptimizationResult>("disable_game_dvr");
+}
+
+export async function repairService(serviceName: string): Promise<OptimizationResult> {
+  requireTauriRuntime("Corrigir servico");
+  return invoke<OptimizationResult>("repair_service", { serviceName });
+}
+
+export async function disableServicePermanently(serviceName: string): Promise<OptimizationResult> {
+  requireTauriRuntime("Desativar servico");
+  return invoke<OptimizationResult>("disable_service_permanently", { serviceName });
+}
+
 export async function setInterfaceMetric(adapterName: string, metric: number): Promise<OptimizationResult> {
   requireTauriRuntime("Prioridade de adaptador de rede");
   return invoke<OptimizationResult>("set_interface_metric", { adapterName, metric });

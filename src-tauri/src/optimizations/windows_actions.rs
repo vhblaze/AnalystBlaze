@@ -957,6 +957,376 @@ pub async fn restart_pnp_device(_payload: Option<Value>) -> ExecutionResult {
     }
 }
 
+/// Turns off Xbox Game Bar's background recording (Game DVR) - see
+/// telemetry::advanced::game_dvr_enabled for the exact key this reads and
+/// why it matters (correlates with DistributedCOM 10010 timeouts naming
+/// Game Bar/BcastDVR on other machines). One HKCU DWORD, so no admin
+/// needed and fully reversible via the usual snapshot/restore path.
+pub async fn disable_game_dvr(_payload: Option<Value>) -> ExecutionResult {
+    match tokio::task::spawn_blocking(disable_game_dvr_sync).await {
+        Ok(result) => result,
+        Err(error) => ExecutionResult {
+            success: false,
+            message: format!("Falha ao desativar o Game DVR: {error}"),
+            details: json!({ "implemented": true }),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn disable_game_dvr_sync() -> ExecutionResult {
+    use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
+    use winreg::RegKey;
+
+    const SUBKEY: &str = "System\\GameConfigStore";
+    const VALUE_NAME: &str = "GameDVR_Enabled";
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let key = match hkcu.open_subkey_with_flags(SUBKEY, KEY_READ | KEY_WRITE) {
+        Ok(key) => key,
+        Err(error) => {
+            return ExecutionResult {
+                success: false,
+                message: "Nao foi possivel abrir a chave do Game Bar para escrita.".to_string(),
+                details: json!({ "implemented": true, "error": error.to_string() }),
+            }
+        }
+    };
+
+    let previous: Option<u32> = key.get_value(VALUE_NAME).ok();
+    if previous == Some(0) {
+        return ExecutionResult::ok(
+            "O Game DVR ja estava desativado.",
+            json!({ "implemented": true, "changed": false }),
+        );
+    }
+
+    let snapshot = OptimizationSnapshot::new(
+        "DISABLE_GAME_DVR",
+        vec![SnapshotEntry::RegistryValue {
+            hive: "HKCU".to_string(),
+            subkey: SUBKEY.to_string(),
+            value_name: VALUE_NAME.to_string(),
+            previous_value_type: previous.map(|_| "REG_DWORD".to_string()),
+            previous_value_bytes: previous.map(|value| value.to_le_bytes().to_vec()),
+            target_value_type: "REG_DWORD".to_string(),
+            target_value_bytes: 0u32.to_le_bytes().to_vec(),
+        }],
+        json!({ "previous": previous }),
+    );
+
+    if let Err(error) = snapshot::save_snapshot(&snapshot) {
+        return ExecutionResult {
+            success: false,
+            message: "A alteracao foi bloqueada porque o snapshot nao pode ser salvo.".to_string(),
+            details: json!({ "implemented": true, "snapshot_error": error }),
+        };
+    }
+
+    if let Err(error) = key.set_value(VALUE_NAME, &0u32) {
+        let _ = snapshot::discard_snapshot(&snapshot.id);
+        return ExecutionResult {
+            success: false,
+            message: "Nao foi possivel gravar a chave do Game Bar.".to_string(),
+            details: json!({
+                "implemented": true,
+                "snapshot_discarded": true,
+                "error": error.to_string(),
+            }),
+        };
+    }
+
+    ExecutionResult::ok(
+        "Gravacao em segundo plano do Game Bar desativada.",
+        json!({
+            "implemented": true,
+            "changed": true,
+            "snapshot": { "id": snapshot.id, "reversible": true },
+        }),
+    )
+}
+
+#[cfg(not(windows))]
+fn disable_game_dvr_sync() -> ExecutionResult {
+    ExecutionResult {
+        success: false,
+        message: "Game Bar indisponivel nesta plataforma.".to_string(),
+        details: json!({ "implemented": true }),
+    }
+}
+
+/// Attempts an actual repair, not just silencing the symptom: stops a
+/// running-but-crashing service, then starts it fresh, then re-checks
+/// whether it's genuinely still up a moment later (not just that the start
+/// command was accepted) - the same "verify the real outcome" rule as
+/// restart_pnp_device_sync above. This clears real transient causes (a
+/// dependency that's now available, a timing/race issue at boot) but can't
+/// fix a corrupted install or a missing dependency - when it can't, it says
+/// so honestly and points at DISABLE_SERVICE_PERMANENTLY as the fallback
+/// instead of pretending it worked.
+pub async fn repair_service(payload: Option<Value>) -> ExecutionResult {
+    let target = extract_payload_string(payload.as_ref(), &["target", "service", "service_name", "name"]);
+    let Some(service_name) = target else {
+        return ExecutionResult {
+            success: false,
+            message: "Informe o nome do servico do Windows.".to_string(),
+            details: json!({ "implemented": true }),
+        };
+    };
+    match tokio::task::spawn_blocking(move || repair_service_sync(&service_name)).await {
+        Ok(result) => result,
+        Err(error) => ExecutionResult {
+            success: false,
+            message: format!("Falha ao tentar corrigir o servico: {error}"),
+            details: json!({ "implemented": true }),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn repair_service_sync(service_name: &str) -> ExecutionResult {
+    use std::thread;
+    use std::time::Duration;
+
+    if safety::is_critical_service(service_name) {
+        return ExecutionResult {
+            success: false,
+            message: "Servico critico protegido pela denylist local.".to_string(),
+            details: json!({ "implemented": true, "service": service_name, "blocked_by": "critical_service_denylist" }),
+        };
+    }
+
+    let state = match query_service_state(service_name) {
+        Ok(state) => state,
+        Err(error) => {
+            return ExecutionResult {
+                success: false,
+                message: "Servico nao encontrado ou inacessivel.".to_string(),
+                details: json!({ "implemented": true, "service": service_name, "error": error }),
+            }
+        }
+    };
+
+    if state.start_type == Some(4) {
+        return ExecutionResult {
+            success: false,
+            message: "O servico esta desativado - ative-o em Servicos do Windows antes de tentar corrigir.".to_string(),
+            details: json!({ "implemented": true, "service": service_name, "requires_enable": true }),
+        };
+    }
+
+    let snapshot = OptimizationSnapshot::new(
+        "REPAIR_SERVICE",
+        vec![SnapshotEntry::ServiceState {
+            service_name: service_name.to_string(),
+            display_name: state.display_name.clone(),
+            was_running: state.running,
+            start_type: state.start_type,
+        }],
+        json!({ "service": service_name, "was_running": state.running }),
+    );
+    if let Err(error) = snapshot::save_snapshot(&snapshot) {
+        return ExecutionResult {
+            success: false,
+            message: "A alteracao foi bloqueada porque o snapshot nao pode ser salvo.".to_string(),
+            details: json!({ "implemented": true, "service": service_name, "snapshot_error": error }),
+        };
+    }
+
+    if state.running {
+        let _ = Command::new("sc.exe").args(["stop", service_name]).no_window().output();
+        thread::sleep(Duration::from_millis(800));
+    }
+
+    let start_output = Command::new("sc.exe").args(["start", service_name]).no_window().output();
+    let Ok(start_output) = start_output else {
+        return ExecutionResult {
+            success: false,
+            message: "Nao foi possivel chamar o Service Control Manager.".to_string(),
+            details: json!({ "implemented": true, "service": service_name }),
+        };
+    };
+
+    let stdout = decode_console_bytes(&start_output.stdout);
+    let stderr = decode_console_bytes(&start_output.stderr);
+    let combined = format!("{stdout}\n{stderr}");
+    let accepted = start_output.status.success()
+        || combined.contains("RUNNING")
+        || combined.contains("START_PENDING")
+        || combined.to_ascii_lowercase().contains("already");
+
+    if !accepted {
+        return ExecutionResult {
+            success: false,
+            message: "O Windows recusou iniciar o servico - considere desativa-lo se ele nao for de um programa que voce usa.".to_string(),
+            details: json!({
+                "implemented": true,
+                "service": service_name,
+                "requires_admin": access_denied(&combined),
+                "stdout": stdout.trim(),
+                "stderr": stderr.trim(),
+            }),
+        };
+    }
+
+    // The SCM accepting the start command isn't proof it's actually fixed -
+    // a "crashing" service starts fine and dies seconds later. Wait, then
+    // check what's really running before declaring success.
+    thread::sleep(Duration::from_millis(1500));
+    let final_state = query_service_state(service_name);
+    let still_up = matches!(&final_state, Ok(state) if state.running);
+
+    if still_up {
+        ExecutionResult::ok(
+            "Servico reiniciado e continua ativo.",
+            json!({ "implemented": true, "service": service_name, "changed": true }),
+        )
+    } else {
+        ExecutionResult {
+            success: false,
+            message: "O servico iniciou mas parou de novo em seguida - reiniciar nao resolveu; considere desativa-lo se nao for de um programa que voce usa.".to_string(),
+            details: json!({ "implemented": true, "service": service_name, "restarted_but_died_again": true }),
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn repair_service_sync(service_name: &str) -> ExecutionResult {
+    ExecutionResult {
+        success: false,
+        message: "Servicos do Windows indisponiveis nesta plataforma.".to_string(),
+        details: json!({ "implemented": true, "service": service_name }),
+    }
+}
+
+/// Permanent version of STOP_SERVICE: sets the service's Start type to
+/// Disabled (via `sc config`, not just `sc stop`) so Windows stops retrying
+/// it on its own schedule - what stop_service_sync alone can't do for a
+/// trigger/demand-start service that isn't continuously "running" to begin
+/// with (e.g. Google Update's gupdate). Reversible: the previous start_type
+/// is snapshotted and restore_service_snapshots puts it back (see
+/// snapshot.rs).
+pub async fn disable_service_permanently(payload: Option<Value>) -> ExecutionResult {
+    let target = extract_payload_string(payload.as_ref(), &["target", "service", "service_name", "name"]);
+    let Some(service_name) = target else {
+        return ExecutionResult {
+            success: false,
+            message: "Informe o nome do servico do Windows.".to_string(),
+            details: json!({ "implemented": true }),
+        };
+    };
+    match tokio::task::spawn_blocking(move || disable_service_permanently_sync(&service_name)).await {
+        Ok(result) => result,
+        Err(error) => ExecutionResult {
+            success: false,
+            message: format!("Falha ao desativar o servico: {error}"),
+            details: json!({ "implemented": true }),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn disable_service_permanently_sync(service_name: &str) -> ExecutionResult {
+    if safety::is_critical_service(service_name) {
+        return ExecutionResult {
+            success: false,
+            message: "Servico critico protegido pela denylist local.".to_string(),
+            details: json!({ "implemented": true, "service": service_name, "blocked_by": "critical_service_denylist" }),
+        };
+    }
+
+    let state = match query_service_state(service_name) {
+        Ok(state) => state,
+        Err(error) => {
+            return ExecutionResult {
+                success: false,
+                message: "Servico nao encontrado ou inacessivel.".to_string(),
+                details: json!({ "implemented": true, "service": service_name, "error": error }),
+            }
+        }
+    };
+
+    if state.start_type == Some(4) {
+        return ExecutionResult::ok(
+            "O servico ja estava desativado.",
+            json!({ "implemented": true, "service": service_name, "changed": false }),
+        );
+    }
+
+    let snapshot = OptimizationSnapshot::new(
+        "DISABLE_SERVICE_PERMANENTLY",
+        vec![SnapshotEntry::ServiceState {
+            service_name: service_name.to_string(),
+            display_name: state.display_name.clone(),
+            was_running: state.running,
+            start_type: state.start_type,
+        }],
+        json!({ "service": service_name, "previous_start_type": state.start_type }),
+    );
+    if let Err(error) = snapshot::save_snapshot(&snapshot) {
+        return ExecutionResult {
+            success: false,
+            message: "A alteracao foi bloqueada porque o snapshot nao pode ser salvo.".to_string(),
+            details: json!({ "implemented": true, "service": service_name, "snapshot_error": error }),
+        };
+    }
+
+    if state.running {
+        let _ = Command::new("sc.exe").args(["stop", service_name]).no_window().output();
+    }
+
+    let config_output = Command::new("sc.exe")
+        .args(["config", service_name, "start=", "disabled"])
+        .no_window()
+        .output();
+    let Ok(config_output) = config_output else {
+        let _ = snapshot::discard_snapshot(&snapshot.id);
+        return ExecutionResult {
+            success: false,
+            message: "Nao foi possivel chamar o Service Control Manager.".to_string(),
+            details: json!({ "implemented": true, "service": service_name, "snapshot_discarded": true }),
+        };
+    };
+
+    if !config_output.status.success() {
+        let _ = snapshot::discard_snapshot(&snapshot.id);
+        let stdout = decode_console_bytes(&config_output.stdout);
+        let stderr = decode_console_bytes(&config_output.stderr);
+        let combined = format!("{stdout}\n{stderr}");
+        return ExecutionResult {
+            success: false,
+            message: "O Windows recusou desativar o servico.".to_string(),
+            details: json!({
+                "implemented": true,
+                "service": service_name,
+                "snapshot_discarded": true,
+                "requires_admin": access_denied(&combined),
+                "stdout": stdout.trim(),
+                "stderr": stderr.trim(),
+            }),
+        };
+    }
+
+    ExecutionResult::ok(
+        "Servico desativado - nao inicia mais sozinho. Reversivel pelo historico de acoes.",
+        json!({
+            "implemented": true,
+            "service": service_name,
+            "changed": true,
+            "snapshot": { "id": snapshot.id, "reversible": true },
+        }),
+    )
+}
+
+#[cfg(not(windows))]
+fn disable_service_permanently_sync(service_name: &str) -> ExecutionResult {
+    ExecutionResult {
+        success: false,
+        message: "Servicos do Windows indisponiveis nesta plataforma.".to_string(),
+        details: json!({ "implemented": true, "service": service_name }),
+    }
+}
+
 fn extract_payload_string(payload: Option<&Value>, keys: &[&str]) -> Option<String> {
     let payload = payload?;
     keys.iter()

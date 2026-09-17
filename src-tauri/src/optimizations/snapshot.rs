@@ -523,8 +523,30 @@ pub fn restore_snapshot_entries(snapshot: &OptimizationSnapshot) -> SnapshotRest
             SnapshotEntry::ServiceState {
                 service_name,
                 was_running,
+                start_type,
                 ..
             } => {
+                // Only DISABLE_SERVICE_PERMANENTLY actually changes start_type
+                // (STOP_SERVICE/REPAIR_SERVICE only stop/start, never touch
+                // it) - gating on action_name keeps this a no-op, including
+                // the extra `sc config` call, for every existing snapshot
+                // kind that never needed it.
+                if snapshot.action_name == "DISABLE_SERVICE_PERMANENTLY" {
+                    if let Some(arg) = start_type.and_then(|value| start_type_arg(value)) {
+                        match restore_service_start_type(service_name, arg) {
+                            Ok(()) => summary.messages.push(format!(
+                                "Tipo de inicializacao restaurado para {service_name}."
+                            )),
+                            Err(error) => {
+                                summary.failed_entries += 1;
+                                summary.messages.push(format!(
+                                    "Falha ao restaurar tipo de inicializacao de {service_name}: {error}"
+                                ));
+                            }
+                        }
+                    }
+                }
+
                 if !was_running {
                     summary.restored_entries += 1;
                     summary.messages.push(format!(
@@ -1115,6 +1137,42 @@ fn start_service(service_name: &str) -> Result<(), String> {
     }
 }
 
+/// Maps a Windows service Start registry value to the token `sc config
+/// start=` expects. 0 (Boot) and 1 (System) are deliberately excluded -
+/// nothing this app disables is ever a boot/system-start driver, and this
+/// function is only ever asked to restore what DISABLE_SERVICE_PERMANENTLY
+/// itself set, which is always one of these three.
+fn start_type_arg(value: u32) -> Option<&'static str> {
+    match value {
+        2 => Some("auto"),
+        3 => Some("demand"),
+        4 => Some("disabled"),
+        _ => None,
+    }
+}
+
+fn restore_service_start_type(service_name: &str, start_arg: &str) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let output = Command::new("sc.exe")
+            .args(["config", service_name, "start=", start_arg])
+            .no_window()
+            .output()
+            .map_err(|error| error.to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(decode_console_bytes(&output.stderr).trim().to_string())
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = (service_name, start_arg);
+        Err("Servicos do Windows indisponiveis nesta plataforma.".to_string())
+    }
+}
+
 #[cfg(windows)]
 fn restore_dns_configuration(
     adapter_name: &str,
@@ -1336,7 +1394,7 @@ fn looks_like_guid(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_power_plan_output;
+    use super::{parse_power_plan_output, start_type_arg};
 
     #[test]
     fn parses_english_powercfg_output() {
@@ -1358,5 +1416,19 @@ mod tests {
 
         assert_eq!(parsed.scheme_guid, "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c");
         assert_eq!(parsed.scheme_name.as_deref(), Some("Alto desempenho"));
+    }
+
+    #[test]
+    fn start_type_arg_maps_the_three_restorable_values_and_rejects_the_rest() {
+        assert_eq!(start_type_arg(2), Some("auto"));
+        assert_eq!(start_type_arg(3), Some("demand"));
+        assert_eq!(start_type_arg(4), Some("disabled"));
+        // 0 (Boot) and 1 (System) are driver-only start types - nothing
+        // DISABLE_SERVICE_PERMANENTLY ever touches starts there, so restore
+        // deliberately leaves them alone rather than guessing an sc.exe
+        // token for a value it should never see.
+        assert_eq!(start_type_arg(0), None);
+        assert_eq!(start_type_arg(1), None);
+        assert_eq!(start_type_arg(99), None);
     }
 }
