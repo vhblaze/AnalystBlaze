@@ -14,4 +14,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Run adaptive optimizer regressions
-        run: cargo test optimizations::
+        run: cargo test "optimizations::"
