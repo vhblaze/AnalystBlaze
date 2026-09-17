@@ -17,3 +17,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+      - name: Run desktop security harness
+        run: cargo test --test security_harness
+      - name: Run adaptive optimizer regressions
+        run: cargo test optimizations::
