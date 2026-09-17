@@ -45,7 +45,7 @@ struct AppUsageEntry {
 /// cadence - call via `tokio::task::spawn_blocking` from async contexts,
 /// matching `scan_startup_impact_blocking`'s pattern.
 pub fn record_startup_app_sightings_blocking() {
-    let startup_apps = windows_inventory::collect_windows_inventory().startup_apps;
+    let startup_apps = windows_inventory::startup_apps_only();
     if startup_apps.is_empty() {
         return;
     }

@@ -41,6 +41,24 @@ pub fn collect_windows_inventory() -> WindowsInventory {
     inventory
 }
 
+/// Just the Run/RunOnce registry keys (a handful of values) - no audit
+/// event, and deliberately not routed through collect_windows_inventory(),
+/// which also walks every subkey under
+/// SYSTEM\CurrentControlSet\Services (869 on a real machine, each its own
+/// RegOpenKeyEx + two RegQueryValueEx calls). app_usage.rs's periodic
+/// startup-app-sighting check only ever needed this half - a real user
+/// caught the other half running every 60s, gaming or not, for a value it
+/// never used (see record_startup_app_sightings_blocking).
+#[cfg(windows)]
+pub fn startup_apps_only() -> Vec<StartupApp> {
+    startup_apps()
+}
+
+#[cfg(not(windows))]
+pub fn startup_apps_only() -> Vec<StartupApp> {
+    Vec::new()
+}
+
 #[cfg(windows)]
 fn collect_windows_inventory_inner() -> WindowsInventory {
     WindowsInventory {
