@@ -564,7 +564,16 @@ pub fn execute(
         // papers over that instead of surfacing a transient blip as a hard
         // failure - each attempt re-signs with a fresh nonce, so retries
         // are safe to replay.
-        const MAX_ATTEMPTS: u32 = 6;
+        //
+        // Also the real safety net for a burst of near-simultaneous calls
+        // (Game Mode activation alone can fire several helper-routed
+        // actions back to back) outrunning PIPE_LISTENER_COUNT at that
+        // instant - a real case showed RESTART_PNP_DEVICE still failing
+        // this way minutes after the helper itself was confirmed healthy
+        // (15/15 fresh raw connects succeeded), which is what pushed this
+        // from 6 attempts/~7.5s to 8/~14s alongside doubling the listener
+        // pool below.
+        const MAX_ATTEMPTS: u32 = 8;
         let mut last_error = String::new();
         for attempt in 1..=MAX_ATTEMPTS {
             match execute_once(action_name, payload.clone(), source, local_confirmation) {
@@ -824,7 +833,17 @@ fn run_service_loop() -> windows_service::Result<()> {
 // little slack - all 3 could be mid-transition at once under real
 // concurrent load. Sized up for headroom under bursts, not just the
 // baseline single-client case.
-const PIPE_LISTENER_COUNT: usize = 8;
+//
+// Raised again 8 -> 16 after a real case: Game Mode activation alone fires
+// several helper-routed actions back to back (frame capture start, process
+// priority changes, ...), and a manual action (RESTART_PNP_DEVICE) landing
+// in that same window failed with the same os-error-233 pattern even
+// though the helper was independently confirmed healthy seconds later
+// (15/15 fresh raw pipe connects succeeded instantly). 8 concurrent
+// listeners wasn't enough headroom for that burst; each listener thread is
+// cheap (blocked in ConnectNamedPipe, no CPU cost) so there's no real
+// downside to more of them.
+const PIPE_LISTENER_COUNT: usize = 16;
 
 #[cfg(windows)]
 fn run_named_pipe_server(shutdown: Arc<AtomicBool>, signing_key: Arc<Vec<u8>>) {
