@@ -642,7 +642,16 @@ export function LocalControls({
               ["Rede", formatScore(performanceReport?.scoreBreakdown.network)],
               ["Termal", formatScore(performanceReport?.scoreBreakdown.thermal)],
             ]}
-            footer={performanceReport?.bottlenecks.map((item) => item.label).join(" / ") || "Sem gargalo critico no ultimo scan."}
+            footer={
+              performanceReport?.bottlenecks.length
+                ? [
+                    performanceReport.bottlenecks.map((item) => item.label).join(" / "),
+                    performanceReport.bottlenecks.find((item) => item.hardwareContext)?.hardwareContext,
+                  ]
+                    .filter(Boolean)
+                    .join(" — ")
+                : "Sem gargalo critico no ultimo scan."
+            }
           />
           <DiagnosticsPanel
             icon={<ListChecks className="h-4 w-4 text-cyan-300" />}

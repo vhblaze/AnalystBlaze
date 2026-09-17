@@ -11,7 +11,7 @@ use super::{
     local_ai_policy::{self, LocalAiPolicy},
     processes,
     snapshot::{self, OptimizationSnapshot, SnapshotEntry},
-    visual_effects, windows_actions, windows_inventory, ExecutionResult,
+    visual_effects, windows_actions, windows_inventory, winsat, ExecutionResult,
 };
 use crate::audit;
 use crate::telemetry::collector::{TelemetryCollector, TelemetrySample};
@@ -47,6 +47,12 @@ pub struct PerformanceReport {
     pub restore_session: Option<RestoreSessionSummary>,
     pub source: String,
     pub metrics_version: String,
+    /// Windows' own one-time hardware benchmark (see winsat.rs) - None
+    /// when Win32_WinSAT genuinely returned nothing; check
+    /// `assessment_valid` even when Some, since a present-but-stale/never-run
+    /// assessment still deserializes.
+    #[serde(default)]
+    pub winsat: Option<winsat::WinsatScores>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +120,14 @@ pub struct PerformanceBottleneck {
     pub score: f64,
     pub metric: Option<String>,
     pub recommended_action: Option<String>,
+    /// Plain-language note from cross-referencing this bottleneck's live
+    /// pressure score against Windows' own WinSAT hardware benchmark (see
+    /// winsat.rs) - only set when WinSAT has a valid, relevant reading and
+    /// it's clearly on one side or the other (weak hardware vs. hardware
+    /// that's clearly not the limit here). Absent, not a guess, in the
+    /// ambiguous middle or when WinSAT itself is unavailable/stale.
+    #[serde(default)]
+    pub hardware_context: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -671,6 +685,7 @@ pub fn performance_summary_payload(report: &PerformanceReport) -> Value {
         "restoreSession": report.restore_session,
         "source": report.source,
         "metricsVersion": report.metrics_version,
+        "winsat": report.winsat,
     })
 }
 
@@ -725,12 +740,14 @@ fn run_performance_scan_blocking(
         game_detected: detected_game.detected,
         game_process: detected_game.process_name.clone(),
     };
+    let winsat_scores = winsat::current_scores();
     let score = score_report(
         &sample,
         &metrics,
         power_plan
             .as_ref()
             .and_then(|plan| plan.scheme_name.as_deref()),
+        winsat_scores.as_ref(),
     );
     let previous = previous_report_for_delta(&normalized_mode);
     let score_delta_points = previous
@@ -765,6 +782,7 @@ fn run_performance_scan_blocking(
         restore_session: None,
         source: "local_performance_scan".to_string(),
         metrics_version: "performance-suite-v1".to_string(),
+        winsat: winsat_scores,
     };
 
     save_report(report.clone())?;
@@ -802,6 +820,7 @@ fn score_report(
     sample: &TelemetrySample,
     metrics: &PerformanceMetrics,
     power_plan_name: Option<&str>,
+    winsat_scores: Option<&winsat::WinsatScores>,
 ) -> ScoreComputation {
     let boot_startup = clamp_score(
         100.0
@@ -880,7 +899,7 @@ fn score_report(
         thermal: round1(thermal),
         gaming: gaming.map(round1),
     };
-    let bottlenecks = bottlenecks_from_scores(&breakdown, metrics);
+    let bottlenecks = bottlenecks_from_scores(&breakdown, metrics, winsat_scores);
 
     ScoreComputation {
         overall_score: round1(clamp_score(weighted_total / weight)),
@@ -899,6 +918,7 @@ struct ScoreComputation {
 fn bottlenecks_from_scores(
     breakdown: &ScoreBreakdown,
     metrics: &PerformanceMetrics,
+    winsat_scores: Option<&winsat::WinsatScores>,
 ) -> Vec<PerformanceBottleneck> {
     let mut items = Vec::new();
     maybe_bottleneck(
@@ -975,7 +995,60 @@ fn bottlenecks_from_scores(
     }
     items.sort_by(|left, right| left.score.total_cmp(&right.score));
     items.truncate(6);
+
+    if let Some(winsat_scores) = winsat_scores.filter(|scores| scores.assessment_valid) {
+        for item in items.iter_mut() {
+            item.hardware_context = hardware_context_for(&item.id, winsat_scores);
+        }
+    }
+
     items
+}
+
+/// WinSAT scores run roughly 1.0-9.9. These thresholds are a judgment call,
+/// not a Microsoft-published cutoff: comfortably below/above the middle so
+/// a note only appears when the hardware reading is clearly on one side,
+/// never manufacturing a signal out of an ambiguous middle score.
+const WEAK_HARDWARE_SCORE: f64 = 5.5;
+const STRONG_HARDWARE_SCORE: f64 = 7.5;
+
+/// Cross-references a live-pressure bottleneck against WinSAT's static
+/// hardware benchmark for the matching subsystem - the whole point being to
+/// tell "close some apps, this goes away" apart from "this is the hardware
+/// ceiling, an upgrade is the honest answer". Only the categories WinSAT
+/// actually measures get a note; boot_startup/network/energy/thermal have
+/// no WinSAT analog and always return None here.
+fn hardware_context_for(bottleneck_id: &str, winsat_scores: &winsat::WinsatScores) -> Option<String> {
+    let (label, score) = match bottleneck_id {
+        "disk" => ("disco", winsat_scores.disk_score?),
+        "memory" => ("memoria", winsat_scores.memory_score?),
+        "background" => ("CPU", winsat_scores.cpu_score?),
+        "gaming" => {
+            // The weaker of the two graphics-related scores - a game is
+            // only as smooth as whichever one is actually the limit.
+            let lowest = [winsat_scores.d3d_score, winsat_scores.graphics_score]
+                .into_iter()
+                .flatten()
+                .fold(None, |acc: Option<f64>, value| {
+                    Some(acc.map_or(value, |current: f64| current.min(value)))
+                })?;
+            ("placa de video", lowest)
+        }
+        _ => return None,
+    };
+    let score = round1(score);
+
+    if score < WEAK_HARDWARE_SCORE {
+        Some(format!(
+            "O hardware de {label} tambem pontua baixo no WinSAT do Windows ({score}/9.9) - pode ser limite do proprio hardware, nao so uso temporario."
+        ))
+    } else if score >= STRONG_HARDWARE_SCORE {
+        Some(format!(
+            "O hardware de {label} pontua bem no WinSAT do Windows ({score}/9.9) - a pressao atual e mais provavel de ser uso/software do que limite de hardware."
+        ))
+    } else {
+        None
+    }
 }
 
 fn maybe_bottleneck(
@@ -1002,6 +1075,7 @@ fn maybe_bottleneck(
         score,
         metric,
         recommended_action: recommended_action.map(ToString::to_string),
+        hardware_context: None,
     });
 }
 
@@ -2000,8 +2074,9 @@ fn unknown_performance_change() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        measured_gain_percent_from_delta, performance_change_label, score_change_percent,
-        score_delta_points, startup_impact_from_app, windows_inventory::StartupApp,
+        hardware_context_for, measured_gain_percent_from_delta, performance_change_label,
+        score_change_percent, score_delta_points, startup_impact_from_app, winsat,
+        windows_inventory::StartupApp,
     };
 
     #[test]
@@ -2032,5 +2107,66 @@ mod tests {
 
         assert_eq!(impact.recommendation, "delay");
         assert!(impact.available_actions.contains(&"delay".to_string()));
+    }
+
+    fn winsat_with(disk: Option<f64>, memory: Option<f64>, cpu: Option<f64>, d3d: Option<f64>, graphics: Option<f64>) -> winsat::WinsatScores {
+        winsat::WinsatScores {
+            disk_score: disk,
+            memory_score: memory,
+            cpu_score: cpu,
+            d3d_score: d3d,
+            graphics_score: graphics,
+            assessment_valid: true,
+        }
+    }
+
+    #[test]
+    fn a_weak_matching_hardware_score_flags_it_as_a_likely_ceiling() {
+        let scores = winsat_with(Some(3.5), None, None, None, None);
+        let note = hardware_context_for("disk", &scores).expect("weak disk score should get a note");
+        assert!(note.contains("3.5"));
+        assert!(note.contains("limite do proprio hardware"));
+    }
+
+    #[test]
+    fn a_strong_matching_hardware_score_points_at_software_instead() {
+        let scores = winsat_with(None, Some(9.0), None, None, None);
+        let note = hardware_context_for("memory", &scores).expect("strong memory score should get a note");
+        assert!(note.contains("9"));
+        assert!(note.contains("uso/software"));
+    }
+
+    #[test]
+    fn a_middling_score_stays_silent_rather_than_guess() {
+        let scores = winsat_with(None, None, Some(6.5), None, None);
+        assert!(hardware_context_for("background", &scores).is_none());
+    }
+
+    #[test]
+    fn gaming_uses_the_weaker_of_d3d_and_graphics_scores() {
+        let scores = winsat_with(None, None, None, Some(9.5), Some(4.0));
+        let note = hardware_context_for("gaming", &scores).expect("the weak graphics score should win");
+        assert!(note.contains("4"));
+        assert!(note.contains("placa de video"));
+    }
+
+    #[test]
+    fn categories_winsat_never_measures_never_get_a_note() {
+        let scores = winsat_with(Some(2.0), Some(2.0), Some(2.0), Some(2.0), Some(2.0));
+        for id in ["startup", "network", "energy", "thermal"] {
+            assert!(
+                hardware_context_for(id, &scores).is_none(),
+                "{id} has no WinSAT analog and should never get a hardware note"
+            );
+        }
+    }
+
+    #[test]
+    fn a_missing_score_for_the_relevant_category_stays_silent() {
+        let scores = winsat_with(None, Some(9.9), Some(9.9), Some(9.9), Some(9.9));
+        assert!(
+            hardware_context_for("disk", &scores).is_none(),
+            "no disk_score reading means nothing to compare against"
+        );
     }
 }

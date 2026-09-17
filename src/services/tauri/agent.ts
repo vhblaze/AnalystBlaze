@@ -520,6 +520,10 @@ export type PerformanceReport = {
     score: number;
     metric?: string | null;
     recommendedAction?: string | null;
+    /** Cross-referenced against Windows' own WinSAT hardware benchmark -
+     * only present when it clearly points one way or the other (weak
+     * hardware vs. software/usage-driven), see winsat.rs. */
+    hardwareContext?: string | null;
   }>;
   startupApps: StartupImpact[];
   restoreSession?: {
@@ -531,6 +535,17 @@ export type PerformanceReport = {
   } | null;
   source: string;
   metricsVersion: string;
+  /** Windows' one-time hardware capability benchmark (Win32_WinSAT) - null
+   * when unavailable. Check `assessmentValid` even when present, since a
+   * stale/never-run assessment still has a shape. */
+  winsat?: {
+    cpuScore?: number | null;
+    memoryScore?: number | null;
+    diskScore?: number | null;
+    graphicsScore?: number | null;
+    d3dScore?: number | null;
+    assessmentValid: boolean;
+  } | null;
 };
 
 export type CleanupCategory = {

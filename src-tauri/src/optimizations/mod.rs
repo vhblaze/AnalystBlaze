@@ -4,6 +4,8 @@ pub mod app_usage;
 pub mod autostart;
 pub mod cleanup;
 pub mod detection;
+#[cfg(test)]
+mod dpc_isr_probe;
 pub mod disk_tree;
 pub mod disk_usage;
 pub mod energy;
@@ -29,6 +31,7 @@ pub mod system_repair;
 pub mod visual_effects;
 pub mod windows_actions;
 pub mod windows_inventory;
+pub mod winsat;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

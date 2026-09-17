@@ -924,7 +924,9 @@ fn accept_named_pipe_client(
     }
 
     let raw_handle = handle.0 as usize;
-    thread::spawn(move || {
+    let done = Arc::new(AtomicBool::new(false));
+    let done_for_handler = Arc::clone(&done);
+    let child = thread::spawn(move || {
         let handle = windows::Win32::Foundation::HANDLE(raw_handle as _);
         if let Err(error) = handle_named_pipe_connection(handle, &signing_key) {
             eprintln!("Falha ao processar request do helper: {error}");
@@ -935,8 +937,99 @@ fn accept_named_pipe_client(
                 json!({ "error": error }),
             );
         }
+        done_for_handler.store(true, Ordering::SeqCst);
     });
+    spawn_connection_watchdog(&child, done);
     Ok(())
+}
+
+/// A client that connects and then never finishes sending/receiving its
+/// frame (killed mid-request, frozen, network-drive-mapped pipe client that
+/// hung, etc.) used to block `handle_named_pipe_connection`'s synchronous
+/// `read_exact`/`write_all` forever - the thread above never returns, never
+/// hits either audit-log branch, and just leaks. Over the helper's
+/// multi-day uptime enough of these accumulate that `thread::spawn` for a
+/// *new* connection can eventually fail (OS thread/handle exhaustion),
+/// which panics silently inside one of the 8 listener loops with nothing
+/// logged - the exact "helper still shows Running, stops answering, zero
+/// server-side errors" symptom a real 10-day-old production case showed.
+/// This watchdog guarantees every handler thread finishes within
+/// `PIPE_CONNECTION_TIMEOUT_SECS` one way or another: `CancelSynchronousIo`
+/// aborts that specific thread's pending blocking I/O (Vista+), which makes
+/// its `read_exact`/`write_all` return `Err` and the thread exit normally
+/// through the existing error-logging path.
+#[cfg(windows)]
+const PIPE_CONNECTION_TIMEOUT_SECS: u64 = 20;
+
+#[cfg(windows)]
+fn spawn_connection_watchdog(child: &thread::JoinHandle<()>, done: Arc<AtomicBool>) {
+    spawn_connection_watchdog_with_timeout(child, done, Duration::from_secs(PIPE_CONNECTION_TIMEOUT_SECS));
+}
+
+/// Split out from `spawn_connection_watchdog` purely so tests can use a
+/// timeout measured in milliseconds instead of waiting out the real
+/// (20s) production value.
+#[cfg(windows)]
+fn spawn_connection_watchdog_with_timeout(
+    child: &thread::JoinHandle<()>,
+    done: Arc<AtomicBool>,
+    timeout: Duration,
+) {
+    use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
+    use windows::Win32::System::Threading::GetCurrentProcess;
+
+    // Duplicated so the watchdog owns an independent, stable handle to this
+    // specific OS thread - it doesn't need `child`'s JoinHandle to stay
+    // alive (the caller still fire-and-forgets it, same as before this
+    // change), and a handle keeps the thread object referenceable even
+    // after the thread exits, so there's no risk of it pointing at some
+    // unrelated, later thread that happens to reuse the same ID.
+    let process = unsafe { GetCurrentProcess() };
+    let mut duplicated = HANDLE::default();
+    let duplicated_ok = unsafe {
+        DuplicateHandle(
+            process,
+            HANDLE(child.as_raw_handle()),
+            process,
+            &mut duplicated,
+            0,
+            false,
+            DUPLICATE_SAME_ACCESS,
+        )
+    }
+    .is_ok();
+
+    if !duplicated_ok {
+        audit_helper_event(
+            "warn",
+            "optimization.helper.pipe_watchdog_setup_failed",
+            "Nao foi possivel preparar o watchdog de timeout desta conexao - ela prossegue sem protecao contra vazamento de thread.",
+            json!({}),
+        );
+        return;
+    }
+
+    // Raw pointers aren't Send - carry it across the thread boundary as a
+    // usize (same trick already used for the connection handle itself
+    // above) and reconstruct the HANDLE on the other side.
+    let thread_handle_value = duplicated.0 as usize;
+    thread::spawn(move || {
+        thread::sleep(timeout);
+        let handle = HANDLE(thread_handle_value as *mut _);
+        if !done.load(Ordering::SeqCst) {
+            // Racing against the handler finishing naturally right around
+            // now is fine either way: CancelSynchronousIo on a thread with
+            // no pending synchronous I/O just returns an ignorable error.
+            let _ = unsafe { windows::Win32::System::IO::CancelSynchronousIo(handle) };
+            audit_helper_event(
+                "warn",
+                "optimization.helper.pipe_connection_timed_out",
+                "Conexao do named pipe excedeu o tempo limite e foi cancelada para nao vazar a thread.",
+                json!({ "timeout_ms": timeout.as_millis() as u64 }),
+            );
+        }
+        let _ = unsafe { CloseHandle(handle) };
+    });
 }
 
 #[cfg(windows)]
@@ -2422,5 +2515,50 @@ mod tests {
                 r"C:\Users\vitor\AppData\Local\AnalystBlaze\cargo-target\debug\analystblaze-desktop.exe"
             ))
         );
+    }
+
+    /// Real regression test for a production case (2026-09-17, ~10 days of
+    /// recurring "helper shows Running but stops answering the pipe, zero
+    /// server-side errors logged" reports): a per-connection handler thread
+    /// blocked forever in a synchronous read/write used to leak, with
+    /// nothing anywhere to show for it. This proves the actual OS mechanism
+    /// the fix relies on - CancelSynchronousIo on a duplicated thread
+    /// handle - genuinely unblocks a real stuck ReadFile, using a real
+    /// anonymous pipe with nothing on the write end, not a mock.
+    #[test]
+    fn watchdog_unblocks_a_thread_stuck_in_a_real_blocking_read() {
+        use std::os::windows::io::FromRawHandle;
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows::Win32::System::Pipes::CreatePipe;
+
+        let mut read_handle = HANDLE::default();
+        let mut write_handle = HANDLE::default();
+        unsafe { CreatePipe(&mut read_handle, &mut write_handle, None, 0) }
+            .expect("creating an anonymous pipe for the test should not fail");
+
+        let done = Arc::new(AtomicBool::new(false));
+        let done_for_handler = Arc::clone(&done);
+        let raw_read = read_handle.0 as usize;
+        let child = thread::spawn(move || {
+            // Nothing is ever written to the other end and it's kept open
+            // for the whole test, so this blocks forever unless cancelled -
+            // the same shape as handle_named_pipe_connection's read_exact
+            // waiting on a client that never finishes sending.
+            let mut file = unsafe { fs::File::from_raw_handle(raw_read as *mut _) };
+            let mut buf = [0u8; 1];
+            let _ = Read::read(&mut file, &mut buf);
+            done_for_handler.store(true, Ordering::SeqCst);
+        });
+
+        spawn_connection_watchdog_with_timeout(&child, Arc::clone(&done), Duration::from_millis(200));
+
+        thread::sleep(Duration::from_millis(1500));
+        assert!(
+            done.load(Ordering::SeqCst),
+            "the handler thread should have been unblocked by the watchdog and finished, not left hanging"
+        );
+        child.join().expect("handler thread should exit cleanly once cancelled");
+
+        let _ = unsafe { CloseHandle(write_handle) };
     }
 }
