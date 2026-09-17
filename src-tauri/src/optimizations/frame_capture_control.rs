@@ -65,7 +65,14 @@ fn reap_stale_captures(captures: &mut HashMap<String, ActiveCapture>) {
     for id in stale_ids {
         if let Some(mut capture) = captures.remove(&id) {
             let _ = capture.child.kill();
-            let _ = capture.child.wait();
+            // Same non-blocking reap as stop_frame_capture_sync below, and
+            // for the same reason - a stale capture is exactly the kind of
+            // process most likely to also be slow/stuck to actually exit,
+            // and this runs inline in the connection-handling thread of
+            // whatever unrelated START/STOP_FRAME_CAPTURE call triggered it.
+            std::thread::spawn(move || {
+                let _ = capture.child.wait();
+            });
         }
     }
 }
@@ -254,7 +261,21 @@ fn stop_frame_capture_sync(payload: Option<Value>) -> ExecutionResult {
     drop(captures);
 
     let _ = capture.child.kill();
-    let _ = capture.child.wait();
+    // wait() blocks until the OS confirms the process has actually exited -
+    // normally near-instant after a forceful kill(), but a real case showed
+    // this taking long enough to starve the helper's whole connection pool
+    // (a client's ~14s retry budget still ran out waiting on this one
+    // STOP_FRAME_CAPTURE call). PresentMon tearing down its ETW session
+    // while another PresentMon-family process (seen live: NVIDIA's own
+    // FrameView SDK service) holds a competing session on the same target
+    // is the leading theory, unconfirmed. Reaping happens on a detached
+    // thread instead of blocking this response on it - we already have
+    // every sample kill() lets us keep, so there's nothing this response
+    // needs to wait for.
+    let mut child = capture.child;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
 
     // The reader thread may still be mid-line right after kill() - a short
     // grace period lets it drain whatever PresentMon already flushed to the
