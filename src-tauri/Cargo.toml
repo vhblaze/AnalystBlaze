@@ -26,7 +26,7 @@ tauri-plugin-deep-link = "2.4.9"
 tauri-plugin-single-instance = { version = "2.4.2", features = ["deep-link"] }
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
-tokio = { version = "1.52.2", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.52.2", features = ["macros", "rt-multi-thread", "sync", "time", "net", "io-util"] }
 reqwest = { version = "0.13.3", default-features = false, features = ["json", "rustls"] }
 sysinfo = "0.38.4"
 rayon = "1.10.0"

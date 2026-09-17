@@ -8,17 +8,18 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::{Read, Write};
 #[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, FromRawHandle};
+use std::os::windows::io::AsRawHandle;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::process_ext::{decode_console_bytes, CommandExt};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    mpsc, Arc, Mutex, OnceLock,
-};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(windows)]
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(windows)]
+use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 
 use super::{safety, snapshot, ExecutionResult};
 use crate::audit;
@@ -26,7 +27,6 @@ use crate::audit;
 const SERVICE_NAME: &str = "AnalystBlazeHelper";
 const SERVICE_DISPLAY_NAME: &str = "AnalystBlaze Privileged Helper";
 const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
-const COMMAND_POLL_MS: u64 = 700;
 const HELPER_PIPE_NAME: &str = r"\\.\pipe\AnalystBlazeHelperRpcV1";
 const MAX_PIPE_FRAME_BYTES: usize = 1024 * 1024;
 const REQUEST_PROTOCOL_VERSION: u32 = 1;
@@ -677,16 +677,16 @@ fn run_service_loop() -> windows_service::Result<()> {
     };
 
     // How long we tell SCM a stop may take, and how long the shutdown path
-    // will actually wait for the pipe listeners to drain before reporting
-    // Stopped anyway. The pipe listeners block in a synchronous, uncancelable
-    // ConnectNamedPipe; wake_named_pipe_server() unsticks them by connecting,
-    // but that is best-effort and can lose a race. Before this, a lost race
-    // meant run_service_loop hung in pipe_thread.join(), never reported
-    // Stopped, and SCM eventually killed the process - logged as event 7034,
-    // "terminated unexpectedly", once per stop/restart. sc.exe stop is on the
-    // helper's restart() and stop() paths, so that fired routinely (e.g. any
-    // time the UI's "restart the helper" flow ran after a version bump).
-    const SHUTDOWN_WAIT_HINT: Duration = Duration::from_secs(20);
+    // will actually wait for outstanding connections to drain before
+    // reporting Stopped anyway. The old thread-per-connection model's pipe
+    // listeners blocked in a synchronous, uncancelable ConnectNamedPipe,
+    // needing a "connect to yourself to unstick it" workaround that could
+    // still lose the race (SCM event 7034, "terminated unexpectedly", once
+    // per stop/restart - sc.exe stop is on the helper's restart()/stop()
+    // paths, so that fired routinely). Tokio's async accept loop has no
+    // uncancelable blocking call to unstick - dropping the task IS the
+    // cancellation - so shutdown_timeout() below can't lose that race.
+    const SHUTDOWN_WAIT_HINT: Duration = Duration::from_secs(10);
     const SHUTDOWN_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
 
     fn service_status(
@@ -728,13 +728,39 @@ fn run_service_loop() -> windows_service::Result<()> {
         Vec::new()
     }));
 
-    let shutdown_flag = Arc::new(AtomicBool::new(false));
-    let pipe_shutdown = Arc::clone(&shutdown_flag);
-    let pipe_signing_key = Arc::clone(&signing_key);
-    let pipe_thread = thread::spawn(move || run_named_pipe_server(pipe_shutdown, pipe_signing_key));
+    // The whole pipe server - the accept loop and every connection it
+    // spawns - runs on this runtime for the service's lifetime. Async I/O
+    // means no fixed-size thread pool to exhaust: the actual root cause
+    // behind a real production incident where a burst of near-simultaneous
+    // requests (Game Mode firing several helper-routed actions back to
+    // back) outran a fixed listener count, and separately where one slow
+    // connection (a child process that took too long to reap after being
+    // killed) tied up a whole thread from that same fixed pool. Neither
+    // failure shape exists here: a slow connection only delays its own
+    // client, and spawn_blocking's pool for genuinely blocking work (child
+    // process I/O, sc.exe calls, ...) scales elastically instead of being
+    // capped at whatever PIPE_LISTENER_COUNT used to be.
+    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("Falha ao criar runtime assincrono do helper: {error}");
+            audit_helper_event(
+                "warn",
+                "optimization.helper.runtime_start_failed",
+                "Helper nao conseguiu iniciar o runtime assincrono do pipe.",
+                json!({ "error": error.to_string() }),
+            );
+            // Nothing left to serve without a runtime - report started and
+            // stopped immediately rather than hanging registration.
+            return Ok(());
+        }
+    };
+
+    let (shutdown_watch_tx, shutdown_watch_rx) = tokio::sync::watch::channel(false);
+    let server_signing_key = Arc::clone(&signing_key);
+    runtime.spawn(run_named_pipe_server_async(shutdown_watch_rx, server_signing_key));
 
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
-    let handler_shutdown = Arc::clone(&shutdown_flag);
     // register() hands back the status handle, but the control callback needs
     // it to report StopPending the instant a stop arrives - so it reads it
     // from this slot, which is filled immediately after register() returns.
@@ -743,7 +769,6 @@ fn run_service_loop() -> windows_service::Result<()> {
     let status_handle =
         service_control_handler::register(SERVICE_NAME, move |event| match event {
             ServiceControl::Stop | ServiceControl::Shutdown => {
-                handler_shutdown.store(true, Ordering::SeqCst);
                 // Acknowledge to SCM before the drain: a stop it has not been
                 // told is in progress is one it will start a kill timer for.
                 if let Some(handle) = handler_status.get() {
@@ -754,7 +779,7 @@ fn run_service_loop() -> windows_service::Result<()> {
                         SHUTDOWN_WAIT_HINT,
                     ));
                 }
-                wake_named_pipe_server();
+                let _ = shutdown_watch_tx.send(true);
                 let _ = shutdown_tx.send(());
                 ServiceControlHandlerResult::NoError
             }
@@ -769,14 +794,11 @@ fn run_service_loop() -> windows_service::Result<()> {
         Duration::default(),
     ))?;
 
-    loop {
-        if shutdown_rx.try_recv().is_ok() {
-            break;
-        }
-        thread::sleep(Duration::from_millis(COMMAND_POLL_MS));
-    }
+    // Blocks the service's dedicated thread until the SCM callback above
+    // sends a stop/shutdown signal - no poll interval needed (that used to
+    // add up to COMMAND_POLL_MS of pure latency on top of every stop).
+    let _ = shutdown_rx.recv();
 
-    shutdown_flag.store(true, Ordering::SeqCst);
     let _ = status_handle.set_service_status(service_status(
         ServiceState::StopPending,
         ServiceControlAccept::empty(),
@@ -784,28 +806,11 @@ fn run_service_loop() -> windows_service::Result<()> {
         SHUTDOWN_WAIT_HINT,
     ));
 
-    // Drain on a side thread and wait on it with a deadline. The listener
-    // threads hold nothing but pipe handles the OS reclaims at exit, so if
-    // one is still wedged in ConnectNamedPipe past the deadline it is safe to
-    // report Stopped and return without it - what must NOT happen is SCM
-    // killing us first because we never reported Stopped at all.
-    let (drained_tx, drained_rx) = mpsc::channel();
-    thread::spawn(move || {
-        for _ in 0..6 {
-            wake_named_pipe_server();
-            thread::sleep(Duration::from_millis(150));
-        }
-        let _ = pipe_thread.join();
-        let _ = drained_tx.send(());
-    });
-    if drained_rx.recv_timeout(SHUTDOWN_DRAIN_TIMEOUT).is_err() {
-        audit_helper_event(
-            "warn",
-            "optimization.helper.pipe_drain_timeout",
-            "Listeners do named pipe nao encerraram no prazo; servico reportando parada mesmo assim.",
-            json!({}),
-        );
-    }
+    // Waits up to SHUTDOWN_DRAIN_TIMEOUT for the accept loop and every
+    // in-flight connection task to finish, then force-drops whatever's
+    // left - Tokio's own built-in equivalent of the old poke-and-wait dance,
+    // minus the possibility of losing that race.
+    runtime.shutdown_timeout(SHUTDOWN_DRAIN_TIMEOUT);
 
     status_handle.set_service_status(service_status(
         ServiceState::Stopped,
@@ -816,69 +821,81 @@ fn run_service_loop() -> windows_service::Result<()> {
     Ok(())
 }
 
-// A single sequential listener (create instance, block until a client
-// connects, then create the next one) has a real gap: between "a client just
-// connected to instance A" and "instance B has been created and armed with
-// its own ConnectNamedPipe", there is no instance listening at all. A
-// client whose WaitNamedPipeW+CreateFile lands in that gap can still get a
-// handle back but then fail to write/read with "No process is on the other
-// end of the pipe" (os error 233) - the classic Windows named-pipe server
-// race, worse under any CPU contention that widens the gap. Running several
-// independent listener loops concurrently (the standard multithreaded named
-// pipe server pattern) means there's essentially always at least one
-// instance actively listening, since it now takes *all* of them to be
-// mid-transition at once instead of just the one. 3 was enough to close the
-// gap in isolation, but under a burst of near-simultaneous requests (rapid
-// repeated clicks in the UI, each opening its own connection) it left too
-// little slack - all 3 could be mid-transition at once under real
-// concurrent load. Sized up for headroom under bursts, not just the
-// baseline single-client case.
-//
-// Raised again 8 -> 16 after a real case: Game Mode activation alone fires
-// several helper-routed actions back to back (frame capture start, process
-// priority changes, ...), and a manual action (RESTART_PNP_DEVICE) landing
-// in that same window failed with the same os-error-233 pattern even
-// though the helper was independently confirmed healthy seconds later
-// (15/15 fresh raw pipe connects succeeded instantly). 8 concurrent
-// listeners wasn't enough headroom for that burst; each listener thread is
-// cheap (blocked in ConnectNamedPipe, no CPU cost) so there's no real
-// downside to more of them.
-const PIPE_LISTENER_COUNT: usize = 16;
-
+/// Each accepted connection gets this long to finish (read request, execute,
+/// write response) before it's abandoned - generous for a real request
+/// (normally well under a second) but bounded so nothing can hang forever.
+/// Unlike the old thread-per-connection model, abandoning it here needs no
+/// special cancellation: dropping the timed-out future simply stops polling
+/// it. Any genuinely blocking work it kicked off via spawn_blocking (a slow
+/// child.wait(), an sc.exe call, ...) keeps running to completion in the
+/// background on Tokio's own elastic blocking pool and its result is just
+/// discarded - it was never holding a dedicated slot the way a fixed-size
+/// thread pool's threads did.
 #[cfg(windows)]
-fn run_named_pipe_server(shutdown: Arc<AtomicBool>, signing_key: Arc<Vec<u8>>) {
-    let listeners: Vec<_> = (0..PIPE_LISTENER_COUNT)
+const PIPE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// A single sequential acceptor (create instance, await connect, *then*
+/// create the next one) has the same real gap the original thread-based
+/// design already had to work around: between "just accepted connection N"
+/// and "instance N+1 created and awaiting connect", nothing is listening -
+/// a client whose CreateFile lands in that gap still fails with "no process
+/// on the other end" (os error 233), async or not. Confirmed live: a real
+/// signed handshake through a single-acceptor version of this function hit
+/// that exact race and failed, even though raw connect floods (200
+/// simultaneous) mostly landed outside the gap and looked fine - a
+/// reminder that a stress test with no gap-timing precision can miss a real
+/// race a single unlucky real request still hits. Running several acceptor
+/// loops concurrently closes it the same way N listener threads used to,
+/// just as cheap async tasks instead of dedicated OS threads - so instead
+/// of picking a number to size against a burst (PIPE_LISTENER_COUNT's old
+/// job), this number only needs to be enough to keep the race closed, and
+/// every connection past that is still a plain Tokio task with no ceiling.
+#[cfg(windows)]
+const PIPE_ACCEPTOR_COUNT: usize = 16;
+
+/// Replaces the old model of N dedicated OS threads (`PIPE_LISTENER_COUNT`),
+/// each blocked in a synchronous, uncancelable `ConnectNamedPipe`. That
+/// fixed pool was the actual root cause behind two real production
+/// incidents: a burst of near-simultaneous requests (Game Mode alone fires
+/// several helper-routed actions back to back) outrunning whatever the
+/// count happened to be, and separately one slow connection (a child
+/// process that took too long to die after being killed) tying up a whole
+/// thread from that same limited pool while every other client starved.
+/// Each *connection* here becomes a lightweight Tokio task, not a
+/// dedicated OS thread, so there is no fixed number of connection "slots"
+/// to exhaust the way there used to be - PIPE_ACCEPTOR_COUNT below only
+/// bounds how many pipe instances are simultaneously *listening* (closing
+/// the accept race above), not how many can be *handled* concurrently.
+#[cfg(windows)]
+async fn run_named_pipe_server_async(
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    signing_key: Arc<Vec<u8>>,
+) {
+    let acceptors: Vec<_> = (0..PIPE_ACCEPTOR_COUNT)
         .map(|_| {
-            let shutdown = Arc::clone(&shutdown);
-            let signing_key = Arc::clone(&signing_key);
-            thread::spawn(move || run_named_pipe_listener_loop(shutdown, signing_key))
+            tokio::spawn(run_named_pipe_acceptor_loop(
+                shutdown_rx.clone(),
+                Arc::clone(&signing_key),
+            ))
         })
         .collect();
-    for listener in listeners {
-        let _ = listener.join();
+    for acceptor in acceptors {
+        let _ = acceptor.await;
     }
 }
 
 #[cfg(windows)]
-fn run_named_pipe_listener_loop(shutdown: Arc<AtomicBool>, signing_key: Arc<Vec<u8>>) {
+async fn run_named_pipe_acceptor_loop(
+    mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    signing_key: Arc<Vec<u8>>,
+) {
     loop {
-        if shutdown.load(Ordering::SeqCst) {
-            break;
+        if *shutdown_rx.borrow() {
+            return;
         }
 
-        match create_named_pipe_instance() {
-            Ok(handle) => {
-                if let Err(error) = accept_named_pipe_client(handle, &shutdown, Arc::clone(&signing_key)) {
-                    eprintln!("Falha no named pipe do helper: {error}");
-                    audit_helper_event(
-                        "warn",
-                        "optimization.helper.pipe_error",
-                        "Falha no canal named pipe do helper.",
-                        json!({ "error": error }),
-                    );
-                    thread::sleep(Duration::from_millis(250));
-                }
-            }
+        let server = match create_named_pipe_instance_async() {
+            Ok(server) => server,
             Err(error) => {
                 eprintln!("Falha ao criar named pipe do helper: {error}");
                 audit_helper_event(
@@ -887,67 +904,54 @@ fn run_named_pipe_listener_loop(shutdown: Arc<AtomicBool>, signing_key: Arc<Vec<
                     "Helper nao conseguiu criar o named pipe local.",
                     json!({ "error": error }),
                 );
-                thread::sleep(Duration::from_secs(2));
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                continue;
+            }
+        };
+
+        tokio::select! {
+            connect_result = server.connect() => {
+                match connect_result {
+                    Ok(()) => {
+                        let signing_key = Arc::clone(&signing_key);
+                        tokio::spawn(async move {
+                            handle_named_pipe_connection_with_timeout(server, signing_key).await;
+                        });
+                    }
+                    Err(error) => {
+                        audit_helper_event(
+                            "warn",
+                            "optimization.helper.pipe_connect_failed",
+                            "connect() do named pipe falhou.",
+                            json!({ "error": error.to_string() }),
+                        );
+                    }
+                }
+            }
+            _ = shutdown_rx.changed() => {
+                return;
             }
         }
     }
 }
 
 #[cfg(windows)]
-fn accept_named_pipe_client(
-    handle: windows::Win32::Foundation::HANDLE,
-    shutdown: &AtomicBool,
+async fn handle_named_pipe_connection_with_timeout(server: NamedPipeServer, signing_key: Arc<Vec<u8>>) {
+    handle_named_pipe_connection_with_timeout_for(server, signing_key, PIPE_CONNECTION_TIMEOUT).await;
+}
+
+/// Split out from `handle_named_pipe_connection_with_timeout` purely so
+/// tests can use a timeout measured in milliseconds instead of waiting out
+/// the real (20s) production value.
+#[cfg(windows)]
+async fn handle_named_pipe_connection_with_timeout_for(
+    server: NamedPipeServer,
     signing_key: Arc<Vec<u8>>,
-) -> Result<(), String> {
-    use windows::core::HRESULT;
-    use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_CONNECTED};
-    use windows::Win32::System::Pipes::{ConnectNamedPipe, DisconnectNamedPipe};
-
-    let connected = match unsafe { ConnectNamedPipe(handle, None) } {
-        Ok(()) => true,
-        Err(error) if error.code() == HRESULT::from_win32(ERROR_PIPE_CONNECTED.0) => true,
-        Err(error) => {
-            let _ = unsafe { CloseHandle(handle) };
-            return Err(error.to_string());
-        }
-    };
-
-    // Both branches below used to disconnect the client silently - no audit
-    // trail at all, indistinguishable from a client that simply never
-    // connected. Logging them closes that diagnostic blind spot: a client
-    // whose CreateFile races a mid-flight service shutdown here would
-    // otherwise look, from the client's perspective, exactly like the
-    // "wrote to a disconnected reader" (os error 233) failure with nothing
-    // server-side to explain it.
-    if !connected {
-        audit_helper_event(
-            "warn",
-            "optimization.helper.pipe_connect_failed",
-            "ConnectNamedPipe nao confirmou conexao do cliente.",
-            json!({}),
-        );
-        let _ = unsafe { DisconnectNamedPipe(handle) };
-        let _ = unsafe { CloseHandle(handle) };
-        return Ok(());
-    }
-    if shutdown.load(Ordering::SeqCst) {
-        audit_helper_event(
-            "warn",
-            "optimization.helper.pipe_client_dropped_for_shutdown",
-            "Cliente conectado durante desligamento do helper foi descartado sem resposta.",
-            json!({}),
-        );
-        let _ = unsafe { DisconnectNamedPipe(handle) };
-        let _ = unsafe { CloseHandle(handle) };
-        return Ok(());
-    }
-
-    let raw_handle = handle.0 as usize;
-    let done = Arc::new(AtomicBool::new(false));
-    let done_for_handler = Arc::clone(&done);
-    let child = thread::spawn(move || {
-        let handle = windows::Win32::Foundation::HANDLE(raw_handle as _);
-        if let Err(error) = handle_named_pipe_connection(handle, &signing_key) {
+    timeout: Duration,
+) {
+    match tokio::time::timeout(timeout, handle_named_pipe_connection_async(server, &signing_key)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
             eprintln!("Falha ao processar request do helper: {error}");
             audit_helper_event(
                 "warn",
@@ -956,109 +960,23 @@ fn accept_named_pipe_client(
                 json!({ "error": error }),
             );
         }
-        done_for_handler.store(true, Ordering::SeqCst);
-    });
-    spawn_connection_watchdog(&child, done);
-    Ok(())
-}
-
-/// A client that connects and then never finishes sending/receiving its
-/// frame (killed mid-request, frozen, network-drive-mapped pipe client that
-/// hung, etc.) used to block `handle_named_pipe_connection`'s synchronous
-/// `read_exact`/`write_all` forever - the thread above never returns, never
-/// hits either audit-log branch, and just leaks. Over the helper's
-/// multi-day uptime enough of these accumulate that `thread::spawn` for a
-/// *new* connection can eventually fail (OS thread/handle exhaustion),
-/// which panics silently inside one of the 8 listener loops with nothing
-/// logged - the exact "helper still shows Running, stops answering, zero
-/// server-side errors" symptom a real 10-day-old production case showed.
-/// This watchdog guarantees every handler thread finishes within
-/// `PIPE_CONNECTION_TIMEOUT_SECS` one way or another: `CancelSynchronousIo`
-/// aborts that specific thread's pending blocking I/O (Vista+), which makes
-/// its `read_exact`/`write_all` return `Err` and the thread exit normally
-/// through the existing error-logging path.
-#[cfg(windows)]
-const PIPE_CONNECTION_TIMEOUT_SECS: u64 = 20;
-
-#[cfg(windows)]
-fn spawn_connection_watchdog(child: &thread::JoinHandle<()>, done: Arc<AtomicBool>) {
-    spawn_connection_watchdog_with_timeout(child, done, Duration::from_secs(PIPE_CONNECTION_TIMEOUT_SECS));
-}
-
-/// Split out from `spawn_connection_watchdog` purely so tests can use a
-/// timeout measured in milliseconds instead of waiting out the real
-/// (20s) production value.
-#[cfg(windows)]
-fn spawn_connection_watchdog_with_timeout(
-    child: &thread::JoinHandle<()>,
-    done: Arc<AtomicBool>,
-    timeout: Duration,
-) {
-    use windows::Win32::Foundation::{CloseHandle, DuplicateHandle, DUPLICATE_SAME_ACCESS, HANDLE};
-    use windows::Win32::System::Threading::GetCurrentProcess;
-
-    // Duplicated so the watchdog owns an independent, stable handle to this
-    // specific OS thread - it doesn't need `child`'s JoinHandle to stay
-    // alive (the caller still fire-and-forgets it, same as before this
-    // change), and a handle keeps the thread object referenceable even
-    // after the thread exits, so there's no risk of it pointing at some
-    // unrelated, later thread that happens to reuse the same ID.
-    let process = unsafe { GetCurrentProcess() };
-    let mut duplicated = HANDLE::default();
-    let duplicated_ok = unsafe {
-        DuplicateHandle(
-            process,
-            HANDLE(child.as_raw_handle()),
-            process,
-            &mut duplicated,
-            0,
-            false,
-            DUPLICATE_SAME_ACCESS,
-        )
-    }
-    .is_ok();
-
-    if !duplicated_ok {
-        audit_helper_event(
-            "warn",
-            "optimization.helper.pipe_watchdog_setup_failed",
-            "Nao foi possivel preparar o watchdog de timeout desta conexao - ela prossegue sem protecao contra vazamento de thread.",
-            json!({}),
-        );
-        return;
-    }
-
-    // Raw pointers aren't Send - carry it across the thread boundary as a
-    // usize (same trick already used for the connection handle itself
-    // above) and reconstruct the HANDLE on the other side.
-    let thread_handle_value = duplicated.0 as usize;
-    thread::spawn(move || {
-        thread::sleep(timeout);
-        let handle = HANDLE(thread_handle_value as *mut _);
-        if !done.load(Ordering::SeqCst) {
-            // Racing against the handler finishing naturally right around
-            // now is fine either way: CancelSynchronousIo on a thread with
-            // no pending synchronous I/O just returns an ignorable error.
-            let _ = unsafe { windows::Win32::System::IO::CancelSynchronousIo(handle) };
+        Err(_elapsed) => {
             audit_helper_event(
                 "warn",
                 "optimization.helper.pipe_connection_timed_out",
-                "Conexao do named pipe excedeu o tempo limite e foi cancelada para nao vazar a thread.",
+                "Conexao do named pipe excedeu o tempo limite e foi abandonada.",
                 json!({ "timeout_ms": timeout.as_millis() as u64 }),
             );
         }
-        let _ = unsafe { CloseHandle(handle) };
-    });
+    }
 }
 
 #[cfg(windows)]
-fn handle_named_pipe_connection(
-    handle: windows::Win32::Foundation::HANDLE,
+async fn handle_named_pipe_connection_async(
+    mut pipe: NamedPipeServer,
     signing_key: &[u8],
 ) -> Result<(), String> {
-    use windows::Win32::Foundation::CloseHandle;
-    use windows::Win32::System::Pipes::DisconnectNamedPipe;
-
+    let handle = windows::Win32::Foundation::HANDLE(pipe.as_raw_handle() as _);
     let client = match validate_named_pipe_client(handle) {
         Ok(client) => client,
         Err(error) => {
@@ -1068,14 +986,12 @@ fn handle_named_pipe_connection(
                 "Cliente do helper recusado antes de ler request.",
                 json!({ "reason": error }),
             );
-            let _ = unsafe { DisconnectNamedPipe(handle) };
-            let _ = unsafe { CloseHandle(handle) };
+            let _ = pipe.disconnect();
             return Err(error);
         }
     };
 
-    let mut pipe = unsafe { fs::File::from_raw_handle(handle.0 as _) };
-    let response = match read_request_from_pipe(&mut pipe, signing_key) {
+    let response = match read_request_from_pipe_async(&mut pipe, signing_key).await {
         Ok(request) => {
             audit_helper_event(
                 "info",
@@ -1089,7 +1005,7 @@ fn handle_named_pipe_connection(
                     "client_path": client.path,
                 }),
             );
-            execute_request(request, signing_key)
+            execute_request_async(request, signing_key).await
         }
         Err(rejection) => {
             audit_helper_event(
@@ -1113,22 +1029,23 @@ fn handle_named_pipe_connection(
     };
 
     let response_bytes = serde_json::to_vec(&response).map_err(|error| error.to_string())?;
-    write_pipe_frame(&mut pipe, &response_bytes)?;
-    let raw = pipe.as_raw_handle();
-    let _ = unsafe { DisconnectNamedPipe(windows::Win32::Foundation::HANDLE(raw as _)) };
+    write_pipe_frame_async(&mut pipe, &response_bytes).await?;
+    let _ = pipe.disconnect();
     Ok(())
 }
 
 #[cfg(windows)]
-fn read_request_from_pipe(
-    pipe: &mut fs::File,
+async fn read_request_from_pipe_async(
+    pipe: &mut NamedPipeServer,
     signing_key: &[u8],
 ) -> Result<HelperCommandRequest, RejectedHelperRequest> {
-    let raw = read_pipe_frame(pipe).map_err(|message| RejectedHelperRequest {
-        action_id: "unknown".to_string(),
-        request_nonce: String::new(),
-        message,
-    })?;
+    let raw = read_pipe_frame_async(pipe)
+        .await
+        .map_err(|message| RejectedHelperRequest {
+            action_id: "unknown".to_string(),
+            request_nonce: String::new(),
+            message,
+        })?;
     let request: HelperCommandRequest =
         serde_json::from_slice(&raw).map_err(|error| RejectedHelperRequest {
             action_id: "unknown".to_string(),
@@ -1171,7 +1088,7 @@ fn read_request_from_bytes(raw: &[u8], signing_key: &[u8]) -> Result<HelperComma
     Ok(request)
 }
 
-fn execute_request(request: HelperCommandRequest, signing_key: &[u8]) -> HelperCommandResponse {
+async fn execute_request_async(request: HelperCommandRequest, signing_key: &[u8]) -> HelperCommandResponse {
     let action_id = request.action_id.clone();
     let request_nonce = request.nonce.clone();
 
@@ -1195,26 +1112,20 @@ fn execute_request(request: HelperCommandRequest, signing_key: &[u8]) -> HelperC
         });
     }
 
-
     let action_name = request.action_name.clone();
     let source = request.source;
-    let result = {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build();
-        match runtime {
-            Ok(runtime) => runtime.block_on(super::execute_privileged_helper_command(
-                request.source,
-                &request.action_name,
-                request.payload,
-            )),
-            Err(error) => ExecutionResult {
-                success: false,
-                message: format!("Falha ao criar runtime do helper: {error}"),
-                details: json!({ "implemented": true }),
-            },
-        }
-    };
+    // Runs directly on the shared runtime's own worker threads now - no more
+    // spinning up a fresh single-threaded runtime per request just to
+    // block_on() this. The action implementations already push their own
+    // genuinely blocking work (sc.exe calls, child process I/O, ...) onto
+    // spawn_blocking, so awaiting this chain in place never blocks the
+    // runtime's async scheduler itself.
+    let result = super::execute_privileged_helper_command(
+        request.source,
+        &request.action_name,
+        request.payload,
+    )
+    .await;
 
     audit_helper_event(
         if result.success { "info" } else { "warn" },
@@ -1762,51 +1673,24 @@ fn open_helper_pipe() -> Result<fs::File, String> {
     ))
 }
 
+/// Same ACL as before (`PipeSecurity`, unchanged), created through Tokio's
+/// raw-security-attributes constructor instead of a direct `CreateNamedPipeW`
+/// call - everything else about the instance (byte mode, duplex, unlimited
+/// instances, buffer sizes) is `ServerOptions`' own default, matching what
+/// the explicit flags below used to spell out by hand.
 #[cfg(windows)]
-fn wake_named_pipe_server() {
-    // Each blocked ConnectNamedPipe only unsticks when a client connects to
-    // that specific instance, and a wake connection can be consumed by a
-    // listener that was already mid-accept rather than one that is blocked.
-    // Opening comfortably more than one per listener makes it very likely
-    // every blocked call gets a client; the shutdown path also calls this
-    // several times in a loop for the stragglers.
-    for _ in 0..(PIPE_LISTENER_COUNT * 2) {
-        let _ = fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(HELPER_PIPE_NAME);
-    }
-}
-
-#[cfg(windows)]
-fn create_named_pipe_instance() -> Result<windows::Win32::Foundation::HANDLE, String> {
-    use windows::core::PCWSTR;
-    use windows::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows::Win32::Storage::FileSystem::PIPE_ACCESS_DUPLEX;
-    use windows::Win32::System::Pipes::{
-        CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
-    };
-
-    let pipe_name = wide_null(HELPER_PIPE_NAME);
+fn create_named_pipe_instance_async() -> Result<NamedPipeServer, String> {
     let security = PipeSecurity::new()?;
-    let handle = unsafe {
-        CreateNamedPipeW(
-            PCWSTR(pipe_name.as_ptr()),
-            PIPE_ACCESS_DUPLEX,
-            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-            PIPE_UNLIMITED_INSTANCES,
-            MAX_PIPE_FRAME_BYTES as u32,
-            MAX_PIPE_FRAME_BYTES as u32,
-            0,
-            Some(security.as_ptr()),
-        )
-    };
-
-    if handle == INVALID_HANDLE_VALUE || handle.is_invalid() {
-        return Err(windows::core::Error::from_thread().to_string());
+    unsafe {
+        ServerOptions::new()
+            .in_buffer_size(MAX_PIPE_FRAME_BYTES as u32)
+            .out_buffer_size(MAX_PIPE_FRAME_BYTES as u32)
+            .create_with_security_attributes_raw(
+                HELPER_PIPE_NAME,
+                security.as_ptr() as *mut std::ffi::c_void,
+            )
     }
-
-    Ok(handle)
+    .map_err(|error| error.to_string())
 }
 
 #[cfg(windows)]
@@ -1868,6 +1752,10 @@ impl Drop for PipeSecurity {
     }
 }
 
+// Client-side only now (open_helper_pipe/execute_once/handshake_roundtrip,
+// all in the main app process) - the server side moved to the async
+// versions below. Wire format (4-byte LE length prefix + payload) is
+// identical either way, so the two sides stay interoperable.
 #[cfg(windows)]
 fn write_pipe_frame(stream: &mut impl Write, payload: &[u8]) -> Result<(), String> {
     if payload.len() > MAX_PIPE_FRAME_BYTES {
@@ -1896,6 +1784,42 @@ fn read_pipe_frame(stream: &mut impl Read) -> Result<Vec<u8>, String> {
     let mut payload = vec![0_u8; len];
     stream
         .read_exact(&mut payload)
+        .map_err(|error| error.to_string())?;
+    Ok(payload)
+}
+
+#[cfg(windows)]
+async fn write_pipe_frame_async(stream: &mut NamedPipeServer, payload: &[u8]) -> Result<(), String> {
+    if payload.len() > MAX_PIPE_FRAME_BYTES {
+        return Err("Frame do helper excede o limite permitido.".to_string());
+    }
+    let len = payload.len() as u32;
+    stream
+        .write_all(&len.to_le_bytes())
+        .await
+        .map_err(|error| error.to_string())?;
+    stream
+        .write_all(payload)
+        .await
+        .map_err(|error| error.to_string())?;
+    stream.flush().await.map_err(|error| error.to_string())
+}
+
+#[cfg(windows)]
+async fn read_pipe_frame_async(stream: &mut NamedPipeServer) -> Result<Vec<u8>, String> {
+    let mut len_bytes = [0_u8; 4];
+    stream
+        .read_exact(&mut len_bytes)
+        .await
+        .map_err(|error| error.to_string())?;
+    let len = u32::from_le_bytes(len_bytes) as usize;
+    if len == 0 || len > MAX_PIPE_FRAME_BYTES {
+        return Err("Frame do helper possui tamanho invalido.".to_string());
+    }
+    let mut payload = vec![0_u8; len];
+    stream
+        .read_exact(&mut payload)
+        .await
         .map_err(|error| error.to_string())?;
     Ok(payload)
 }
@@ -2538,46 +2462,50 @@ mod tests {
 
     /// Real regression test for a production case (2026-09-17, ~10 days of
     /// recurring "helper shows Running but stops answering the pipe, zero
-    /// server-side errors logged" reports): a per-connection handler thread
-    /// blocked forever in a synchronous read/write used to leak, with
-    /// nothing anywhere to show for it. This proves the actual OS mechanism
-    /// the fix relies on - CancelSynchronousIo on a duplicated thread
-    /// handle - genuinely unblocks a real stuck ReadFile, using a real
-    /// anonymous pipe with nothing on the write end, not a mock.
-    #[test]
-    fn watchdog_unblocks_a_thread_stuck_in_a_real_blocking_read() {
-        use std::os::windows::io::FromRawHandle;
-        use windows::Win32::Foundation::{CloseHandle, HANDLE};
-        use windows::Win32::System::Pipes::CreatePipe;
+    /// server-side errors logged" reports): a connected client that never
+    /// finishes sending its request used to block the handler forever, with
+    /// nothing anywhere to show for it. Proves the actual mechanism the fix
+    /// relies on - wrapping the connection handler in tokio::time::timeout -
+    /// genuinely returns control instead of hanging, using a real named
+    /// pipe with a connected client that deliberately never writes, not a
+    /// mock. Uses a throwaway per-test pipe name (not HELPER_PIPE_NAME) so
+    /// this can't collide with a real helper instance also running on the
+    /// machine this test executes on.
+    #[tokio::test]
+    async fn a_client_that_never_finishes_sending_gets_abandoned_not_hung_forever() {
+        use tokio::net::windows::named_pipe::ClientOptions;
 
-        let mut read_handle = HANDLE::default();
-        let mut write_handle = HANDLE::default();
-        unsafe { CreatePipe(&mut read_handle, &mut write_handle, None, 0) }
-            .expect("creating an anonymous pipe for the test should not fail");
+        let pipe_name = format!(r"\\.\pipe\AnalystBlazeHelperTest_{}", std::process::id());
+        let server = ServerOptions::new()
+            .create(&pipe_name)
+            .expect("creating the test pipe should not fail");
+        let connect_fut = server.connect();
+        // Connects but never writes anything - the same shape as a client
+        // that connects and then hangs, freezes, or gets killed mid-request.
+        let client = ClientOptions::new()
+            .open(&pipe_name)
+            .expect("test client should connect");
+        connect_fut
+            .await
+            .expect("server should accept the waiting client");
 
-        let done = Arc::new(AtomicBool::new(false));
-        let done_for_handler = Arc::clone(&done);
-        let raw_read = read_handle.0 as usize;
-        let child = thread::spawn(move || {
-            // Nothing is ever written to the other end and it's kept open
-            // for the whole test, so this blocks forever unless cancelled -
-            // the same shape as handle_named_pipe_connection's read_exact
-            // waiting on a client that never finishes sending.
-            let mut file = unsafe { fs::File::from_raw_handle(raw_read as *mut _) };
-            let mut buf = [0u8; 1];
-            let _ = Read::read(&mut file, &mut buf);
-            done_for_handler.store(true, Ordering::SeqCst);
-        });
-
-        spawn_connection_watchdog_with_timeout(&child, Arc::clone(&done), Duration::from_millis(200));
-
-        thread::sleep(Duration::from_millis(1500));
+        let signing_key = Arc::new(vec![0_u8; 32]);
+        let started = std::time::Instant::now();
+        handle_named_pipe_connection_with_timeout_for(server, signing_key, Duration::from_millis(200)).await;
         assert!(
-            done.load(Ordering::SeqCst),
-            "the handler thread should have been unblocked by the watchdog and finished, not left hanging"
+            started.elapsed() < Duration::from_secs(2),
+            "should have abandoned the stuck read within the timeout, not hung"
         );
-        child.join().expect("handler thread should exit cleanly once cancelled");
 
-        let _ = unsafe { CloseHandle(write_handle) };
+        drop(client);
+    }
+}
+
+#[cfg(test)]
+mod helper_live_check {
+    #[test]
+    #[ignore] // machine-dependent - run manually with --ignored against a real installed+running helper
+    fn live_handshake_against_the_real_installed_helper() {
+        println!("handshake() = {:?}", super::handshake());
     }
 }

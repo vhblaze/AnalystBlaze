@@ -2,8 +2,20 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
+use std::sync::Mutex;
 
 use crate::optimizations::snapshot;
+
+/// `writeln!` to an append-mode file isn't guaranteed to be a single write
+/// syscall, so two callers racing (e.g. several of the helper's concurrent
+/// pipe-accepting tasks logging at once) can interleave their bytes into
+/// the same line - found live as garbled/concatenated JSON in the audit
+/// log right after the async pipe server rewrite made 16 tasks start up
+/// and log within the same instant, something that essentially never
+/// happened when logging was spread across sequential thread startups.
+/// Same fix as snapshot.rs's SNAPSHOT_FILE_LOCK for the identical class of
+/// bug.
+static AUDIT_FILE_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
@@ -33,12 +45,14 @@ pub fn record_event(
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     }
 
+    let line = serde_json::to_string(&event).map_err(|error| error.to_string())?;
+
+    let _guard = AUDIT_FILE_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(|error| error.to_string())?;
-    let line = serde_json::to_string(&event).map_err(|error| error.to_string())?;
     writeln!(file, "{line}").map_err(|error| error.to_string())
 }
 
