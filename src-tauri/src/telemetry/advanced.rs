@@ -29,6 +29,12 @@ pub struct AdvancedTelemetry {
     #[serde(default)]
     pub failing_services: Vec<FailingService>,
     pub driver_inventory: Vec<DriverInfo>,
+    /// Devices Windows itself has flagged with a real Device Manager
+    /// problem code (Code 10, 43, ...) - a real user's Intel Bluetooth
+    /// radio showing Code 10 (device cannot start) is what this was built
+    /// from. See collect_failing_devices() for exactly which codes count.
+    #[serde(default)]
+    pub failing_devices: Vec<FailingDevice>,
     pub thermal_throttling_suspected: Option<bool>,
     /// The GPU driver Windows itself considers "the" display adapter's
     /// driver (Win32_VideoController), not just any DISPLAY-class entry
@@ -163,6 +169,16 @@ pub struct DriverInfo {
     pub manufacturer: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FailingDevice {
+    pub name: Option<String>,
+    pub device_id: String,
+    pub device_class: Option<String>,
+    /// Win32_PnPEntity's ConfigManagerErrorCode - see PROBLEM_DEVICE_CODES
+    /// below for which values this is ever populated with.
+    pub problem_code: u32,
+}
+
 pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTelemetry {
     let mut telemetry = AdvancedTelemetry {
         source: "windows_low_frequency".to_string(),
@@ -178,6 +194,7 @@ pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTeleme
     collect_shell_crashes(&mut telemetry);
     collect_failing_services(&mut telemetry);
     collect_driver_inventory(&mut telemetry);
+    collect_failing_devices(&mut telemetry);
     telemetry.gpu_driver_status = collect_gpu_driver_status(gpu_name_hint);
     // Cheap registry reads (no WMI/PowerShell child process) - safe to run
     // on every refresh of this already-throttled (300s) block rather than
@@ -964,6 +981,47 @@ fn collect_driver_inventory(telemetry: &mut AdvancedTelemetry) {
                 .and_then(Value::as_str)
                 .map(clean_string),
         })
+        .collect();
+}
+
+/// Win32_PnPEntity's ConfigManagerErrorCode values worth surfacing to the
+/// user as "this is broken and might be fixable" - deliberately not "any
+/// non-zero code", since several codes are either intentional (22 - user
+/// disabled the device on purpose) or not really a fault (24/45 - a
+/// removable device that simply isn't plugged in right now shows these
+/// too, and cycling it wouldn't do anything since there's nothing attached).
+/// This list is the subset a disable/enable cycle or a Windows restart can
+/// plausibly clear: 10 (cannot start - the real case this was built from,
+/// a real user's Intel Bluetooth radio), 12 (not enough free resources),
+/// 14 (needs restart), 18 (reinstall drivers), 19/39/40 (corrupted driver
+/// or registry entry), 28 (drivers not installed), 31/37/38 (Windows
+/// already tried and failed to start it), 43 (device reported a problem
+/// and Windows stopped it), 48 (driver blocked as incompatible).
+const PROBLEM_DEVICE_CODES: &[u32] = &[10, 12, 14, 18, 19, 28, 31, 37, 38, 39, 40, 43, 48];
+
+fn collect_failing_devices(telemetry: &mut AdvancedTelemetry) {
+    let Some(values) = powershell_json_array(
+        "Get-CimInstance Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -gt 0 } | Select-Object -First 20 Name,DeviceID,PNPClass,ConfigManagerErrorCode | ConvertTo-Json -Compress",
+    ) else {
+        return;
+    };
+
+    telemetry.failing_devices = values
+        .into_iter()
+        .filter_map(|value| {
+            let problem_code = value.get("ConfigManagerErrorCode").and_then(Value::as_u64)? as u32;
+            if !PROBLEM_DEVICE_CODES.contains(&problem_code) {
+                return None;
+            }
+            let device_id = value.get("DeviceID").and_then(Value::as_str)?.to_string();
+            Some(FailingDevice {
+                name: value.get("Name").and_then(Value::as_str).map(clean_string),
+                device_id,
+                device_class: value.get("PNPClass").and_then(Value::as_str).map(clean_string),
+                problem_code,
+            })
+        })
+        .take(5)
         .collect();
 }
 

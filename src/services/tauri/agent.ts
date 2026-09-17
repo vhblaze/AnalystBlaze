@@ -1023,6 +1023,11 @@ export async function getDismRestoreHealthStatus(scanId: string): Promise<Optimi
   return invoke<OptimizationResult>("dism_restore_health_status", { scanId });
 }
 
+export async function restartPnpDevice(deviceId: string): Promise<OptimizationResult> {
+  requireTauriRuntime("Reiniciar dispositivo");
+  return invoke<OptimizationResult>("restart_pnp_device", { deviceId });
+}
+
 export async function setInterfaceMetric(adapterName: string, metric: number): Promise<OptimizationResult> {
   requireTauriRuntime("Prioridade de adaptador de rede");
   return invoke<OptimizationResult>("set_interface_metric", { adapterName, metric });

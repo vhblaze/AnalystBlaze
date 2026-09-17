@@ -1293,6 +1293,15 @@ async fn dism_restore_health_status(
 }
 
 #[tauri::command]
+async fn restart_pnp_device(device_id: String) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "RESTART_PNP_DEVICE",
+        Some(serde_json::json!({ "deviceId": device_id })),
+    )
+    .await)
+}
+
+#[tauri::command]
 async fn set_power_plan_balanced() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command("SET_POWER_PLAN_BALANCED", None).await)
 }
@@ -2182,6 +2191,7 @@ pub fn run() {
             system_file_check_status,
             start_dism_restore_health,
             dism_restore_health_status,
+            restart_pnp_device,
             set_power_plan_balanced,
             set_power_plan_power_saver,
             set_telemetry_mode,

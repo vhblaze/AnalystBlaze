@@ -32,6 +32,7 @@ import {
   resetWinsockCatalog,
   startSystemFileCheck as startSystemFileCheckAction,
   startDismRestoreHealth as startDismRestoreHealthAction,
+  restartPnpDevice as restartPnpDeviceAction,
   restartWindowsNow as restartWindowsNowAction,
   setAgentTelemetryMode,
   setDnsServers as setDnsServersAction,
@@ -748,6 +749,29 @@ export function useAuth() {
     return result;
   }, [runAction]);
 
+  // Toggles a device Windows already flagged as broken - see
+  // system_repair.rs's sibling windows_actions::restart_pnp_device. Unlike
+  // the two above, this one's own success flag matters: it re-checks the
+  // device's status after the disable/enable cycle rather than assuming it
+  // worked, so a false result here is a real "didn't fix it", not just a
+  // request-failed.
+  const restartPnpDevice = useCallback(async (deviceId: string) => {
+    const result = await runAction(async () => {
+      const result = await restartPnpDeviceAction(deviceId);
+      setMessage({
+        key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+        params: { message: result.message },
+      });
+      captureTelemetry({
+        name: result.success ? "pnp_device_restarted" : "pnp_device_restart_failed",
+        category: "agent",
+        properties: {},
+      });
+      return result;
+    }, { rethrow: true });
+    return result;
+  }, [runAction]);
+
   const applyVisualPerformance = useCallback(async () => {
     const result = await runAction(async () => {
       const result = await applyVisualPerformanceMode();
@@ -1030,6 +1054,7 @@ export function useAuth() {
     resetWinsock,
     startSystemFileCheck,
     startDismRestoreHealth,
+    restartPnpDevice,
     applyVisualPerformance,
     restoreVisualPerformance,
     cleanTempDeep,

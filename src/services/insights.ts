@@ -38,6 +38,11 @@ export type Insight = {
    * ...) - lets the UI offer "let the agent do it" / "I'll do it myself"
    * instead of a purely informational card. */
   actionName?: string;
+  /** Extra data a local-only actionName needs to run - e.g. RESTART_PNP_DEVICE's
+   * deviceId, since one insight can't identify which of several possible
+   * failing devices it's about from actionName alone. Never sent to the
+   * server (only LOCAL_ONLY_ACTIONS ever read this - see Insights.tsx). */
+  actionContext?: Record<string, unknown>;
   /** Required for locally-generated insights (not the server's, which don't
    * carry these yet): every local insight must be explicit about how risky
    * it is, whether it can be undone, how confident the detection is, and

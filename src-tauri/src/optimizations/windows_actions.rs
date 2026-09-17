@@ -836,6 +836,131 @@ fn access_denied(output: &str) -> bool {
         || normalized.contains("erro 5")
 }
 
+/// Disables then re-enables a device Windows has flagged with a real
+/// problem code (see telemetry::advanced::PROBLEM_DEVICE_CODES) - the same
+/// fix as right-clicking it in Device Manager and toggling it off/on. Built
+/// from a real case: a user's Intel Bluetooth radio showing Code 10
+/// ("device cannot start"). Note this doesn't always work - a device stuck
+/// from a bad sleep/hibernate cycle sometimes only clears on a full
+/// restart, which this deliberately does not attempt on its own (that's
+/// RESTART_WINDOWS_NOW, a separate, far more disruptive confirmed action).
+/// This function is honest about that: it re-queries the device's actual
+/// status afterward rather than assuming success just because pnputil
+/// didn't error.
+pub async fn restart_pnp_device(payload: Option<Value>) -> ExecutionResult {
+    let device_id = extract_payload_string(payload.as_ref(), &["deviceId", "device_id"]);
+    let Some(device_id) = device_id else {
+        return ExecutionResult {
+            success: false,
+            message: "Informe o deviceId do dispositivo.".to_string(),
+            details: json!({ "implemented": true }),
+        };
+    };
+    match tokio::task::spawn_blocking(move || restart_pnp_device_sync(device_id)).await {
+        Ok(result) => result,
+        Err(error) => ExecutionResult {
+            success: false,
+            message: format!("Falha ao reiniciar o dispositivo: {error}"),
+            details: json!({ "implemented": true }),
+        },
+    }
+}
+
+#[cfg(windows)]
+fn restart_pnp_device_sync(device_id: String) -> ExecutionResult {
+    use std::thread;
+    use std::time::Duration;
+
+    let disable = Command::new("pnputil")
+        .args(["/disable-device", &device_id])
+        .no_window()
+        .output();
+    let Ok(disable) = disable else {
+        return ExecutionResult {
+            success: false,
+            message: "Nao foi possivel chamar o pnputil.".to_string(),
+            details: json!({ "implemented": true, "deviceId": device_id }),
+        };
+    };
+    if !disable.status.success() {
+        return ExecutionResult {
+            success: false,
+            message: "O Windows recusou desativar o dispositivo.".to_string(),
+            details: json!({
+                "implemented": true,
+                "deviceId": device_id,
+                "step": "disable",
+                "output": decode_console_bytes(&disable.stdout).trim(),
+            }),
+        };
+    }
+
+    // A cold disable needs a moment before the device is ready to be
+    // re-enabled - matches the manual Device Manager workflow this mirrors.
+    thread::sleep(Duration::from_secs(2));
+
+    let enable = Command::new("pnputil")
+        .args(["/enable-device", &device_id])
+        .no_window()
+        .output();
+    if !matches!(&enable, Ok(output) if output.status.success()) {
+        return ExecutionResult {
+            success: false,
+            message: "O dispositivo foi desativado, mas o Windows recusou reativa-lo - reative manualmente no Gerenciador de Dispositivos.".to_string(),
+            details: json!({ "implemented": true, "deviceId": device_id, "step": "enable" }),
+        };
+    }
+
+    thread::sleep(Duration::from_secs(2));
+    let status = pnp_device_status(&device_id);
+    let cleared = status.as_deref().is_some_and(|value| value.eq_ignore_ascii_case("OK"));
+
+    if cleared {
+        ExecutionResult::ok(
+            "Dispositivo reiniciado e funcionando normalmente.",
+            json!({ "implemented": true, "deviceId": device_id, "status": status }),
+        )
+    } else {
+        ExecutionResult {
+            success: false,
+            message: "O ciclo de reinicio nao resolveu - alguns problemas so somem com uma reinicializacao completa do Windows.".to_string(),
+            details: json!({ "implemented": true, "deviceId": device_id, "status": status }),
+        }
+    }
+}
+
+/// Reads the device's current Status back via Get-PnpDevice, passing the id
+/// through an environment variable rather than interpolating it into the
+/// PowerShell script text - a DeviceID contains backslashes and ampersands
+/// (e.g. `USB\VID_8087&PID_0029\...`) that would otherwise need careful
+/// escaping to embed safely in a script string.
+#[cfg(windows)]
+fn pnp_device_status(device_id: &str) -> Option<String> {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            "(Get-PnpDevice -InstanceId $env:ANALYSTBLAZE_DEVICE_ID -ErrorAction SilentlyContinue).Status",
+        ])
+        .env("ANALYSTBLAZE_DEVICE_ID", device_id)
+        .no_window()
+        .output()
+        .ok()?;
+    let text = decode_console_bytes(&output.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+#[cfg(not(windows))]
+pub async fn restart_pnp_device(_payload: Option<Value>) -> ExecutionResult {
+    ExecutionResult {
+        success: false,
+        message: "Reinicio de dispositivo disponivel apenas no Windows.".to_string(),
+        details: json!({ "implemented": true }),
+    }
+}
+
 fn extract_payload_string(payload: Option<&Value>, keys: &[&str]) -> Option<String> {
     let payload = payload?;
     keys.iter()

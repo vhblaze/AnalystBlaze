@@ -211,7 +211,7 @@ export function AppShell() {
   // rather than a separate/different flow just because it started from a
   // recommendation instead of a button.
   const applyInsightActionLocally = useCallback(
-    (actionName: string) => {
+    (actionName: string, context?: Record<string, unknown>) => {
       if (actionName === "APPLY_GAME_MODE") {
         return runConfirmed(
           {
@@ -254,6 +254,21 @@ export function AppShell() {
             snapshot: false,
           },
           auth.startSystemFileCheck,
+        );
+      }
+      if (actionName === "RESTART_PNP_DEVICE") {
+        const deviceId = typeof context?.deviceId === "string" ? context.deviceId : null;
+        if (!deviceId) {
+          return Promise.reject(new Error("deviceId ausente para RESTART_PNP_DEVICE."));
+        }
+        return runConfirmed(
+          {
+            title: "Reiniciar dispositivo",
+            description: "Desativa e reativa o dispositivo (o mesmo que fazer manualmente no Gerenciador de Dispositivos). Resolve boa parte dos erros de driver, mas nem sempre - alguns só somem com uma reinicialização completa do Windows.",
+            risk: "sensivel",
+            snapshot: false,
+          },
+          () => auth.restartPnpDevice(deviceId),
         );
       }
       return Promise.reject(new Error(`Acao nao suportada localmente: ${actionName}`));

@@ -359,6 +359,7 @@ async fn execute_command_checked_with_helper(
         "SYSTEM_FILE_CHECK_STATUS" => system_repair::system_file_check_status(payload).await,
         "START_DISM_RESTORE_HEALTH" => system_repair::start_dism_restore_health(payload).await,
         "DISM_RESTORE_HEALTH_STATUS" => system_repair::system_file_check_status(payload).await,
+        "RESTART_PNP_DEVICE" => windows_actions::restart_pnp_device(payload).await,
         other => ExecutionResult::unsupported(other),
     };
 

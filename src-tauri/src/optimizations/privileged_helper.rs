@@ -1854,6 +1854,7 @@ fn supported_actions() -> &'static [&'static str] {
         "SYSTEM_FILE_CHECK_STATUS",
         "START_DISM_RESTORE_HEALTH",
         "DISM_RESTORE_HEALTH_STATUS",
+        "RESTART_PNP_DEVICE",
     ]
 }
 

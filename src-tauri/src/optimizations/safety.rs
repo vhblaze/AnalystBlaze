@@ -281,6 +281,18 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: false,
             requires_privileged_helper: true,
         }),
+        // Disable+enable cycle on a device Windows already flagged as
+        // broken (see telemetry::advanced::PROBLEM_DEVICE_CODES) - nothing
+        // to snapshot/roll back (either the device recovers or it doesn't;
+        // there's no "working" state being torn down), but toggling a
+        // device needs admin (confirmed live: an unelevated attempt gets
+        // "Generic failure" from Disable-PnpDevice), so still helper-routed.
+        "RESTART_PNP_DEVICE" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
         "APPLY_LATENCY_TWEAKS" => Some(CommandSafetyProfile {
             risk: RiskLevel::Critical,
             requires_local_confirmation: true,
@@ -346,6 +358,7 @@ pub fn supported_actions() -> &'static [&'static str] {
         "SYSTEM_FILE_CHECK_STATUS",
         "START_DISM_RESTORE_HEALTH",
         "DISM_RESTORE_HEALTH_STATUS",
+        "RESTART_PNP_DEVICE",
     ]
 }
 
@@ -1616,6 +1629,26 @@ mod tests {
         assert_eq!(profile.risk, super::RiskLevel::Sensitive);
         assert!(!profile.requires_snapshot);
         assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn restart_pnp_device_requires_helper_and_local_confirmation() {
+        let profile = validate_command(
+            "RESTART_PNP_DEVICE",
+            Some(&json!({ "deviceId": "USB\\VID_8087&PID_0029\\6&3365FBAF&0&9" })),
+            &context_with_helper(true),
+        )
+        .expect("restarting a flagged device should be allowed with local confirmation");
+        assert_eq!(profile.risk, super::RiskLevel::Sensitive);
+        assert!(!profile.requires_snapshot);
+        assert!(profile.requires_privileged_helper);
+
+        let unconfirmed = validate_command(
+            "RESTART_PNP_DEVICE",
+            Some(&json!({ "deviceId": "USB\\VID_8087&PID_0029\\6&3365FBAF&0&9" })),
+            &context_with_helper(false),
+        );
+        assert!(unconfirmed.is_err());
     }
 
     #[test]

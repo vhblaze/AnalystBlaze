@@ -46,7 +46,13 @@ const DISMISS_TTL_MS = 24 * 60 * 60 * 1000;
  * validated allowlist (see safe_action_policy.py) - these are the ones the
  * desktop already knows how to run locally, so "I'll do it myself" has
  * something real to call. Anything else server-side is display-only for now. */
-const LOCALLY_EXECUTABLE_ACTIONS = new Set(["APPLY_GAME_MODE", "EMPTY_TEMP", "ENABLE_SCHEDULED_DEFRAG", "START_SYSTEM_FILE_CHECK"]);
+const LOCALLY_EXECUTABLE_ACTIONS = new Set([
+  "APPLY_GAME_MODE",
+  "EMPTY_TEMP",
+  "ENABLE_SCHEDULED_DEFRAG",
+  "START_SYSTEM_FILE_CHECK",
+  "RESTART_PNP_DEVICE",
+]);
 /** Actions that only ever run on the user's own machine, never queued to
  * the server - either because the action isn't (yet) registered in the
  * server's SUPPORTED_REMOTE_ACTIONS/AGENT_COMMAND_ALLOWLIST, or, as with
@@ -56,7 +62,7 @@ const LOCALLY_EXECUTABLE_ACTIONS = new Set(["APPLY_GAME_MODE", "EMPTY_TEMP", "EN
  * these, "Deixar o agente fazer" still shows (the local AnalystBlaze agent
  * is still "the agent"), but routes to the same local call as "Fazer eu
  * mesmo" instead of POSTing to /insights/actions - see requestAgentApply. */
-const LOCAL_ONLY_ACTIONS = new Set(["START_SYSTEM_FILE_CHECK"]);
+const LOCAL_ONLY_ACTIONS = new Set(["START_SYSTEM_FILE_CHECK", "RESTART_PNP_DEVICE"]);
 /** How many Critical-level (level 1) Windows Event Log entries in the last
  * 24h are worth mentioning. This is deliberately conservative and paired
  * with "pode (nao necessariamente) indicar" wording below, not "seu Windows
@@ -64,9 +70,30 @@ const LOCAL_ONLY_ACTIONS = new Set(["START_SYSTEM_FILE_CHECK"]);
  * completely unrelated one-off causes, so this is a prompt to check, not a
  * diagnosis. */
 const EVENT_LOG_CRITICAL_THRESHOLD = 10;
+// Human labels for the Win32_PnPEntity ConfigManagerErrorCode values the
+// backend already filters to (see telemetry::advanced::PROBLEM_DEVICE_CODES) -
+// matches the Device Manager wording users may already be familiar with.
+const PROBLEM_CODE_LABELS: Record<number, string> = {
+  10: "Codigo 10 - o dispositivo nao consegue iniciar",
+  12: "Codigo 12 - recursos de hardware insuficientes",
+  14: "Codigo 14 - precisa reiniciar o Windows para funcionar",
+  18: "Codigo 18 - drivers precisam ser reinstalados",
+  19: "Codigo 19 - configuracao do Registro corrompida",
+  28: "Codigo 28 - drivers nao instalados",
+  31: "Codigo 31 - o Windows nao conseguiu iniciar o dispositivo",
+  37: "Codigo 37 - o driver retornou um erro",
+  38: "Codigo 38 - uma instancia anterior do driver ainda esta carregada",
+  39: "Codigo 39 - driver corrompido ou ausente",
+  40: "Codigo 40 - entrada do Registro do driver corrompida",
+  43: "Codigo 43 - o Windows parou o dispositivo por um problema reportado",
+  48: "Codigo 48 - driver bloqueado por incompatibilidade",
+};
 
 function insightKey(insight: Pick<Insight, "category" | "actionName" | "title">): string {
-  return `${insight.category}:${insight.actionName ?? insight.title}`;
+  // Includes title even when actionName is set - multiple failing devices
+  // all share actionName "RESTART_PNP_DEVICE" (only actionContext.deviceId
+  // differs), so actionName alone would collapse them onto one dismiss key.
+  return `${insight.category}:${insight.actionName ?? insight.title}:${insight.title}`;
 }
 
 function loadDismissed(): Record<string, number> {
@@ -136,8 +163,10 @@ export function Insights({
    * instead of opening on the general diagnostics tab. */
   onOpenNetwork?: (autoTracerouteTarget?: string) => void;
   /** "I'll do it myself" - runs the action right now, locally, with the
-   * same confirmation dialog its dedicated button elsewhere already uses. */
-  onApplyInsightActionLocally?: (actionName: string) => Promise<unknown>;
+   * same confirmation dialog its dedicated button elsewhere already uses.
+   * `context` carries per-instance data an actionName alone can't (e.g.
+   * which of several failing devices RESTART_PNP_DEVICE should target). */
+  onApplyInsightActionLocally?: (actionName: string, context?: Record<string, unknown>) => Promise<unknown>;
   /** "Let the agent do it" - enqueues the action server-side; the agent
    * applies it on its own next sync cycle (see applyInsightAction). */
   onRequestAgentApplyInsight?: (actionName: string, title: string, reason: string) => Promise<unknown>;
@@ -185,12 +214,23 @@ export function Insights({
     setActionBusyKey(key);
     setActionMessage(null);
     try {
-      await onApplyInsightActionLocally(insight.actionName);
+      const result = await onApplyInsightActionLocally(insight.actionName, insight.actionContext);
       track("insight_action_applied_locally", { actionName: insight.actionName });
       if (insight.actionName === "START_SYSTEM_FILE_CHECK") {
         setActionMessage("Verificacao iniciada em segundo plano. Acompanhe o progresso em Controles > Avancado > Saude do Windows.");
+        dismissInsight(insight);
+      } else if (insight.actionName === "RESTART_PNP_DEVICE") {
+        // Resolves with the real outcome (unlike most other local actions,
+        // useAuth's restartPnpDevice doesn't throw on failure - see its
+        // comment) - only dismiss the card if it actually worked, so a
+        // "didn't fix it" result stays visible with the right message
+        // instead of the card just vanishing.
+        const outcome = result as { success?: boolean; message?: string } | null;
+        setActionMessage(outcome?.message ?? "Falha ao reiniciar o dispositivo.");
+        if (outcome?.success) dismissInsight(insight);
+      } else {
+        dismissInsight(insight);
       }
-      dismissInsight(insight);
     } catch (e: any) {
       setActionMessage(e?.message ?? "Falha ao aplicar a acao.");
     } finally {
@@ -200,28 +240,19 @@ export function Insights({
 
   const requestAgentApply = async (insight: Insight) => {
     if (!insight.actionName) return;
+    // LOCAL_ONLY_ACTIONS never leave the machine - the action already runs
+    // entirely through the local privileged helper (see system_repair.rs,
+    // windows_actions::restart_pnp_device), so "let the agent do it" means
+    // the local AnalystBlaze agent, not a server-queued RemoteCommand.
+    // Delegate to the exact same call+outcome handling as "fazer eu mesmo" -
+    // only the button that reached it differs.
+    if (LOCAL_ONLY_ACTIONS.has(insight.actionName)) {
+      track("insight_action_applied_by_local_agent", { actionName: insight.actionName });
+      return applyLocally(insight);
+    }
     const key = insightKey(insight);
     setActionBusyKey(key);
     setActionMessage(null);
-    // LOCAL_ONLY_ACTIONS never leave the machine - the action already runs
-    // entirely through the local privileged helper (see system_repair.rs),
-    // so "let the agent do it" means the local AnalystBlaze agent, not a
-    // server-queued RemoteCommand. Same call as "fazer eu mesmo", just
-    // reached from this button.
-    if (LOCAL_ONLY_ACTIONS.has(insight.actionName)) {
-      if (!onApplyInsightActionLocally) return;
-      try {
-        await onApplyInsightActionLocally(insight.actionName);
-        track("insight_action_applied_by_local_agent", { actionName: insight.actionName });
-        setActionMessage("O agente local esta cuidando disso. Acompanhe o progresso em Controles > Avancado > Saude do Windows.");
-        dismissInsight(insight);
-      } catch (e: any) {
-        setActionMessage(e?.message ?? "Falha ao aplicar a acao.");
-      } finally {
-        setActionBusyKey(null);
-      }
-      return;
-    }
     if (!onRequestAgentApplyInsight) return;
     try {
       await onRequestAgentApplyInsight(insight.actionName, insight.title, insight.explanation);
@@ -462,6 +493,30 @@ export function Insights({
     };
   }, [telemetry?.advanced]);
 
+  const failingDeviceInsights = useMemo<Insight[]>(() => {
+    const advanced = telemetry?.advanced as
+      | { failing_devices?: Array<{ name?: string | null; device_id: string; device_class?: string | null; problem_code: number }> }
+      | null
+      | undefined;
+    const devices = advanced?.failing_devices ?? [];
+    return devices.map((device) => {
+      const label = PROBLEM_CODE_LABELS[device.problem_code] ?? `Codigo ${device.problem_code}`;
+      const name = device.name?.trim() || device.device_class || "Dispositivo desconhecido";
+      return {
+        title: `${name} com problema no Windows`,
+        explanation: `O Windows reportou "${label}" para este dispositivo. Um ciclo de desativar/reativar (o mesmo que fazer manualmente no Gerenciador de Dispositivos) resolve boa parte desses casos - se nao resolver, pode ser necessario reiniciar o computador.`,
+        impact: label,
+        category: "performance",
+        risk: "baixo",
+        reversible: true,
+        confidence: 0.6,
+        reason: `ConfigManagerErrorCode ${device.problem_code} em ${device.device_id}`,
+        actionName: "RESTART_PNP_DEVICE",
+        actionContext: { deviceId: device.device_id },
+      } satisfies Insight;
+    });
+  }, [telemetry?.advanced]);
+
   const shadowStorageInsight = useMemo<Insight | null>(() => {
     if (!shadowConsentNeeded || !onResolveShadowConsent) return null;
     return {
@@ -493,6 +548,7 @@ export function Insights({
       diskNearFullInsight,
       scheduledDefragInsight,
       systemHealthInsight,
+      ...failingDeviceInsights,
     ].filter((insight): insight is Insight => insight != null);
     const all = [...local, ...insights];
     return all.filter((insight) => !(insightKey(insight) in dismissed));
@@ -504,6 +560,7 @@ export function Insights({
     diskNearFullInsight,
     scheduledDefragInsight,
     systemHealthInsight,
+    failingDeviceInsights,
     insights,
     dismissed,
   ]);
