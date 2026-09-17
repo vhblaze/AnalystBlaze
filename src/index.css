@@ -290,6 +290,19 @@
   animation: shimmer 2.4s linear infinite;
 }
 
+/* Every infinite CSS animation in the app (status-dot animate-pulse,
+ * refresh-icon animate-spin, animate-float/animate-shimmer above) freezes
+ * the instant the window isn't the focused one - see App.tsx's
+ * useWindowFocusAttribute. A real user's AnalystBlaze sat open, unfocused,
+ * behind Valorant during a match and its WebView2 renderer + gpu-process
+ * kept costing ~80% of a CPU core with nothing pausing this. `*` is
+ * deliberately broad - covers every current and future animated element,
+ * including third-party ones (e.g. Sonner's own toast animations), so this
+ * doesn't rot the next time someone adds an animate-* class somewhere. */
+[data-window-unfocused] * {
+  animation-play-state: paused !important;
+}
+
 /* Subtle scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: hsl(187 60% 30% / 0.4); border-radius: 8px; }
