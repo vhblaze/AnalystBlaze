@@ -779,10 +779,7 @@ fn query_service_state(service_name: &str) -> Result<ServiceState, String> {
         || stdout.contains("PAUSE_PENDING")
         || stdout.contains("CONTINUE_PENDING");
 
-    let inventory_match = windows_inventory::collect_windows_inventory()
-        .services
-        .into_iter()
-        .find(|service| service.name.eq_ignore_ascii_case(service_name));
+    let inventory_match = windows_inventory::find_service(service_name);
 
     Ok(ServiceState {
         running,
@@ -799,8 +796,7 @@ fn resolve_startup_location(target: &str, location: Option<&str>) -> Option<(Str
         return Some(location);
     }
 
-    windows_inventory::collect_windows_inventory()
-        .startup_apps
+    windows_inventory::startup_apps_only()
         .into_iter()
         .find(|app| app.name.eq_ignore_ascii_case(target))
         .and_then(|app| parse_startup_location(&app.location))

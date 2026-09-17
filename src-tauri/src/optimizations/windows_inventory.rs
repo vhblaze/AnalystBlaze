@@ -123,6 +123,39 @@ fn startup_apps() -> Vec<StartupApp> {
     apps
 }
 
+/// Looks up exactly one service by name - O(1) registry access instead of
+/// walking and classifying every key under Services (869 on a real machine)
+/// just to find one. query_service_state() and resolve_startup_location()
+/// used to go through collect_windows_inventory().services for this, which
+/// is what turned "stop 3 services for Game Mode" into 3 full 869-key
+/// registry walks back to back, right as the user is launching a game -
+/// caught live in the audit log during a real test session.
+#[cfg(windows)]
+pub fn find_service(service_name: &str) -> Option<WindowsService> {
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key = hklm
+        .open_subkey(format!("SYSTEM\\CurrentControlSet\\Services\\{service_name}"))
+        .ok()?;
+    let display_name: Option<String> = key.get_value("DisplayName").ok();
+    let start_type: Option<u32> = key.get_value("Start").ok();
+    let classification = classify_service(service_name, display_name.as_deref());
+    Some(WindowsService {
+        name: service_name.to_string(),
+        display_name,
+        start_type,
+        can_modify: classification == "safe",
+        classification,
+    })
+}
+
+#[cfg(not(windows))]
+pub fn find_service(_service_name: &str) -> Option<WindowsService> {
+    None
+}
+
 #[cfg(windows)]
 fn services() -> Vec<WindowsService> {
     use winreg::enums::HKEY_LOCAL_MACHINE;
