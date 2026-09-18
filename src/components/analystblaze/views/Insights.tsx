@@ -103,6 +103,36 @@ const PROBLEM_CODE_LABELS: Record<number, string> = {
   48: "Codigo 48 - driver bloqueado por incompatibilidade",
 };
 
+/** Mirrors telemetry::modem_link::ModemUsbLinkIssue on the Rust side. */
+type ModemUsbLinkIssue = {
+  usb_device_id: string;
+  usb_device_name?: string | null;
+  link: {
+    port?: number | null;
+    on_root_hub: boolean;
+    hub_version?: string | null;
+    controller?: string | null;
+  };
+  root_net_device_id?: string | null;
+  ghost_wwan_adapter_count: number;
+};
+
+/** The one thing the modem-link diagnosis can't read off the machine: whether
+ * the person actually has a 4G/5G modem plugged in. Answered once, remembered
+ * (a wrong guess here flips the whole recommendation - "fix your USB link" vs
+ * "remove a leftover adapter"), and resettable from the card itself. */
+const MODEM_ANSWER_STORAGE_KEY = "analystblaze.modemUsbAnswer";
+type ModemAnswer = "yes" | "no";
+
+function loadModemAnswer(): ModemAnswer | null {
+  try {
+    const raw = localStorage.getItem(MODEM_ANSWER_STORAGE_KEY);
+    return raw === "yes" || raw === "no" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
 function insightKey(insight: Pick<Insight, "category" | "actionName" | "title">): string {
   // Includes title even when actionName is set - multiple failing devices
   // all share actionName "RESTART_PNP_DEVICE" (only actionContext.deviceId
@@ -511,12 +541,106 @@ export function Insights({
     };
   }, [telemetry?.advanced]);
 
+  const modemUsbLinkIssue = useMemo<ModemUsbLinkIssue | null>(() => {
+    const advanced = telemetry?.advanced as { modem_usb_link_issue?: ModemUsbLinkIssue | null } | null | undefined;
+    return advanced?.modem_usb_link_issue ?? null;
+  }, [telemetry?.advanced]);
+
+  const [modemAnswer, setModemAnswer] = useState<ModemAnswer | null>(() => loadModemAnswer());
+  const answerModemQuestion = (answer: ModemAnswer | null) => {
+    track("modem_usb_link_answered", { answer: answer ?? "reset" });
+    setModemAnswer(answer);
+    try {
+      if (answer) localStorage.setItem(MODEM_ANSWER_STORAGE_KEY, answer);
+      else localStorage.removeItem(MODEM_ANSWER_STORAGE_KEY);
+    } catch {
+      // Non-critical preference persistence.
+    }
+  };
+
+  // Two "device has a problem" cards Windows reports separately that are
+  // really one fault - a USB-attached 4G/5G modem whose link keeps dropping
+  // (see telemetry::modem_link for the correlation and the real case). The
+  // generic per-device cards for those two are suppressed below in favour
+  // of this one, since the disable/enable cycle they'd offer can't fix a
+  // physical-layer problem - it was tried on the real machine and didn't.
+  const modemUsbLinkInsight = useMemo<Insight | null>(() => {
+    const issue = modemUsbLinkIssue;
+    if (!issue) return null;
+
+    const ghosts = issue.ghost_wwan_adapter_count;
+    const port = issue.link.port != null ? `porta USB ${issue.link.port}` : "uma porta USB";
+    const hub = issue.link.on_root_hub
+      ? issue.link.hub_version
+        ? `direto no controlador, hub raiz USB ${issue.link.hub_version}`
+        : "direto no controlador"
+      : "atras de um hub USB";
+    const changeAnswer = { label: "Mudar resposta", onClick: () => answerModemQuestion(null) };
+
+    if (modemAnswer === null) {
+      return {
+        title: "Voce usa modem ou antena 4G/5G neste PC?",
+        explanation: `Encontramos tres sinais que costumam ser um problema so: um adaptador de rede movel que nao inicia, um dispositivo na ${port} que o Windows nao consegue nem identificar, e ${ghosts} interfaces "Celular" antigas deixadas para tras. O diagnostico certo depende de voce ter ou nao um modem 4G/5G ligado neste computador.`,
+        impact: "Precisa de uma resposta sua",
+        category: "rede",
+        risk: "baixo",
+        reversible: true,
+        confidence: 0.8,
+        reason: `${issue.usb_device_id}; ${issue.root_net_device_id ?? "sem ROOT\\NET"}; ${ghosts} interfaces WWAN ocultas`,
+        action: { label: "Sim, uso modem/antena 4G ou 5G", onClick: () => answerModemQuestion("yes") },
+        secondaryAction: { label: "Nao uso", onClick: () => answerModemQuestion("no") },
+      };
+    }
+
+    if (modemAnswer === "yes") {
+      const isAmdUsb3 =
+        issue.link.hub_version === "3.0" && (issue.link.controller ?? "").toUpperCase().includes("AMD");
+      const amdNote = isAmdUsb3
+        ? " - modem 4G/5G em porta USB 3.x de controlador AMD e uma incompatibilidade conhecida"
+        : "";
+      const hubStep = issue.link.on_root_hub
+        ? "3) um hub USB com fonte propria entre o modem e o PC (modem 5G puxa mais corrente do que muita porta entrega)"
+        : "3) ligar direto no PC em vez de no hub, ou trocar por um hub com fonte propria";
+      return {
+        title: "Sua antena 4G/5G esta com a conexao USB instavel",
+        explanation: `O Windows nao consegue nem identificar o modem na ${port} (${hub}) - ele aparece como "dispositivo USB desconhecido", e por isso o adaptador de rede movel fica sem nada por tras e nao inicia. As ${ghosts} interfaces "Celular" fantasmas registradas mostram que a conexao vive caindo e voltando. Isso e problema fisico (porta, cabo ou energia), nao de driver - por isso desativar/reativar nao resolve. Testa nesta ordem: 1) uma porta USB 2.0 (geralmente as pretas) direto na traseira do gabinete${amdNote}; 2) sem cabo de extensao, ou com um mais curto e blindado; ${hubStep}; 4) desconecta, espera 15 segundos e reconecta.`,
+        impact: `${ghosts} reconexoes registradas`,
+        category: "rede",
+        risk: "baixo",
+        reversible: true,
+        confidence: 0.85,
+        reason: `${issue.usb_device_id} na ${port}, ${hub}${issue.link.controller ? ` (${issue.link.controller})` : ""}; ${issue.root_net_device_id ?? "sem ROOT\\NET"}; ${ghosts} interfaces WWAN ocultas`,
+        secondaryAction: changeAnswer,
+      };
+    }
+
+    return {
+      title: "Adaptador de rede movel fantasma",
+      explanation: `Existe um adaptador virtual de rede movel (Generic Mobile Broadband Adapter) sem nenhum modem real por tras, mais ${ghosts} interfaces "Celular" antigas. Como voce nao usa modem 4G/5G, isso e sobra de algum driver ou software antigo e pode ser removido pelo Gerenciador de Dispositivos (Exibir > Mostrar dispositivos ocultos > Adaptadores de rede). Ja o dispositivo desconhecido na ${port} e outra coisa com conexao instavel - vale ver o que esta ligado nela.`,
+      impact: "Sobra de driver antigo",
+      category: "rede",
+      risk: "baixo",
+      reversible: true,
+      confidence: 0.6,
+      reason: `${issue.root_net_device_id ?? "sem ROOT\\NET"}; ${ghosts} interfaces WWAN ocultas; ${issue.usb_device_id}`,
+      secondaryAction: changeAnswer,
+    };
+    // answerModemQuestion is stable enough here (setState + localStorage); listing it
+    // would only re-create the card on every render for no benefit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modemUsbLinkIssue, modemAnswer]);
+
   const failingDeviceInsights = useMemo<Insight[]>(() => {
     const advanced = telemetry?.advanced as
       | { failing_devices?: Array<{ name?: string | null; device_id: string; device_class?: string | null; problem_code: number }> }
       | null
       | undefined;
-    const devices = advanced?.failing_devices ?? [];
+    const correlated = new Set(
+      [modemUsbLinkIssue?.usb_device_id, modemUsbLinkIssue?.root_net_device_id].filter(
+        (id): id is string => Boolean(id),
+      ),
+    );
+    const devices = (advanced?.failing_devices ?? []).filter((device) => !correlated.has(device.device_id));
     return devices.map((device) => {
       const label = PROBLEM_CODE_LABELS[device.problem_code] ?? `Codigo ${device.problem_code}`;
       const name = device.name?.trim() || device.device_class || "Dispositivo desconhecido";
@@ -533,7 +657,7 @@ export function Insights({
         actionContext: { deviceId: device.device_id },
       } satisfies Insight;
     });
-  }, [telemetry?.advanced]);
+  }, [telemetry?.advanced, modemUsbLinkIssue]);
 
   const shadowStorageInsight = useMemo<Insight | null>(() => {
     if (!shadowConsentNeeded || !onResolveShadowConsent) return null;
@@ -566,6 +690,7 @@ export function Insights({
       diskNearFullInsight,
       scheduledDefragInsight,
       systemHealthInsight,
+      modemUsbLinkInsight,
       ...failingDeviceInsights,
     ].filter((insight): insight is Insight => insight != null);
     const all = [...local, ...insights];
@@ -578,6 +703,7 @@ export function Insights({
     diskNearFullInsight,
     scheduledDefragInsight,
     systemHealthInsight,
+    modemUsbLinkInsight,
     failingDeviceInsights,
     insights,
     dismissed,

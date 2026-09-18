@@ -35,6 +35,12 @@ pub struct AdvancedTelemetry {
     /// from. See collect_failing_devices() for exactly which codes count.
     #[serde(default)]
     pub failing_devices: Vec<FailingDevice>,
+    /// Two of the failing_devices above plus a count of hidden "Not
+    /// Present" mobile-broadband interfaces, correlated into the single
+    /// fault they mean together - see telemetry::modem_link. None unless
+    /// the specific USB-placeholder device that triggers it is present.
+    #[serde(default)]
+    pub modem_usb_link_issue: Option<super::modem_link::ModemUsbLinkIssue>,
     pub thermal_throttling_suspected: Option<bool>,
     /// The GPU driver Windows itself considers "the" display adapter's
     /// driver (Win32_VideoController), not just any DISPLAY-class entry
@@ -195,6 +201,7 @@ pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTeleme
     collect_failing_services(&mut telemetry);
     collect_driver_inventory(&mut telemetry);
     collect_failing_devices(&mut telemetry);
+    collect_modem_usb_link_issue(&mut telemetry);
     telemetry.gpu_driver_status = collect_gpu_driver_status(gpu_name_hint);
     // Cheap registry reads (no WMI/PowerShell child process) - safe to run
     // on every refresh of this already-throttled (300s) block rather than
@@ -1023,6 +1030,103 @@ fn collect_failing_devices(telemetry: &mut AdvancedTelemetry) {
         })
         .take(5)
         .collect();
+}
+
+/// Only does real work when failing_devices already contains the specific
+/// USB placeholder device that makes this worth checking - see
+/// telemetry::modem_link for the rule and the real case behind it.
+fn collect_modem_usb_link_issue(telemetry: &mut AdvancedTelemetry) {
+    use super::modem_link;
+
+    telemetry.modem_usb_link_issue = modem_link::detect(
+        &telemetry.failing_devices,
+        usb_link_details,
+        ghost_wwan_adapter_count,
+    );
+}
+
+/// Hidden "Generic Mobile Broadband Adapter" interfaces in "Not Present"
+/// state - one is left behind every time a USB modem drops and
+/// re-enumerates, so the count is a record of how often the link has
+/// flapped. Matched on the interface description, which Windows doesn't
+/// localize (the *names* are - "Celular N" on pt-BR - which is why those
+/// aren't used).
+fn ghost_wwan_adapter_count() -> u32 {
+    powershell_json(
+        "$n = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -like '*Mobile Broadband*' -and $_.Status -eq 'Not Present' }).Count; [pscustomobject]@{ Count = $n } | ConvertTo-Json -Compress",
+    )
+    .and_then(|value| value.get("Count").and_then(Value::as_u64))
+    .unwrap_or(0) as u32
+}
+
+/// Walks two levels up the PnP tree from the failing USB device: its parent
+/// (a hub - root or intermediate) and, when the parent is a root hub, the
+/// host controller above it. The instance ID is passed through an
+/// environment variable rather than interpolated into the script, since a
+/// DeviceID contains `\` and `&` (same reason as
+/// windows_actions::pnp_device_status).
+fn usb_link_details(device_id: &str) -> super::modem_link::UsbLinkDetails {
+    use super::modem_link::{
+        hub_version_from_instance_id, is_root_hub_instance_id, usb_port_from_instance_id,
+        UsbLinkDetails,
+    };
+
+    let mut details = UsbLinkDetails {
+        port: usb_port_from_instance_id(device_id),
+        ..UsbLinkDetails::default()
+    };
+
+    let Some(value) = powershell_json_with_env(
+        r#"$id = $env:ANALYSTBLAZE_DEVICE_ID
+$parent = (Get-PnpDeviceProperty -InstanceId $id -KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue).Data
+$grandName = $null
+if ($parent) {
+  $grand = (Get-PnpDeviceProperty -InstanceId $parent -KeyName 'DEVPKEY_Device_Parent' -ErrorAction SilentlyContinue).Data
+  if ($grand) { $grandName = (Get-PnpDevice -InstanceId $grand -ErrorAction SilentlyContinue).FriendlyName }
+}
+[pscustomobject]@{ Parent = $parent; GrandparentName = $grandName } | ConvertTo-Json -Compress"#,
+        "ANALYSTBLAZE_DEVICE_ID",
+        device_id,
+    ) else {
+        return details;
+    };
+
+    if let Some(parent) = value.get("Parent").and_then(Value::as_str) {
+        details.on_root_hub = is_root_hub_instance_id(parent);
+        details.hub_version = hub_version_from_instance_id(parent);
+        if details.on_root_hub {
+            details.controller = value
+                .get("GrandparentName")
+                .and_then(Value::as_str)
+                .map(clean_string);
+        }
+    }
+
+    details
+}
+
+fn powershell_json_with_env(script: &str, env_key: &str, env_value: &str) -> Option<Value> {
+    let output = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env(env_key, env_value)
+        .no_window()
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = decode_console_bytes(&output.stdout);
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    serde_json::from_str(text).ok()
 }
 
 fn powershell_json(script: &str) -> Option<Value> {
