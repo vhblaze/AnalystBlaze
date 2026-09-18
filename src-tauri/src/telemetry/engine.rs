@@ -2441,6 +2441,7 @@ mod tests {
             disk_used_gb: 120.0,
             disk_total_gb: 512.0,
             disk_usage_percent: 23.0,
+            disk_activity: None,
             active_processes: 80,
             system_uptime_seconds: 3600,
             active_window: Some("Test Window".to_string()),

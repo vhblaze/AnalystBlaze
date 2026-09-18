@@ -1,5 +1,7 @@
 pub mod advanced;
 pub mod collector;
+pub mod defender_disk;
+pub mod disk_activity;
 pub mod engine;
 pub mod frame_capture;
 pub mod live_mode;

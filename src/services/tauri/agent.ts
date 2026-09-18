@@ -105,7 +105,26 @@ export type HardwareSensorReading = {
   unit: string;
 };
 
+/** Mirrors telemetry::disk_activity::DiskActivity - disk *activity* (busy
+ * time, who is generating the I/O), as opposed to disk_usage_percent which
+ * is space. Null until the PDH reader has two samples to rate from. */
+export type DiskActivity = {
+  sampled_at: number;
+  busiest_disk?: string | null;
+  busiest_disk_active_percent?: number | null;
+  top_io_processes: { name: string; mb_s: number; ops_s: number; share_percent: number }[];
+  defender?: { mb_s: number; ops_s: number; share_percent: number; cpu_percent?: number | null } | null;
+  pressure: {
+    active_now: boolean;
+    sustained_seconds: number;
+    sustained: boolean;
+    peak_defender_mb_s: number;
+    peak_disk_active_percent: number;
+  };
+};
+
 export type AgentTelemetrySnapshot = AgentTelemetrySample & {
+  disk_activity?: DiskActivity | null;
   health_score: number;
   health_level: "excellent" | "good" | "watch" | "critical" | string;
   health_reasons: string[];
@@ -812,6 +831,12 @@ export async function openAgentInsights() {
   return invoke<string>("open_web_insights");
 }
 
+/** Opens a page of the Windows Security app (see lib.rs's fixed page list). */
+export async function openWindowsSecurity(page: "history" | "threat" | "threatsettings") {
+  requireTauriRuntime("Abrir Seguranca do Windows");
+  return invoke<string>("open_windows_security", { page });
+}
+
 export async function completeAuthFromDeepLink(rawUrl: string) {
   if (!isTauriRuntime()) return fallbackStatus;
   return invoke<AgentStatus>("complete_auth_from_deep_link", { rawUrl });
@@ -1056,6 +1081,27 @@ export async function repairService(serviceName: string): Promise<OptimizationRe
 export async function disableServicePermanently(serviceName: string): Promise<OptimizationResult> {
   requireTauriRuntime("Desativar servico");
   return invoke<OptimizationResult>("disable_service_permanently", { serviceName });
+}
+
+// The Defender-disk card's fixes (optimizations::defender on the Rust side).
+export async function throttleDefenderScans(): Promise<OptimizationResult> {
+  requireTauriRuntime("Limitar verificacoes do Defender");
+  return invoke<OptimizationResult>("throttle_defender_scans");
+}
+
+export async function restoreDefenderScanSettings(): Promise<OptimizationResult> {
+  requireTauriRuntime("Restaurar verificacoes do Defender");
+  return invoke<OptimizationResult>("restore_defender_scan_settings");
+}
+
+export async function renewDefenderDefinitions(): Promise<OptimizationResult> {
+  requireTauriRuntime("Renovar definicoes do Defender");
+  return invoke<OptimizationResult>("renew_defender_definitions");
+}
+
+export async function scheduleVolumeCheck(driveLetter: string): Promise<OptimizationResult> {
+  requireTauriRuntime("Agendar verificacao do disco");
+  return invoke<OptimizationResult>("schedule_volume_check", { driveLetter });
 }
 
 export async function setInterfaceMetric(adapterName: string, metric: number): Promise<OptimizationResult> {

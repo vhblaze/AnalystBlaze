@@ -302,6 +302,42 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             requires_snapshot: true,
             requires_privileged_helper: false,
         }),
+        // Three Set-MpPreference scan properties (see optimizations::defender)
+        // - never real-time protection, which stays untouchable via the
+        // critical process/service lists below. Set-MpPreference fails
+        // unelevated, hence helper-gated; snapshot-backed so the restore
+        // action below can put the exact previous values back.
+        "THROTTLE_DEFENDER_SCANS" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: true,
+            requires_privileged_helper: true,
+        }),
+        "RESTORE_DEFENDER_SCAN_SETTINGS" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
+        // MpCmdRun -RemoveDefinitions -All + -SignatureUpdate: leaves the
+        // machine briefly without definitions until the download lands,
+        // which is why it asks first. Not snapshot-able (the old set is
+        // gone by design); the "undo" is the update itself.
+        "RENEW_DEFENDER_DEFINITIONS" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
+        // fsutil dirty set X: - schedules autochk for one volume at next
+        // boot. Nothing to snapshot (the flag clears itself when the check
+        // runs), but it does add minutes to the next boot, so confirm.
+        "SCHEDULE_VOLUME_CHECK" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Sensitive,
+            requires_local_confirmation: true,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
         // Stop+start dance on an already-broken service - same
         // unprivileged-first posture as STOP_SERVICE (many services grant
         // stop/start to authenticated users; repair_service_sync reports
@@ -391,6 +427,10 @@ pub fn supported_actions() -> &'static [&'static str] {
         "DISABLE_GAME_DVR",
         "REPAIR_SERVICE",
         "DISABLE_SERVICE_PERMANENTLY",
+        "THROTTLE_DEFENDER_SCANS",
+        "RESTORE_DEFENDER_SCAN_SETTINGS",
+        "RENEW_DEFENDER_DEFINITIONS",
+        "SCHEDULE_VOLUME_CHECK",
     ]
 }
 
@@ -468,6 +508,18 @@ fn validate_action_payload(
     }
 
     match action_name {
+        "SCHEDULE_VOLUME_CHECK" => {
+            if super::defender::drive_letter_from_payload(payload).is_none() {
+                return Err(safety_error(
+                    "drive_letter_required",
+                    action_name,
+                    payload,
+                    context,
+                    Some(profile),
+                    json!({ "required_fields": ["driveLetter"], "format": "single ASCII letter" }),
+                ));
+            }
+        }
         "SET_PROCESS_PRIORITY" => {
             let target = extract_target(payload).ok_or_else(|| {
                 safety_error(
@@ -1681,6 +1733,47 @@ mod tests {
             &context_with_helper(false),
         );
         assert!(unconfirmed.is_err());
+    }
+
+    #[test]
+    fn defender_actions_are_helper_gated_and_volume_check_validates_its_drive() {
+        for action in [
+            "THROTTLE_DEFENDER_SCANS",
+            "RESTORE_DEFENDER_SCAN_SETTINGS",
+            "RENEW_DEFENDER_DEFINITIONS",
+        ] {
+            let profile = validate_command(action, None, &context_with_helper(true))
+                .unwrap_or_else(|error| panic!("{action} should be allowed: {error:?}"));
+            assert!(profile.requires_privileged_helper, "{action}");
+            assert!(profile.requires_local_confirmation, "{action}");
+            assert_eq!(
+                validate_command(action, None, &context(CommandSource::ManualUser, None, true))
+                    .unwrap_err()
+                    .reason,
+                "privileged_helper_unavailable",
+                "{action}"
+            );
+        }
+        assert!(
+            validate_command("THROTTLE_DEFENDER_SCANS", None, &context_with_helper(true))
+                .unwrap()
+                .requires_snapshot
+        );
+
+        let ok = validate_command(
+            "SCHEDULE_VOLUME_CHECK",
+            Some(&json!({ "driveLetter": "C" })),
+            &context_with_helper(true),
+        );
+        assert!(ok.is_ok());
+        let bad = validate_command(
+            "SCHEDULE_VOLUME_CHECK",
+            Some(&json!({ "driveLetter": "C:\\Windows" })),
+            &context_with_helper(true),
+        );
+        assert_eq!(bad.unwrap_err().reason, "drive_letter_required");
+        let missing = validate_command("SCHEDULE_VOLUME_CHECK", None, &context_with_helper(true));
+        assert_eq!(missing.unwrap_err().reason, "drive_letter_required");
     }
 
     #[test]

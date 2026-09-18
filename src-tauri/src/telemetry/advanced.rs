@@ -41,6 +41,16 @@ pub struct AdvancedTelemetry {
     /// the specific USB-placeholder device that triggers it is present.
     #[serde(default)]
     pub modem_usb_link_issue: Option<super::modem_link::ModemUsbLinkIssue>,
+    /// What Defender's own log, its scan preferences, NTFS/disk errors and
+    /// SMART say - gathered only while `disk_activity` reports Defender
+    /// keeping a disk saturated (see collect_defender_disk_issue), never on
+    /// a healthy machine. Counts and settings only, no paths.
+    #[serde(default)]
+    pub defender_disk_evidence: Option<DefenderDiskEvidence>,
+    /// The single named cause behind "Defender is reading the disk
+    /// non-stop", from the evidence above - see telemetry::defender_disk.
+    #[serde(default)]
+    pub defender_disk_issue: Option<super::defender_disk::DefenderDiskIssue>,
     pub thermal_throttling_suspected: Option<bool>,
     /// The GPU driver Windows itself considers "the" display adapter's
     /// driver (Win32_VideoController), not just any DISPLAY-class entry
@@ -185,6 +195,62 @@ pub struct FailingDevice {
     pub problem_code: u32,
 }
 
+/// Disk-provider error events (`disk` 7/11/51/153, `storahci`/`stornvme`
+/// 129) in the last 7 days, per physical disk number as the event message
+/// names it (`\Device\HarddiskN`, "for Disk N"). Per disk on purpose: the
+/// dev machine logs 96 paging errors a week on Harddisk3 - a removable
+/// drive - which must not indict the internal SSD under scan pressure.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiskErrorEvents {
+    /// None when the message named no disk.
+    pub disk_number: Option<u32>,
+    pub count: u32,
+}
+
+/// See telemetry::defender_disk for what each of these decides. All
+/// event counts are from `Microsoft-Windows-Windows Defender/Operational`
+/// (24h) or the System log (7d); preferences are Get-MpPreference /
+/// Get-MpComputerStatus, both readable unelevated.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DefenderDiskEvidence {
+    pub collected_at: i64,
+    /// 1000 / 1001 / 1002 / 1005.
+    pub scans_started_24h: u32,
+    pub scans_finished_24h: u32,
+    pub scans_cancelled_24h: u32,
+    pub scans_failed_24h: u32,
+    /// 2001 (definitions update failed).
+    pub signature_update_failures_24h: u32,
+    /// 3002 (real-time protection failed) + 5008 (engine failure).
+    pub engine_failures_24h: u32,
+    /// 1116 (threat detected).
+    pub detections_24h: u32,
+    /// 1008 / 1118 / 1119 (action on a threat failed).
+    pub remediation_failures_24h: u32,
+    pub scan_avg_cpu_load_factor: Option<u32>,
+    pub disable_cpu_throttle_on_idle_scans: Option<bool>,
+    pub scan_only_if_idle: Option<bool>,
+    /// 0 = every day, 1-7 = Sunday..Saturday, 8 = never.
+    pub scan_schedule_day: Option<u32>,
+    pub scan_schedule_hour: Option<u32>,
+    /// 1 = quick, 2 = full.
+    pub scan_parameters: Option<u32>,
+    pub exclusion_path_count: Option<u32>,
+    /// None when never run (Windows reports 4294967295 for that).
+    pub quick_scan_age_days: Option<u32>,
+    pub full_scan_age_days: Option<u32>,
+    pub signature_age_days: Option<u32>,
+    pub am_running_mode: Option<String>,
+    /// Drive letters of fixed volumes whose Get-Volume HealthStatus is not
+    /// Healthy.
+    pub unhealthy_volumes: Vec<String>,
+    /// Ntfs 55 (structure corrupt) + 130 (repaired - so it was corrupt) in
+    /// 7 days. Ntfs 98 is deliberately excluded: it is the routine "volume
+    /// is healthy" line logged at every mount.
+    pub ntfs_corruption_events_7d: u32,
+    pub disk_error_events_7d: Vec<DiskErrorEvents>,
+}
+
 pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTelemetry {
     let mut telemetry = AdvancedTelemetry {
         source: "windows_low_frequency".to_string(),
@@ -202,6 +268,7 @@ pub fn collect_advanced_telemetry(gpu_name_hint: Option<&str>) -> AdvancedTeleme
     collect_driver_inventory(&mut telemetry);
     collect_failing_devices(&mut telemetry);
     collect_modem_usb_link_issue(&mut telemetry);
+    collect_defender_disk_issue(&mut telemetry);
     telemetry.gpu_driver_status = collect_gpu_driver_status(gpu_name_hint);
     // Cheap registry reads (no WMI/PowerShell child process) - safe to run
     // on every refresh of this already-throttled (300s) block rather than
@@ -1043,6 +1110,142 @@ fn collect_modem_usb_link_issue(telemetry: &mut AdvancedTelemetry) {
         usb_link_details,
         ghost_wwan_adapter_count,
     );
+}
+
+/// Only spends the ~4s of PowerShell below once `disk_activity` has seen
+/// Defender keep a disk saturated for a sustained stretch - the same
+/// "healthy machines pay nothing" rule as the modem detector. The
+/// collector forces this block to refresh early when that flips (see
+/// TelemetryCollector::advanced_telemetry), so the card does not wait out
+/// the full 300s cache on top of the 5 minutes of pressure it already
+/// needed.
+fn collect_defender_disk_issue(telemetry: &mut AdvancedTelemetry) {
+    use super::{defender_disk, disk_activity};
+
+    let Some(activity) = disk_activity::latest() else {
+        return;
+    };
+    if !activity.pressure.sustained {
+        return;
+    }
+    let Some(evidence) = defender_disk_evidence() else {
+        return;
+    };
+    telemetry.defender_disk_issue =
+        defender_disk::classify(&activity, &evidence, telemetry.disk_predict_failure);
+    telemetry.defender_disk_evidence = Some(evidence);
+}
+
+/// One PowerShell pass over everything defender_disk::classify needs.
+/// Verified unelevated on the dev machine (both event logs, Get-MpPreference,
+/// Get-MpComputerStatus and Get-Volume all answer without admin); ~4s.
+pub(crate) fn defender_disk_evidence() -> Option<DefenderDiskEvidence> {
+    const SCRIPT: &str = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$since24 = (Get-Date).AddHours(-24)
+$since7d = (Get-Date).AddDays(-7)
+$def = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'; StartTime=$since24} -MaxEvents 3000 -ErrorAction SilentlyContinue
+$ids = @{}
+foreach ($e in $def) { $k = [string]$e.Id; if ($ids.ContainsKey($k)) { $ids[$k]++ } else { $ids[$k] = 1 } }
+$sys = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName=@('Ntfs','Microsoft-Windows-Ntfs','disk','Disk','storahci','stornvme'); StartTime=$since7d} -MaxEvents 3000 -ErrorAction SilentlyContinue
+$ntfs = 0
+$diskErrors = @{}
+foreach ($e in $sys) {
+  $p = $e.ProviderName
+  if ($p -like '*Ntfs*') { if ($e.Id -eq 55 -or $e.Id -eq 130) { $ntfs++ }; continue }
+  $isDiskError = ($p -ieq 'disk' -and ($e.Id -in 7,11,51,153)) -or (($p -eq 'storahci' -or $p -eq 'stornvme') -and $e.Id -eq 129)
+  if (-not $isDiskError) { continue }
+  $n = ''
+  if ($e.Message -match 'Harddisk(\d+)') { $n = $Matches[1] } elseif ($e.Message -match '(?i)for Disk (\d+)') { $n = $Matches[1] } elseif ($e.Message -match 'RaidPort(\d+)') { $n = $Matches[1] }
+  if ($diskErrors.ContainsKey($n)) { $diskErrors[$n]++ } else { $diskErrors[$n] = 1 }
+}
+$pref = Get-MpPreference | Select-Object ScanAvgCPULoadFactor, DisableCpuThrottleOnIdleScans, ScanOnlyIfIdleEnabled, ScanScheduleDay, @{n='ScanScheduleHour';e={ $_.ScanScheduleTime.Hours }}, ScanParameters, @{n='ExclusionPathCount';e={ @($_.ExclusionPath).Count }}
+$status = Get-MpComputerStatus | Select-Object QuickScanAge, FullScanAge, AntivirusSignatureAge, AMRunningMode
+$vols = @(Get-Volume | Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter -and $_.HealthStatus -ne 'Healthy' } | ForEach-Object { [string]$_.DriveLetter })
+[pscustomobject]@{ defender_events = $ids; ntfs_corruption = $ntfs; disk_errors = $diskErrors; preferences = $pref; status = $status; unhealthy_volumes = $vols } | ConvertTo-Json -Compress -Depth 4
+"#;
+
+    let value = powershell_json(SCRIPT)?;
+    let events = value.get("defender_events");
+    let count = |id: &str| -> u32 {
+        events
+            .and_then(|map| map.get(id))
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32
+    };
+    let preferences = value.get("preferences");
+    let status = value.get("status");
+    let pref_u32 = |key: &str| {
+        preferences
+            .and_then(|p| p.get(key))
+            .and_then(Value::as_u64)
+            .map(|v| v as u32)
+    };
+    let pref_bool = |key: &str| preferences.and_then(|p| p.get(key)).and_then(Value::as_bool);
+    // Windows reports "never" as u32::MAX.
+    let age = |key: &str| {
+        status
+            .and_then(|s| s.get(key))
+            .and_then(Value::as_u64)
+            .filter(|days| *days < u32::MAX as u64)
+            .map(|days| days as u32)
+    };
+
+    let mut disk_error_events_7d: Vec<DiskErrorEvents> = value
+        .get("disk_errors")
+        .and_then(Value::as_object)
+        .map(|map| {
+            map.iter()
+                .map(|(disk, count)| DiskErrorEvents {
+                    disk_number: disk.parse().ok(),
+                    count: count.as_u64().unwrap_or(0) as u32,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    disk_error_events_7d.sort_by_key(|entry| entry.disk_number);
+
+    Some(DefenderDiskEvidence {
+        collected_at: chrono::Utc::now().timestamp(),
+        scans_started_24h: count("1000"),
+        scans_finished_24h: count("1001"),
+        scans_cancelled_24h: count("1002"),
+        scans_failed_24h: count("1005"),
+        signature_update_failures_24h: count("2001"),
+        engine_failures_24h: count("3002") + count("5008"),
+        detections_24h: count("1116"),
+        remediation_failures_24h: count("1008") + count("1118") + count("1119"),
+        scan_avg_cpu_load_factor: pref_u32("ScanAvgCPULoadFactor"),
+        disable_cpu_throttle_on_idle_scans: pref_bool("DisableCpuThrottleOnIdleScans"),
+        scan_only_if_idle: pref_bool("ScanOnlyIfIdleEnabled"),
+        scan_schedule_day: pref_u32("ScanScheduleDay"),
+        scan_schedule_hour: pref_u32("ScanScheduleHour"),
+        scan_parameters: pref_u32("ScanParameters"),
+        exclusion_path_count: pref_u32("ExclusionPathCount"),
+        quick_scan_age_days: age("QuickScanAge"),
+        full_scan_age_days: age("FullScanAge"),
+        signature_age_days: age("AntivirusSignatureAge"),
+        am_running_mode: status
+            .and_then(|s| s.get("AMRunningMode"))
+            .and_then(Value::as_str)
+            .map(ToString::to_string),
+        unhealthy_volumes: value
+            .get("unhealthy_volumes")
+            .and_then(Value::as_array)
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(ToString::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        ntfs_corruption_events_7d: value
+            .get("ntfs_corruption")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as u32,
+        disk_error_events_7d,
+    })
 }
 
 /// Hidden "Generic Mobile Broadband Adapter" interfaces in "Not Present"

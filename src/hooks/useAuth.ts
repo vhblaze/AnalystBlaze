@@ -36,6 +36,10 @@ import {
   disableGameDvr as disableGameDvrAction,
   repairService as repairServiceAction,
   disableServicePermanently as disableServicePermanentlyAction,
+  throttleDefenderScans as throttleDefenderScansAction,
+  restoreDefenderScanSettings as restoreDefenderScanSettingsAction,
+  renewDefenderDefinitions as renewDefenderDefinitionsAction,
+  scheduleVolumeCheck as scheduleVolumeCheckAction,
   restartWindowsNow as restartWindowsNowAction,
   setAgentTelemetryMode,
   setDnsServers as setDnsServersAction,
@@ -55,6 +59,7 @@ import {
   type AgentTelemetrySample,
   type NetworkTuneRequest,
   type FocusModeProfile,
+  type OptimizationResult,
 } from "@/services/tauri/agent";
 import { captureTelemetry } from "@/services/telemetry";
 
@@ -833,6 +838,43 @@ export function useAuth() {
     return result;
   }, [runAction]);
 
+  // The four Defender-disk fixes share repairService's "the real outcome
+  // matters" shape: each reports honestly when Windows refused, and the card
+  // decides what to show from result.success rather than from an exception.
+  const runDefenderFix = useCallback(
+    (run: () => Promise<OptimizationResult>, eventName: string) =>
+      runAction(async () => {
+        const result = await run();
+        setMessage({
+          key: result.success ? "agent.messages.optimizationActionApplied" : "agent.messages.optimizationActionFailed",
+          params: { message: result.message },
+        });
+        captureTelemetry({
+          name: result.success ? eventName : `${eventName}_failed`,
+          category: "agent",
+          properties: {},
+        });
+        return result;
+      }, { rethrow: true }),
+    [runAction],
+  );
+  const throttleDefenderScans = useCallback(
+    () => runDefenderFix(throttleDefenderScansAction, "defender_scans_throttled"),
+    [runDefenderFix],
+  );
+  const restoreDefenderScanSettings = useCallback(
+    () => runDefenderFix(restoreDefenderScanSettingsAction, "defender_scan_settings_restored"),
+    [runDefenderFix],
+  );
+  const renewDefenderDefinitions = useCallback(
+    () => runDefenderFix(renewDefenderDefinitionsAction, "defender_definitions_renewed"),
+    [runDefenderFix],
+  );
+  const scheduleVolumeCheck = useCallback(
+    (driveLetter: string) => runDefenderFix(() => scheduleVolumeCheckAction(driveLetter), "volume_check_scheduled"),
+    [runDefenderFix],
+  );
+
   const applyVisualPerformance = useCallback(async () => {
     const result = await runAction(async () => {
       const result = await applyVisualPerformanceMode();
@@ -1119,6 +1161,10 @@ export function useAuth() {
     disableGameDvr,
     repairService,
     disableServicePermanently,
+    throttleDefenderScans,
+    restoreDefenderScanSettings,
+    renewDefenderDefinitions,
+    scheduleVolumeCheck,
     applyVisualPerformance,
     restoreVisualPerformance,
     cleanTempDeep,

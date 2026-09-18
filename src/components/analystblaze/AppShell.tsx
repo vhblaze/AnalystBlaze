@@ -312,6 +312,54 @@ export function AppShell() {
           () => auth.disableServicePermanently(serviceName),
         );
       }
+      if (actionName === "THROTTLE_DEFENDER_SCANS") {
+        return runConfirmed(
+          {
+            title: "Limitar verificacoes do Defender",
+            description: "Reduz a CPU que as verificacoes agendadas do Windows Defender podem usar (de 50% para 20%) e faz elas rodarem so com o PC ocioso. A protecao em tempo real nao muda. Reversivel pelo proprio card.",
+            risk: "sensivel",
+            snapshot: true,
+          },
+          auth.throttleDefenderScans,
+        );
+      }
+      if (actionName === "RESTORE_DEFENDER_SCAN_SETTINGS") {
+        return runConfirmed(
+          {
+            title: "Restaurar verificacoes do Defender",
+            description: "Devolve as preferencias de verificacao do Defender exatamente como estavam antes do AnalystBlaze limita-las.",
+            risk: "sensivel",
+            snapshot: false,
+          },
+          auth.restoreDefenderScanSettings,
+        );
+      }
+      if (actionName === "RENEW_DEFENDER_DEFINITIONS") {
+        return runConfirmed(
+          {
+            title: "Renovar definicoes do Defender",
+            description: "Remove o conjunto atual de definicoes de virus (que pode estar corrompido) e baixa um novo. O Defender fica alguns minutos sem definicoes ate o download terminar - nao abra arquivos suspeitos nesse intervalo.",
+            risk: "sensivel",
+            snapshot: false,
+          },
+          auth.renewDefenderDefinitions,
+        );
+      }
+      if (actionName === "SCHEDULE_VOLUME_CHECK") {
+        const driveLetter = typeof context?.driveLetter === "string" ? context.driveLetter : null;
+        if (!driveLetter) {
+          return Promise.reject(new Error("driveLetter ausente para SCHEDULE_VOLUME_CHECK."));
+        }
+        return runConfirmed(
+          {
+            title: `Verificar o disco ${driveLetter}: na proxima reinicializacao`,
+            description: "Marca a unidade para o Windows rodar a verificacao e reparo do sistema de arquivos (chkdsk) antes de abrir, na proxima vez que voce reiniciar. Pode levar alguns minutos a mais nesse boot.",
+            risk: "sensivel",
+            snapshot: false,
+          },
+          () => auth.scheduleVolumeCheck(driveLetter),
+        );
+      }
       return Promise.reject(new Error(`Acao nao suportada localmente: ${actionName}`));
     },
     [runConfirmed, activateGameModeWithUpsell, auth],

@@ -131,6 +131,16 @@ pub enum SnapshotEntry {
         property: String,
         previous_value: Option<String>,
     },
+    /// One Set-MpPreference scan property changed by
+    /// THROTTLE_DEFENDER_SCANS (see optimizations::defender). Values are
+    /// kept as the strings Get-MpPreference rendered them ("50", "True"),
+    /// re-validated against the property's allowlist on restore.
+    /// `previous_value: None` means the property was unreadable before the
+    /// change, so restoring it leaves it alone rather than guessing.
+    DefenderScanPreference {
+        property: String,
+        previous_value: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -281,6 +291,20 @@ pub fn restore_visual_effect_snapshots() -> Result<RestoreReport, String> {
                 .entries
                 .iter()
                 .any(|entry| matches!(entry, SnapshotEntry::RegistryValue { .. }))
+    })
+}
+
+/// Runs inside the privileged helper (RESTORE_DEFENDER_SCAN_SETTINGS), the
+/// only place Set-MpPreference succeeds - same shape as the network-tune
+/// revert that restores TcpGlobalSetting entries.
+pub fn restore_defender_scan_snapshots() -> Result<RestoreReport, String> {
+    restore_snapshots_matching(|snapshot| {
+        snapshot.restored_at.is_none()
+            && snapshot.action_name == "THROTTLE_DEFENDER_SCANS"
+            && snapshot
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, SnapshotEntry::DefenderScanPreference { .. }))
     })
 }
 
@@ -788,6 +812,23 @@ pub fn restore_snapshot_entries(snapshot: &OptimizationSnapshot) -> SnapshotRest
                     }
                 }
             }
+            SnapshotEntry::DefenderScanPreference {
+                property,
+                previous_value,
+            } => match super::defender::restore_scan_preference(property, previous_value.as_deref()) {
+                Ok(()) => {
+                    summary.restored_entries += 1;
+                    summary
+                        .messages
+                        .push(format!("Preferencia do Defender restaurada: {property}."));
+                }
+                Err(error) => {
+                    summary.failed_entries += 1;
+                    summary.messages.push(format!(
+                        "Falha ao restaurar preferencia do Defender {property}: {error}"
+                    ));
+                }
+            },
         }
     }
 

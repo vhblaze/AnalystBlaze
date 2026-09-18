@@ -103,6 +103,11 @@ pub struct TelemetrySample {
     pub disk_used_gb: f64,
     pub disk_total_gb: f64,
     pub disk_usage_percent: f64,
+    /// How busy the disks are and who is keeping them busy - the space
+    /// figures above never said. Local only (process names); see
+    /// telemetry::disk_activity. None when PDH is unavailable.
+    #[serde(default)]
+    pub disk_activity: Option<super::disk_activity::DiskActivity>,
     pub active_processes: usize,
     pub system_uptime_seconds: u64,
     pub active_window: Option<String>,
@@ -390,6 +395,9 @@ impl TelemetryCollector {
             }
         });
         let (disk_used_gb, disk_total_gb, disk_usage_percent) = self.disk_usage();
+        // Before advanced_telemetry() below: that block decides whether to
+        // gather Defender evidence from this tracker's latest view.
+        let disk_activity = super::disk_activity::sample();
         let active_processes = self.system.processes().len();
         let system_uptime_seconds = System::uptime();
         let active_window = active_window_title();
@@ -482,6 +490,7 @@ impl TelemetryCollector {
             disk_used_gb,
             disk_total_gb,
             disk_usage_percent,
+            disk_activity,
             active_processes,
             system_uptime_seconds,
             active_window: active_window.clone(),
@@ -899,7 +908,16 @@ impl TelemetryCollector {
 
     fn advanced_telemetry(&self) -> AdvancedTelemetry {
         let cache = advanced_cache();
-        let due = lock_cache(cache).stale(300)
+        // Defender keeping a disk saturated is the one thing in this block
+        // worth answering sooner than the 300s cadence: once disk_activity
+        // calls the pressure sustained and the cached block has no verdict
+        // yet, refresh after 60s instead - the evidence gathering itself is
+        // gated on the same flag (see advanced::collect_defender_disk_issue).
+        let defender_verdict_due = super::disk_activity::latest()
+            .is_some_and(|activity| activity.pressure.sustained)
+            && lock_cache(cache).value.defender_disk_issue.is_none()
+            && lock_cache(cache).stale(60);
+        let due = (lock_cache(cache).stale(300) || defender_verdict_due)
             && !crate::optimizations::focus::should_pause_heavy_scans();
         if due {
             let fresh = collect_advanced_telemetry(Some(&self.primary_gpu().name));

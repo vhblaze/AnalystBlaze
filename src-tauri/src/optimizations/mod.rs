@@ -3,6 +3,7 @@ pub mod adaptive;
 pub mod app_usage;
 pub mod autostart;
 pub mod cleanup;
+pub mod defender;
 pub mod detection;
 #[cfg(test)]
 mod dpc_isr_probe;
@@ -364,6 +365,10 @@ async fn execute_command_checked_with_helper(
         "DISM_RESTORE_HEALTH_STATUS" => system_repair::system_file_check_status(payload).await,
         "RESTART_PNP_DEVICE" => windows_actions::restart_pnp_device(payload).await,
         "DISABLE_GAME_DVR" => windows_actions::disable_game_dvr(payload).await,
+        "THROTTLE_DEFENDER_SCANS" => defender::throttle_scans(payload).await,
+        "RESTORE_DEFENDER_SCAN_SETTINGS" => defender::restore_scan_settings(payload).await,
+        "RENEW_DEFENDER_DEFINITIONS" => defender::renew_definitions(payload).await,
+        "SCHEDULE_VOLUME_CHECK" => defender::schedule_volume_check(payload).await,
         "REPAIR_SERVICE" => windows_actions::repair_service(payload).await,
         "DISABLE_SERVICE_PERMANENTLY" => windows_actions::disable_service_permanently(payload).await,
         other => ExecutionResult::unsupported(other),

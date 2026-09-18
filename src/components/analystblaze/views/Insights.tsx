@@ -8,6 +8,7 @@ import {
   getNetworkDiagnostics,
   isTauriRuntime,
   openAgentInsights,
+  openWindowsSecurity,
   type AgentTelemetrySnapshot,
   type DiskOptimizationInsight,
   type NetworkDiagnostics,
@@ -55,6 +56,10 @@ const LOCALLY_EXECUTABLE_ACTIONS = new Set([
   "DISABLE_GAME_DVR",
   "REPAIR_SERVICE",
   "DISABLE_SERVICE_PERMANENTLY",
+  "THROTTLE_DEFENDER_SCANS",
+  "RESTORE_DEFENDER_SCAN_SETTINGS",
+  "RENEW_DEFENDER_DEFINITIONS",
+  "SCHEDULE_VOLUME_CHECK",
 ]);
 /** Actions that only ever run on the user's own machine, never queued to
  * the server - either because the action isn't (yet) registered in the
@@ -71,12 +76,24 @@ const LOCAL_ONLY_ACTIONS = new Set([
   "DISABLE_GAME_DVR",
   "REPAIR_SERVICE",
   "DISABLE_SERVICE_PERMANENTLY",
+  "THROTTLE_DEFENDER_SCANS",
+  "RESTORE_DEFENDER_SCAN_SETTINGS",
+  "RENEW_DEFENDER_DEFINITIONS",
+  "SCHEDULE_VOLUME_CHECK",
 ]);
 /** Actions whose useAuth wrapper resolves with the real outcome instead of
  * throwing on failure (see restartPnpDevice's comment in useAuth.ts) -
  * "didn't fix it" is legitimate information to show, not an exception, so
  * these only dismiss the card when the outcome actually says success. */
-const HONEST_OUTCOME_ACTIONS = new Set(["RESTART_PNP_DEVICE", "REPAIR_SERVICE", "DISABLE_SERVICE_PERMANENTLY"]);
+const HONEST_OUTCOME_ACTIONS = new Set([
+  "RESTART_PNP_DEVICE",
+  "REPAIR_SERVICE",
+  "DISABLE_SERVICE_PERMANENTLY",
+  "THROTTLE_DEFENDER_SCANS",
+  "RESTORE_DEFENDER_SCAN_SETTINGS",
+  "RENEW_DEFENDER_DEFINITIONS",
+  "SCHEDULE_VOLUME_CHECK",
+]);
 /** How many Critical-level (level 1) Windows Event Log entries in the last
  * 24h are worth mentioning. This is deliberately conservative and paired
  * with "pode (nao necessariamente) indicar" wording below, not "seu Windows
@@ -131,6 +148,59 @@ function loadModemAnswer(): ModemAnswer | null {
   } catch {
     return null;
   }
+}
+
+/** Mirrors telemetry::defender_disk::DefenderDiskIssue on the Rust side. */
+type DefenderDiskCause =
+  | "disk_failing"
+  | "file_system_corruption"
+  | "threat_remediation_loop"
+  | "scan_cannot_finish"
+  | "definitions_or_engine_failing"
+  | "unthrottled_scan"
+  | "unknown";
+type DefenderDiskIssue = {
+  cause: DefenderDiskCause;
+  detected_at: number;
+  disk?: string | null;
+  disk_number?: number | null;
+  sustained_minutes: number;
+  peak_disk_active_percent: number;
+  peak_defender_mb_s: number;
+  disk_error_events_7d: number;
+  ntfs_corruption_events_7d: number;
+  unhealthy_volumes: string[];
+  detections_24h: number;
+  remediation_failures_24h: number;
+  scans_started_24h: number;
+  scans_finished_24h: number;
+  scans_failed_24h: number;
+  signature_update_failures_24h: number;
+  engine_failures_24h: number;
+  scan_avg_cpu_load_factor?: number | null;
+  disable_cpu_throttle_on_idle_scans?: boolean | null;
+  scan_only_if_idle?: boolean | null;
+  full_scan_age_days?: number | null;
+};
+/** Set when THROTTLE_DEFENDER_SCANS succeeds, cleared when the restore does -
+ * keeps a small "restaurar" card around so the change is never a one-way
+ * door the user has to dig through the action history to undo. */
+const DEFENDER_THROTTLE_STORAGE_KEY = "analystblaze.defenderScansThrottledAt";
+
+function loadDefenderThrottledAt(): number | null {
+  try {
+    const raw = localStorage.getItem(DEFENDER_THROTTLE_STORAGE_KEY);
+    const value = raw ? Number(raw) : NaN;
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `1 D: E:` -> "D": the first drive letter on a PDH PhysicalDisk instance. */
+function firstDriveLetter(instance: string | null | undefined): string | null {
+  const match = /\b([A-Za-z]):/.exec(instance ?? "");
+  return match ? match[1].toUpperCase() : null;
 }
 
 function insightKey(insight: Pick<Insight, "category" | "actionName" | "title">): string {
@@ -265,7 +335,19 @@ export function Insights({
       } else if (HONEST_OUTCOME_ACTIONS.has(actionName)) {
         const outcome = result as { success?: boolean; message?: string } | null;
         setActionMessage(outcome?.message ?? "Falha ao aplicar a acao.");
-        if (outcome?.success) dismissInsight(insight);
+        if (outcome?.success) {
+          if (actionName === "THROTTLE_DEFENDER_SCANS" || actionName === "RESTORE_DEFENDER_SCAN_SETTINGS") {
+            const throttledAt = actionName === "THROTTLE_DEFENDER_SCANS" ? Date.now() : null;
+            setDefenderThrottledAt(throttledAt);
+            try {
+              if (throttledAt) localStorage.setItem(DEFENDER_THROTTLE_STORAGE_KEY, String(throttledAt));
+              else localStorage.removeItem(DEFENDER_THROTTLE_STORAGE_KEY);
+            } catch {
+              // Non-critical preference persistence.
+            }
+          }
+          dismissInsight(insight);
+        }
       } else {
         dismissInsight(insight);
       }
@@ -659,6 +741,181 @@ export function Insights({
     });
   }, [telemetry?.advanced, modemUsbLinkIssue]);
 
+  const [defenderThrottledAt, setDefenderThrottledAt] = useState<number | null>(() => loadDefenderThrottledAt());
+
+  // "Windows Defender keeps reading the disk, it sits at 100%" - one
+  // symptom, several faults. telemetry::disk_activity sees the pressure
+  // (which process, which disk, for how long) and telemetry::defender_disk
+  // names the cause from Defender's own log, its scan settings, NTFS/disk
+  // errors and SMART. The card leads with the cause and quotes the numbers
+  // it was decided on, and only offers to slow Defender down in the one
+  // case where that is the actual fix - for a failing disk or a corrupt
+  // file system, throttling the scan would just hide the real problem.
+  const defenderDiskInsight = useMemo<Insight | null>(() => {
+    const advanced = telemetry?.advanced as { defender_disk_issue?: DefenderDiskIssue | null } | null | undefined;
+    const issue = advanced?.defender_disk_issue ?? null;
+    if (!issue) return null;
+    const live = telemetry?.disk_activity ?? null;
+
+    const diskLetter = firstDriveLetter(issue.disk);
+    const diskLabel = diskLetter ? `disco ${diskLetter}:` : issue.disk_number != null ? `disco ${issue.disk_number}` : "disco";
+    const activePercent = Math.round(live?.busiest_disk_active_percent ?? issue.peak_disk_active_percent);
+    const share = live?.defender ? Math.round(live.defender.share_percent) : null;
+    const minutes = Math.max(issue.sustained_minutes, Math.round((live?.pressure.sustained_seconds ?? 0) / 60));
+    const pressureLine = `O Windows Defender (MsMpEng) vem mantendo o ${diskLabel} em ~${activePercent}% de atividade por ${minutes} min nos ultimos 30 minutos${share != null ? `, respondendo por ~${share}% de tudo que esta sendo lido/gravado` : ""}.`;
+    const reasonBase = `${issue.disk ?? "disco ?"} ${Math.round(issue.peak_disk_active_percent)}% ativo; Defender ${issue.peak_defender_mb_s.toFixed(1)} MB/s pico; ${issue.sustained_minutes} min sob pressao`;
+
+    switch (issue.cause) {
+      case "disk_failing": {
+        const evidence =
+          issue.disk_error_events_7d > 0
+            ? `${issue.disk_error_events_7d} erros de hardware registrados pelo Windows nesse disco nos ultimos 7 dias`
+            : "o proprio disco (SMART) esta avisando que vai falhar";
+        return {
+          title: `O ${diskLabel} esta com defeito - o Defender e so a vitima`,
+          explanation: `${pressureLine} Mas a causa nao e o antivirus: ${evidence}. Um disco falhando responde devagar a qualquer leitura, e o Defender so e o programa que mais le. Limitar o Defender esconderia o aviso. O que fazer: faca backup do que importa agora, enquanto o disco ainda responde, e planeje a troca. Depois do backup, o disco pode ser visto em Telemetria > Saude do disco.`,
+          impact: "Risco de perda de dados",
+          category: "performance",
+          risk: "alto",
+          reversible: false,
+          confidence: 0.75,
+          reason: `${reasonBase}; ${issue.disk_error_events_7d} eventos disk/storahci em 7d; SMART predict_failure`,
+        };
+      }
+      case "file_system_corruption": {
+        const drive = issue.unhealthy_volumes[0] ?? diskLetter ?? "C";
+        const evidence = [
+          issue.unhealthy_volumes.length > 0 ? `o Windows marca a unidade ${issue.unhealthy_volumes.join(", ")} como nao saudavel` : null,
+          issue.ntfs_corruption_events_7d > 0 ? `${issue.ntfs_corruption_events_7d} evento(s) de corrupcao NTFS nos ultimos 7 dias` : null,
+        ]
+          .filter(Boolean)
+          .join(" e ");
+        return {
+          title: `Sistema de arquivos da unidade ${drive}: corrompido`,
+          explanation: `${pressureLine} A causa esta no disco, nao no antivirus: ${evidence}. Estruturas corrompidas fazem cada leitura travar e serem tentadas de novo - e o Defender, que le tudo, e quem aparece no Gerenciador de Tarefas. A correcao e o chkdsk do proprio Windows, que precisa rodar antes do sistema abrir: agende aqui e reinicie quando puder.`,
+          impact: "Leituras travando em arquivos corrompidos",
+          category: "performance",
+          risk: "baixo",
+          reversible: true,
+          confidence: 0.8,
+          reason: `${reasonBase}; volumes nao saudaveis: ${issue.unhealthy_volumes.join(", ") || "nenhum"}; Ntfs 55/130: ${issue.ntfs_corruption_events_7d}`,
+          actionName: "SCHEDULE_VOLUME_CHECK",
+          actionContext: { driveLetter: drive },
+          actionLabel: `Verificar ${drive}: na proxima reinicializacao`,
+        };
+      }
+      case "threat_remediation_loop":
+        return {
+          title: "O Defender esta encontrando a mesma ameaca repetidamente",
+          explanation: `${pressureLine} O historico do proprio Defender mostra ${issue.detections_24h} deteccao(oes) nas ultimas 24h${issue.remediation_failures_24h > 0 ? ` e ${issue.remediation_failures_24h} tentativa(s) de remocao que falharam` : ""}. Quando ele nao consegue remover ou colocar em quarentena, encontra de novo na proxima verificacao, e assim por diante - por isso o disco nao descansa. Abra o Historico de protecao do Windows, veja qual arquivo e, e escolha remover ou permitir. O AnalystBlaze nao decide isso por voce: e a diferenca entre um falso positivo num jogo e um malware de verdade.`,
+          impact: `${issue.detections_24h} deteccoes em 24h`,
+          category: "performance",
+          risk: "baixo",
+          reversible: true,
+          confidence: 0.8,
+          reason: `${reasonBase}; Defender 1116: ${issue.detections_24h}; 1008/1118/1119: ${issue.remediation_failures_24h}`,
+          action: {
+            label: "Abrir historico de protecao",
+            onClick: () => {
+              track("defender_disk_open_history");
+              void openWindowsSecurity("history").catch(() => undefined);
+            },
+          },
+        };
+      case "scan_cannot_finish":
+        return {
+          title: "As verificacoes do Defender nao estao conseguindo terminar",
+          explanation: `${pressureLine} Nas ultimas 24h o Defender iniciou ${issue.scans_started_24h} verificacao(oes), concluiu ${issue.scans_finished_24h}${issue.scans_failed_24h > 0 ? ` e registrou ${issue.scans_failed_24h} como falha` : ""}. Isso normalmente e um arquivo que ele nao consegue atravessar - um arquivo enorme ou corrompido, um container (VHD, PST, arquivo de backup) ou uma pasta de nuvem so com placeholders - e que e tentado de novo a cada verificacao. Renovar as definicoes resolve os casos em que o erro esta no proprio Defender; se continuar, o Historico de protecao mostra em qual pasta ele esta parando, e dai vale excluir aquela pasta especifica da verificacao (em Seguranca do Windows), nunca o disco inteiro.`,
+          impact: `${issue.scans_started_24h} verificacoes, ${issue.scans_finished_24h} concluidas`,
+          category: "performance",
+          risk: "baixo",
+          reversible: true,
+          confidence: 0.7,
+          reason: `${reasonBase}; Defender 1000/1001/1005: ${issue.scans_started_24h}/${issue.scans_finished_24h}/${issue.scans_failed_24h}`,
+          actionName: "RENEW_DEFENDER_DEFINITIONS",
+          actionLabel: "Renovar definicoes do Defender",
+          action: {
+            label: "Abrir historico de protecao",
+            onClick: () => {
+              track("defender_disk_open_history");
+              void openWindowsSecurity("history").catch(() => undefined);
+            },
+          },
+        };
+      case "definitions_or_engine_failing":
+        return {
+          title: "As definicoes ou o motor do Defender estao falhando",
+          explanation: `${pressureLine} O log do Defender registrou ${issue.signature_update_failures_24h} falha(s) ao atualizar as definicoes${issue.engine_failures_24h > 0 ? ` e ${issue.engine_failures_24h} erro(s) do proprio motor de verificacao` : ""} nas ultimas 24h. Um conjunto de definicoes corrompido e uma causa classica de verificacao em loop. A correcao e remover as definicoes atuais e baixar de novo - o Defender fica alguns minutos sem definicoes ate o download terminar.`,
+          impact: `${issue.signature_update_failures_24h} falhas de atualizacao em 24h`,
+          category: "performance",
+          risk: "baixo",
+          reversible: true,
+          confidence: 0.7,
+          reason: `${reasonBase}; Defender 2001: ${issue.signature_update_failures_24h}; 3002/5008: ${issue.engine_failures_24h}`,
+          actionName: "RENEW_DEFENDER_DEFINITIONS",
+          actionLabel: "Renovar definicoes do Defender",
+        };
+      case "unthrottled_scan": {
+        const factor = issue.scan_avg_cpu_load_factor ?? 50;
+        const settings = [
+          `pode usar ate ${factor}% da CPU`,
+          issue.disable_cpu_throttle_on_idle_scans ? "ignora o limite quando o PC esta ocioso" : null,
+          issue.scan_only_if_idle === false ? "roda mesmo com voce usando o PC" : null,
+        ]
+          .filter(Boolean)
+          .join(", ");
+        return {
+          title: "Uma verificacao do Defender esta saturando o disco",
+          explanation: `${pressureLine} Nao encontramos nenhum sinal de defeito no disco, corrupcao ou erro do Defender - e uma verificacao normal, so que com as configuracoes padrao do Windows (${settings}) num disco que nao acompanha o ritmo. Limitar a verificacao a 20% de CPU e so com o PC ocioso deixa ela mais lenta, mas para de travar todo o resto. A protecao em tempo real nao muda.${issue.full_scan_age_days == null ? " Nenhuma verificacao completa consta - a primeira e sempre a mais pesada." : ""}`,
+          impact: `${diskLabel} em ~${activePercent}%`,
+          category: "performance",
+          risk: "baixo",
+          reversible: true,
+          confidence: 0.7,
+          reason: `${reasonBase}; ScanAvgCPULoadFactor=${factor}; DisableCpuThrottleOnIdleScans=${String(issue.disable_cpu_throttle_on_idle_scans)}; ScanOnlyIfIdleEnabled=${String(issue.scan_only_if_idle)}`,
+          actionName: "THROTTLE_DEFENDER_SCANS",
+          actionLabel: "Limitar verificacoes do Defender",
+        };
+      }
+      default:
+        return {
+          title: "O Defender esta saturando o disco, sem causa evidente",
+          explanation: `${pressureLine} As verificacoes ja estao com limite de CPU, e nem o log do Defender, nem o disco, nem o sistema de arquivos apontam um motivo. Vale olhar o Historico de protecao (pode haver uma deteccao antiga em loop que o log nao mostra mais) e, se acontecer todo dia no mesmo horario, e a verificacao agendada - mude o horario em Seguranca do Windows. Se persistir, renovar as definicoes e um passo seguro.`,
+          impact: `${diskLabel} em ~${activePercent}%`,
+          category: "performance",
+          risk: "baixo",
+          reversible: true,
+          confidence: 0.5,
+          reason: reasonBase,
+          actionName: "RENEW_DEFENDER_DEFINITIONS",
+          actionLabel: "Renovar definicoes do Defender",
+          action: {
+            label: "Abrir historico de protecao",
+            onClick: () => {
+              track("defender_disk_open_history");
+              void openWindowsSecurity("history").catch(() => undefined);
+            },
+          },
+        };
+    }
+  }, [telemetry, track]);
+
+  const defenderThrottledInsight = useMemo<Insight | null>(() => {
+    if (defenderThrottledAt == null) return null;
+    return {
+      title: "Verificacoes do Defender limitadas pelo AnalystBlaze",
+      explanation: `Desde ${new Date(defenderThrottledAt).toLocaleString()} as verificacoes agendadas do Defender usam no maximo 20% da CPU e so rodam com o PC ocioso. Se quiser voltar ao padrao do Windows, restaure aqui - os valores anteriores exatos foram guardados.`,
+      impact: "Verificacoes mais lentas, PC mais livre",
+      category: "performance",
+      risk: "baixo",
+      reversible: true,
+      confidence: 1,
+      reason: "THROTTLE_DEFENDER_SCANS aplicado localmente",
+      actionName: "RESTORE_DEFENDER_SCAN_SETTINGS",
+      actionLabel: "Restaurar padrao do Windows",
+    };
+  }, [defenderThrottledAt]);
+
   const shadowStorageInsight = useMemo<Insight | null>(() => {
     if (!shadowConsentNeeded || !onResolveShadowConsent) return null;
     return {
@@ -690,6 +947,8 @@ export function Insights({
       diskNearFullInsight,
       scheduledDefragInsight,
       systemHealthInsight,
+      defenderDiskInsight,
+      defenderThrottledInsight,
       modemUsbLinkInsight,
       ...failingDeviceInsights,
     ].filter((insight): insight is Insight => insight != null);
@@ -703,6 +962,8 @@ export function Insights({
     diskNearFullInsight,
     scheduledDefragInsight,
     systemHealthInsight,
+    defenderDiskInsight,
+    defenderThrottledInsight,
     modemUsbLinkInsight,
     failingDeviceInsights,
     insights,

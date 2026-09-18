@@ -78,6 +78,9 @@ pub struct TelemetryDashboardSnapshot {
     pub disk_used_gb: f64,
     pub disk_total_gb: f64,
     pub disk_usage_percent: f64,
+    /// telemetry::disk_activity::DiskActivity - null until the PDH reader
+    /// has two samples to compute rates from.
+    pub disk_activity: serde_json::Value,
     pub active_processes: usize,
     pub system_uptime_seconds: u64,
     pub active_window: Option<String>,
@@ -150,6 +153,7 @@ impl TelemetryDashboardSnapshot {
             disk_used_gb: sample.disk_used_gb,
             disk_total_gb: sample.disk_total_gb,
             disk_usage_percent: sample.disk_usage_percent,
+            disk_activity: serde_json::to_value(&sample.disk_activity).unwrap_or(serde_json::Value::Null),
             active_processes: sample.active_processes,
             system_uptime_seconds: sample.system_uptime_seconds,
             active_window: sample.active_window.clone(),

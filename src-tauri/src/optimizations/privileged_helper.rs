@@ -1894,6 +1894,10 @@ fn supported_actions() -> &'static [&'static str] {
         "DISABLE_GAME_DVR",
         "REPAIR_SERVICE",
         "DISABLE_SERVICE_PERMANENTLY",
+        "THROTTLE_DEFENDER_SCANS",
+        "RESTORE_DEFENDER_SCAN_SETTINGS",
+        "RENEW_DEFENDER_DEFINITIONS",
+        "SCHEDULE_VOLUME_CHECK",
     ]
 }
 

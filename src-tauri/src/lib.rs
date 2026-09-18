@@ -1292,6 +1292,32 @@ async fn dism_restore_health_status(
     .await)
 }
 
+/// The four fixes behind the Defender-disk Insights card - see
+/// optimizations::defender for what each does and why all are helper-only.
+#[tauri::command]
+async fn throttle_defender_scans() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("THROTTLE_DEFENDER_SCANS", None).await)
+}
+
+#[tauri::command]
+async fn restore_defender_scan_settings() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("RESTORE_DEFENDER_SCAN_SETTINGS", None).await)
+}
+
+#[tauri::command]
+async fn renew_defender_definitions() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("RENEW_DEFENDER_DEFINITIONS", None).await)
+}
+
+#[tauri::command]
+async fn schedule_volume_check(drive_letter: String) -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command(
+        "SCHEDULE_VOLUME_CHECK",
+        Some(serde_json::json!({ "driveLetter": drive_letter })),
+    )
+    .await)
+}
+
 #[tauri::command]
 async fn restart_pnp_device(device_id: String) -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command(
@@ -1379,6 +1405,22 @@ async fn open_billing(state: State<'_, AgentState>) -> Result<String, String> {
     tauri_plugin_opener::open_url(&state.config.web_billing_url, None::<&str>)
         .map_err(|error| error.to_string())?;
     Ok(state.config.web_billing_url.clone())
+}
+
+/// Deep-links into the Windows Security app (`windowsdefender://` is the
+/// URI scheme it registers). `page` is matched against a fixed list, never
+/// interpolated - the Defender-disk Insights card sends the user to the
+/// Protection History to decide about a detection themselves.
+#[tauri::command]
+async fn open_windows_security(page: String) -> Result<String, String> {
+    let url = match page.as_str() {
+        "history" => "windowsdefender://history/",
+        "threat" => "windowsdefender://threat/",
+        "threatsettings" => "windowsdefender://threatsettings/",
+        other => return Err(format!("Pagina da Seguranca do Windows desconhecida: {other}")),
+    };
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|error| error.to_string())?;
+    Ok(url.to_string())
 }
 
 #[tauri::command]
@@ -2129,6 +2171,7 @@ pub fn run() {
             open_account_settings,
             open_billing,
             open_web_insights,
+            open_windows_security,
             complete_auth_from_deep_link,
             start_agent,
             activate_game_mode,
@@ -2217,6 +2260,10 @@ pub fn run() {
             restart_pnp_device,
             disable_game_dvr,
             repair_service,
+            throttle_defender_scans,
+            restore_defender_scan_settings,
+            renew_defender_definitions,
+            schedule_volume_check,
             disable_service_permanently,
             set_power_plan_balanced,
             set_power_plan_power_saver,
