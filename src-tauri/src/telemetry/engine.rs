@@ -2489,6 +2489,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn frame_measurement_survives_the_backend_sanitizer_intact() {
+        // The before/after FPS of an automatic Game Mode activation travels
+        // in execution_details.data.frameMeasurement - the server's trainer
+        // reads it from there. minimize_backend_value cuts anything at depth
+        // >= 5 and keeps only 30 keys per object, and frameMeasurement's
+        // leaves sit at depth 4: one level of nesting added anywhere along
+        // details -> data -> frameMeasurement -> baseline -> avgFps would
+        // silently turn every measurement into "[nested]".
+        let details = json!({
+            "agent": "analystblaze-desktop",
+            "source": "local_policy",
+            "data": {
+                "profile": "game_mode",
+                "detected_game": { "detected": true, "process_name": "cs2.exe", "pid": "4242" },
+                "frameMeasurement": {
+                    "windowSeconds": 20,
+                    "baseline": { "sampleCount": 2900, "avgFps": 145.2, "low1PctFps": 61.0 },
+                    "optimized": { "sampleCount": 3300, "avgFps": 165.7, "low1PctFps": 88.4 },
+                    "deltaAvgFps": 20.5,
+                    "deltaAvgFpsPercent": 14.12,
+                    "deltaLow1PctFps": 27.4,
+                },
+            },
+        });
+        let minimized = minimize_backend_value(&details, default_privacy());
+        let measurement = minimized.pointer("/data/frameMeasurement").expect("frameMeasurement kept");
+        assert_eq!(measurement.pointer("/baseline/avgFps").and_then(Value::as_f64), Some(145.2));
+        assert_eq!(measurement.pointer("/optimized/low1PctFps").and_then(Value::as_f64), Some(88.4));
+        assert_eq!(measurement.get("deltaAvgFps").and_then(Value::as_f64), Some(20.5));
+        assert_eq!(measurement.get("deltaAvgFpsPercent").and_then(Value::as_f64), Some(14.12));
+        // ...while the game's identity still never leaves the device.
+        assert_ne!(minimized.pointer("/data/detected_game/process_name"), Some(&json!("cs2.exe")));
+    }
+
     fn sensitive_sample() -> TelemetrySample {
         let mut sample = sample_with_context(
             json!({

@@ -432,6 +432,12 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
         "targetPriority": target_pid.map(processes::process_priority_report),
         "visualEffects": visual_effects::current_visual_effects_summary(),
     });
+    // Must run before the first optimization below - see FRAME_MEASUREMENT_WINDOW.
+    let automatic_activation = is_automatic_game_mode_activation(source, payload.as_ref());
+    let baseline_frames = match (automatic_activation, target_pid) {
+        (true, Some(pid)) => Some(measure_frame_window(pid, FRAME_MEASUREMENT_WINDOW).await),
+        _ => None,
+    };
     let power = if optimize_power_plan {
         energy::set_high_performance(payload.clone()).await
     } else {
@@ -537,6 +543,20 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
             .unwrap_or_else(|| Value::Array(Vec::new())),
     });
 
+    // The "after" window, measured before the session capture is spawned
+    // further down so the two never overlap.
+    let frame_measurement = match (baseline_frames, target_pid) {
+        (Some(Ok(baseline)), Some(pid)) => {
+            tokio::time::sleep(FRAME_MEASUREMENT_SETTLE).await;
+            match measure_frame_window(pid, FRAME_MEASUREMENT_WINDOW).await {
+                Ok(optimized) => frame_measurement_summary(&baseline, &optimized),
+                Err(reason) => json!({ "skipped": format!("optimized_{reason}"), "baseline": baseline }),
+            }
+        }
+        (Some(Err(reason)), _) => json!({ "skipped": format!("baseline_{reason}") }),
+        _ => Value::Null,
+    };
+
     // A session is saved whenever there's something to restore, even without
     // a detected game process - otherwise a manual activation (no game
     // running) never becomes "active" and the UI toggle can't reflect or
@@ -620,6 +640,8 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
             },
             "detected_game": detected_game,
             "is_heavy_workload_target": is_heavy_workload,
+            // Null for manual activations (never measured, by design).
+            "frameMeasurement": frame_measurement,
             "verification": {
                 "before": before,
                 "after": after,
@@ -841,6 +863,132 @@ fn mark_game_mode_session_restored(session_id: &str, reason: &str) {
 
 fn game_mode_session_path() -> std::path::PathBuf {
     snapshot::app_data_dir().join("game-mode-session.json")
+}
+
+/// Before/after frame measurement around an AUTOMATIC Game Mode activation.
+///
+/// The session-long capture (spawn_frame_capture_start) only starts after
+/// every optimization has run, so on its own it measures "FPS with Game
+/// Mode" and can never say what Game Mode changed - and that delta is the
+/// number the AI needs to learn from and the Pro value proof is built on.
+/// For activations the user is not waiting on (LocalPolicy's auto-detection
+/// and the server's learned_auto commands), apply_game_mode now measures a
+/// window untouched, applies the optimizations, lets them settle, measures
+/// an equally long window, and only then starts the session capture.
+/// Manual "Ativar Modo Gamer" clicks stay instant and unmeasured - Vitor's
+/// call (2026-09-30): no visible delay for a user who just clicked.
+///
+/// The two windows run strictly one after the other, never alongside the
+/// session capture: START_FRAME_CAPTURE passes --stop_existing_session, so a
+/// second PresentMon on the same session would kill the first.
+const FRAME_MEASUREMENT_WINDOW: Duration = Duration::from_secs(20);
+/// Closing apps, pausing services and the power-plan switch all land before
+/// apply_game_mode measures again; this lets their immediate aftershock
+/// (freed memory being reclaimed, a scheduler reshuffle) pass first, so the
+/// "after" window measures the steady state rather than the transition.
+const FRAME_MEASUREMENT_SETTLE: Duration = Duration::from_secs(3);
+/// ~6 fps over the window. Fewer frames than this is a loading screen, a
+/// minimised game or a process on its way out - not a measurement.
+const MIN_MEASURED_FRAMES: u64 = 120;
+
+/// LocalPolicy, or a server command dispatched unattended (`learned_auto`).
+/// An Insights-originated command the user just confirmed is not automatic -
+/// they are waiting on it, same as a manual click.
+fn is_automatic_game_mode_activation(source: CommandSource, payload: Option<&Value>) -> bool {
+    match source {
+        CommandSource::LocalPolicy => true,
+        CommandSource::RemoteCommand => payload
+            .and_then(|value| value.get("_insightAuthorization"))
+            .and_then(|authorization| authorization.get("mode"))
+            .and_then(Value::as_str)
+            == Some("learned_auto"),
+        _ => false,
+    }
+}
+
+/// One self-contained capture of `window` on `target_pid`: START, wait,
+/// STOP, through the same helper path (and retry) the session capture uses.
+/// Err carries a short reason that ends up in the action event, so a skipped
+/// measurement says why instead of just being absent.
+async fn measure_frame_window(target_pid: u32, window: Duration) -> Result<Value, String> {
+    // Boxed because this is awaited inline from apply_game_mode, and the
+    // helper path loops back into the same dispatcher apply_game_mode is
+    // reached from (execute_command_checked -> APPLY_GAME_MODE ->
+    // apply_game_mode), which makes the future type recursive. The session
+    // capture never hit this only because it runs inside tokio::spawn.
+    let started = Box::pin(execute_frame_capture_action_with_retry(
+        "START_FRAME_CAPTURE",
+        json!({ "targetPid": target_pid }),
+    ))
+    .await;
+    if !started.success {
+        return Err("capture_start_failed".to_string());
+    }
+    let Some(capture_id) = started
+        .details
+        .get("captureId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return Err("capture_start_returned_no_id".to_string());
+    };
+
+    tokio::time::sleep(window).await;
+
+    let stopped = Box::pin(execute_frame_capture_action_with_retry(
+        "STOP_FRAME_CAPTURE",
+        json!({ "captureId": capture_id }),
+    ))
+    .await;
+    if !stopped.success {
+        return Err("capture_stop_failed".to_string());
+    }
+    frame_window_stats(&stopped.details)
+}
+
+/// The fields of a STOP_FRAME_CAPTURE result worth keeping, or Err when the
+/// window held too few frames to mean anything. Pure, so it is testable
+/// without a helper or a running game.
+fn frame_window_stats(stop_details: &Value) -> Result<Value, String> {
+    let sample_count = stop_details
+        .get("sampleCount")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if sample_count < MIN_MEASURED_FRAMES {
+        return Err("too_few_frames".to_string());
+    }
+    let field = |key: &str| stop_details.get(key).and_then(Value::as_f64);
+    Ok(json!({
+        "sampleCount": sample_count,
+        "avgFps": field("avgFps"),
+        "low1PctFps": field("low1PctFps"),
+        "low0_1PctFps": field("low0_1PctFps"),
+        "stutterCount": stop_details.get("stutterCount").and_then(Value::as_u64),
+    }))
+}
+
+/// Baseline vs optimized, with the deltas precomputed so the server and the
+/// trainer read one number instead of re-deriving it. Positive = better.
+fn frame_measurement_summary(baseline: &Value, optimized: &Value) -> Value {
+    let get = |value: &Value, key: &str| value.get(key).and_then(Value::as_f64);
+    let delta = |key: &str| match (get(baseline, key), get(optimized, key)) {
+        (Some(before), Some(after)) => Some(((after - before) * 100.0).round() / 100.0),
+        _ => None,
+    };
+    let delta_percent = match (get(baseline, "avgFps"), get(optimized, "avgFps")) {
+        (Some(before), Some(after)) if before > 0.0 => {
+            Some((((after - before) / before) * 10_000.0).round() / 100.0)
+        }
+        _ => None,
+    };
+    json!({
+        "windowSeconds": FRAME_MEASUREMENT_WINDOW.as_secs(),
+        "baseline": baseline,
+        "optimized": optimized,
+        "deltaAvgFps": delta("avgFps"),
+        "deltaAvgFpsPercent": delta_percent,
+        "deltaLow1PctFps": delta("low1PctFps"),
+    })
 }
 
 /// Fire-and-forget: starts a PresentMon capture for a just-activated Modo
@@ -1233,6 +1381,57 @@ pub fn reconcile_orphaned_game_mode_session_on_startup() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_unattended_activations_get_the_measurement_delay() {
+        assert!(is_automatic_game_mode_activation(CommandSource::LocalPolicy, None));
+        assert!(!is_automatic_game_mode_activation(CommandSource::ManualUser, None));
+
+        let learned = json!({ "_insightAuthorization": { "mode": "learned_auto" } });
+        let confirmed = json!({ "_insightAuthorization": { "mode": "manual_confirmed" } });
+        assert!(is_automatic_game_mode_activation(CommandSource::RemoteCommand, Some(&learned)));
+        // The user just confirmed this from Insights and is waiting on it.
+        assert!(!is_automatic_game_mode_activation(CommandSource::RemoteCommand, Some(&confirmed)));
+        assert!(!is_automatic_game_mode_activation(CommandSource::RemoteCommand, None));
+    }
+
+    #[test]
+    fn a_window_with_too_few_frames_is_not_a_measurement() {
+        let thin = json!({ "sampleCount": 40, "avgFps": 2.0 });
+        assert_eq!(frame_window_stats(&thin), Err("too_few_frames".to_string()));
+        let missing = json!({});
+        assert!(frame_window_stats(&missing).is_err());
+
+        let real = json!({
+            "sampleCount": 2900, "avgFps": 145.2, "low1PctFps": 61.0,
+            "low0_1PctFps": 30.5, "stutterCount": 12, "avgFrameTimeMs": 6.88,
+        });
+        let stats = frame_window_stats(&real).unwrap();
+        assert_eq!(stats["avgFps"], json!(145.2));
+        assert_eq!(stats["low1PctFps"], json!(61.0));
+        assert_eq!(stats["sampleCount"], json!(2900));
+    }
+
+    #[test]
+    fn measurement_summary_computes_signed_deltas() {
+        let before = json!({ "avgFps": 145.2, "low1PctFps": 61.0 });
+        let after = json!({ "avgFps": 165.7, "low1PctFps": 88.4 });
+        let summary = frame_measurement_summary(&before, &after);
+        assert_eq!(summary["deltaAvgFps"], json!(20.5));
+        assert_eq!(summary["deltaLow1PctFps"], json!(27.4));
+        assert_eq!(summary["deltaAvgFpsPercent"], json!(14.12));
+        assert_eq!(summary["windowSeconds"], json!(20));
+
+        // A regression must read as one, not be clamped to zero.
+        let worse = frame_measurement_summary(&after, &before);
+        assert_eq!(worse["deltaAvgFps"], json!(-20.5));
+        assert!(worse["deltaAvgFpsPercent"].as_f64().unwrap() < 0.0);
+
+        // Missing numbers give null deltas, never a fabricated zero.
+        let partial = frame_measurement_summary(&json!({}), &after);
+        assert!(partial["deltaAvgFps"].is_null());
+        assert!(partial["deltaAvgFpsPercent"].is_null());
+    }
 
     /// Regression test for the 2026-09 incident: a real capture's
     /// STOP_FRAME_CAPTURE landed exactly when the helper's named pipe was
