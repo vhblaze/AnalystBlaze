@@ -403,12 +403,23 @@ impl TelemetryCollector {
         let active_window = active_window_title();
         let idle_seconds = idle_seconds();
         let process_names = running_process_names(&self.system);
+        // GetForegroundWindow plus a lookup in the process list already
+        // refreshed above - deliberately not detection::detect_game_process,
+        // which re-enumerates every process (System::new_all) and is far too
+        // heavy for a per-tick call. The list can be a few ticks stale, so a
+        // just-launched game may read as background for a moment; the
+        // background-rendering path covers that.
+        let foreground_process = detection::foreground_pid()
+            .and_then(|pid| self.system.process(sysinfo::Pid::from_u32(pid)))
+            .map(|process| process.name().to_string_lossy().trim().to_ascii_lowercase());
         let advanced = self.advanced_telemetry();
         let latency_ms = best_latency_ms(&network);
         let local_context = detect_local_context(
             active_window.as_deref(),
             &process_names,
+            foreground_process.as_deref(),
             gpu_usage.unwrap_or_default(),
+            gpu_usage.is_some(),
             cpu_usage,
             idle_seconds,
         );
@@ -421,11 +432,14 @@ impl TelemetryCollector {
         // while a manually-started Modo Foco: Jogo session is active (see
         // that function's own docs on why - real usage showed that
         // manual path essentially never gets used).
+        // Keyed on presence (known_game_present), exactly as before this used
+        // to read game_detection_reason == "known_game_process_running" - that
+        // reason no longer exists now that detection requires the game to be
+        // in the foreground or rendering.
         let known_game_process_running = local_context
-            .get("signals")
-            .and_then(|signals| signals.get("game_detection_reason"))
-            .and_then(Value::as_str)
-            == Some("known_game_process_running");
+            .get("known_game_present")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         crate::optimizations::focus::set_passive_gaming_detected(known_game_process_running);
         let thermal_analysis = self.analyze_thermal(
             cpu_temperature_available.then_some(cpu_temperature),
@@ -1616,10 +1630,63 @@ fn running_process_names(system: &System) -> Vec<String> {
         .collect()
 }
 
+/// Background game rendering this hard is still being played (second
+/// monitor, a quick alt-tab) even though it is not the foreground window.
+const BACKGROUND_GAME_GPU_PERCENT: f64 = 40.0;
+/// Fallback for machines with no GPU utilisation reading at all (common on
+/// AMD/Intel without a vendor counter) - without it a GPU threshold would
+/// mean those users could only ever be detected in the foreground.
+const BACKGROUND_GAME_CPU_PERCENT_NO_GPU_READING: f64 = 30.0;
+
+/// Game titles matched by substring, for executable variants the exact
+/// KNOWN_GAMES list in detection.rs misses (Minecraft Bedrock's
+/// `minecraft.windows.exe`, regional Valorant builds, ...). Their launchers
+/// and editors contain the same words, so those are excluded explicitly:
+/// `minecraftlauncher.exe` and `robloxstudiobeta.exe` are not a game.
+fn is_game_title_process(name: &str) -> bool {
+    const TITLES: &[&str] = &["valorant", "cs2", "fortnite", "roblox", "minecraft", "leagueclient"];
+    let name = name.trim().to_ascii_lowercase();
+    TITLES.iter().any(|title| name.contains(title))
+        && !name.contains("launcher")
+        && !name.contains("studio")
+        && !detection::is_launcher_process(&name)
+}
+
+/// What the user is doing right now, as one privacy-safe composite.
+///
+/// Rewritten 2026-09-30 after a production audit found 72% of all uploaded
+/// telemetry classified as "gaming". Two presence-only checks caused it:
+///
+/// - Launchers counted as a game. `steam.exe`, the Epic launcher, Riot
+///   Client and Battle.net start with Windows and sit in the tray all day,
+///   so anyone with Steam installed was "gaming" around the clock. In the
+///   labelled data that reason's GPU profile (p50 20%, 41% of samples under
+///   15%) was statistically indistinguishable from `no_game_signal` (p50
+///   15%, 49% under 15%) - 62,820 "game" samples that were not games.
+///   detection::looks_like_game_process already excluded launchers; this
+///   function re-added them through its own substring list.
+/// - A known game merely being open counted the same as being played: 16%
+///   of `known_game_process_running` samples had GPU under 15% (minimised or
+///   left running behind a browser).
+///
+/// Now a game counts while it is the foreground window - which also covers
+/// menus, cutscenes and high-end GPUs where load stays low, and controller
+/// players whose input does not reset the idle timer - or, from the
+/// background, while it is still clearly rendering. Merely-present games
+/// and launchers get their own reasons with game_detected=false, so the
+/// server's labelled dataset finally gains real negatives instead of having
+/// none at all for 27 of 38 devices.
+///
+/// game_confidence for the strong case is deliberately kept at 0.85, the
+/// old known_game_process_running value: the server's predictive_game_mode
+/// gate (scripts/train_ai_models.py, 0.76) was tuned against a live signal
+/// at that scale.
 fn detect_local_context(
     active_window: Option<&str>,
     process_names: &[String],
+    foreground_process: Option<&str>,
     gpu_usage: f64,
+    gpu_usage_available: bool,
     cpu_usage: f64,
     idle_seconds: u64,
 ) -> Value {
@@ -1631,20 +1698,25 @@ fn detect_local_context(
     };
     let active_has = |needles: &[&str]| needles.iter().any(|needle| active.contains(needle));
 
-    let gaming_process = has_process(&[
-        "steam.exe",
-        "epicgameslauncher",
-        "riotclient",
-        "valorant",
-        "cs2",
-        "fortnite",
-        "roblox",
-        "minecraft",
-        "battle.net",
-        "leagueclient",
-    ]);
+    let is_game = |name: &str| detection::looks_like_game_process(name) || is_game_title_process(name);
+    let foreground_is_game = foreground_process.is_some_and(|name| is_game(name));
+    let known_game_present = process_names
+        .iter()
+        .any(|name| detection::looks_like_game_process(name));
+    let game_present = foreground_is_game || process_names.iter().any(|name| is_game(name));
+    let launcher_present = process_names
+        .iter()
+        .any(|name| detection::is_launcher_process(name) || name.contains("launcher"));
+    let still_rendering = if gpu_usage_available {
+        gpu_usage >= BACKGROUND_GAME_GPU_PERCENT
+    } else {
+        cpu_usage >= BACKGROUND_GAME_CPU_PERCENT_NO_GPU_READING
+    };
+    let foreground_game = foreground_is_game;
+    let background_game_rendering = !foreground_is_game && game_present && still_rendering;
+
+    // "steam" removed: the Steam client's own window is a launcher, not a game.
     let gaming_window = active_has(&[
-        "steam",
         "valorant",
         "counter-strike",
         "fortnite",
@@ -1663,9 +1735,6 @@ fn detect_local_context(
             "twitch",
             "vlc",
         ]);
-    let known_game_process = process_names
-        .iter()
-        .any(|name| detection::looks_like_game_process(name));
     let gpu_cpu_co_activation = gpu_usage >= 65.0 && cpu_usage >= 25.0 && idle_seconds < 120;
     // Catches CPU-bound titles the GPU-gated heuristic above misses entirely -
     // a game that's bottlenecked on its CPU-side render-submission thread
@@ -1676,18 +1745,28 @@ fn detect_local_context(
     // CPU-heavy game" from "compiling/encoding in the background", which
     // typically barely touches the GPU at all.
     let cpu_dominant_activation = cpu_usage >= 70.0 && gpu_usage >= 15.0 && idle_seconds < 120;
-    let gaming =
-        known_game_process || gaming_process || gaming_window || gpu_cpu_co_activation || cpu_dominant_activation;
-    let (game_confidence, game_detection_reason) = if known_game_process {
-        (0.85, "known_game_process_running")
-    } else if gaming_process {
-        (0.55, "process_name_heuristic_match")
+    let gaming = foreground_game
+        || background_game_rendering
+        || gaming_window
+        || gpu_cpu_co_activation
+        || cpu_dominant_activation;
+    let (game_confidence, game_detection_reason) = if foreground_game {
+        (0.85, "foreground_game")
+    } else if background_game_rendering {
+        (0.70, "background_game_rendering")
     } else if gaming_window {
         (0.45, "active_window_heuristic_match")
     } else if gpu_cpu_co_activation {
         (0.30, "gpu_cpu_co_activation")
     } else if cpu_dominant_activation {
         (0.25, "cpu_dominant_activation")
+    } else if game_present {
+        // Explicit negatives, recorded as such so the server can measure how
+        // often a game sits open unplayed, instead of folding them into
+        // no_game_signal.
+        (0.0, "game_present_inactive")
+    } else if launcher_present {
+        (0.0, "launcher_only")
     } else {
         (0.0, "no_game_signal")
     };
@@ -1727,6 +1806,12 @@ fn detect_local_context(
             "music": music,
             "video": video,
         },
+        // Local-only (a sibling of "signals", so it never leaves the device):
+        // whether a known game process is merely open. Pausing heavy scans
+        // keys off this, not off game_detected - see the call site. Pausing
+        // a scan because a game is open in the background costs nothing, so
+        // that stays on presence even though "gaming" no longer does.
+        "known_game_present": known_game_present,
         "active_window": active_window,
         "gpu_usage": gpu_usage,
         "cpu_usage": cpu_usage,
@@ -2639,10 +2724,173 @@ mod tests {
         // render-submission thread - never crosses the 65% GPU co-activation
         // threshold, but is clearly not idle background CPU load either
         // (some real GPU engagement, unlike a compile/encode job).
-        let context = detect_local_context(None, &[], 45.0, 75.0, 0);
+        let context = detect_local_context(None, &[], None, 45.0, true, 75.0, 0);
         assert_eq!(context.get("activity").unwrap(), "gaming");
         assert_eq!(signal(&context, "game_detected"), true);
         assert_eq!(signal(&context, "game_detection_reason"), "cpu_dominant_activation");
+    }
+
+    fn procs(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    #[test]
+    fn a_launcher_sitting_in_the_tray_is_not_gaming() {
+        // The bug behind 72% of production telemetry reading "gaming": Steam
+        // starts with Windows and stays in the tray all day.
+        for launcher in ["steam.exe", "epicgameslauncher.exe", "riotclientservices.exe", "battle.net.exe"] {
+            let context = detect_local_context(
+                None,
+                &procs(&[launcher, "chrome.exe", "discord.exe"]),
+                Some("chrome.exe"),
+                12.0,
+                true,
+                18.0,
+                5,
+            );
+            assert_eq!(context.get("activity").unwrap(), "general", "{launcher}");
+            assert_eq!(signal(&context, "game_detected"), false, "{launcher}");
+            assert_eq!(signal(&context, "game_detection_reason"), "launcher_only", "{launcher}");
+            assert_eq!(signal(&context, "game_confidence"), 0.0, "{launcher}");
+        }
+    }
+
+    #[test]
+    fn a_game_in_the_foreground_counts_even_at_low_gpu_load() {
+        // Menus, loading screens and high-end GPUs keep load low while the
+        // user is unambiguously in the game.
+        let context = detect_local_context(
+            None,
+            &procs(&["steam.exe", "cs2.exe"]),
+            Some("cs2.exe"),
+            8.0,
+            true,
+            12.0,
+            3,
+        );
+        assert_eq!(context.get("activity").unwrap(), "gaming");
+        assert_eq!(signal(&context, "game_detected"), true);
+        assert_eq!(signal(&context, "game_detection_reason"), "foreground_game");
+    }
+
+    #[test]
+    fn the_strong_case_keeps_the_confidence_the_server_gate_was_tuned_to() {
+        // scripts/train_ai_models.py's predictive_game_mode gate (0.76) was
+        // picked against a live signal of 0.85. Changing this number without
+        // re-running that replay silently changes how often the AI fires.
+        let context = detect_local_context(None, &procs(&["valorant.exe"]), Some("valorant.exe"), 70.0, true, 40.0, 1);
+        assert_eq!(signal(&context, "game_confidence"), 0.85);
+    }
+
+    #[test]
+    fn a_controller_player_shows_as_idle_but_still_in_a_game() {
+        // XInput gamepads do not reset GetLastInputInfo, so a controller
+        // player looks idle. The foreground game still counts, so
+        // game_detected stays true; activity keeps idle's precedence, as it
+        // always has.
+        let context = detect_local_context(
+            None,
+            &procs(&["eldenring.exe"]),
+            Some("eldenring.exe"),
+            85.0,
+            true,
+            40.0,
+            900,
+        );
+        assert_eq!(signal(&context, "game_detected"), true);
+        assert_eq!(signal(&context, "game_detection_reason"), "foreground_game");
+        assert_eq!(context.get("activity").unwrap(), "idle");
+    }
+
+    #[test]
+    fn a_game_left_open_behind_a_browser_is_not_gaming() {
+        let context = detect_local_context(
+            None,
+            &procs(&["robloxplayerbeta.exe", "chrome.exe"]),
+            Some("chrome.exe"),
+            6.0,
+            true,
+            15.0,
+            2,
+        );
+        assert_eq!(signal(&context, "game_detected"), false);
+        assert_eq!(signal(&context, "game_detection_reason"), "game_present_inactive");
+        assert_eq!(context.get("activity").unwrap(), "general");
+        // ...but heavy scans still pause for it, exactly as before.
+        assert_eq!(context.get("known_game_present").unwrap(), true);
+    }
+
+    #[test]
+    fn a_background_game_that_is_still_rendering_counts() {
+        // e.g. the game on a second monitor while Discord has focus.
+        let context = detect_local_context(
+            None,
+            &procs(&["r5apex.exe", "discord.exe"]),
+            Some("discord.exe"),
+            72.0,
+            true,
+            35.0,
+            1,
+        );
+        assert_eq!(signal(&context, "game_detected"), true);
+        assert_eq!(signal(&context, "game_detection_reason"), "background_game_rendering");
+        assert_eq!(signal(&context, "game_confidence"), 0.70);
+    }
+
+    #[test]
+    fn machines_without_a_gpu_reading_fall_back_to_cpu() {
+        // No vendor GPU counter (common on AMD/Intel): gpu_usage is 0 and
+        // means "unknown", not "idle". A GPU threshold alone would make these
+        // users detectable only in the foreground.
+        let busy = detect_local_context(None, &procs(&["gta5.exe"]), Some("explorer.exe"), 0.0, false, 38.0, 1);
+        assert_eq!(signal(&busy, "game_detection_reason"), "background_game_rendering");
+        let quiet = detect_local_context(None, &procs(&["gta5.exe"]), Some("explorer.exe"), 0.0, false, 8.0, 1);
+        assert_eq!(signal(&quiet, "game_detection_reason"), "game_present_inactive");
+    }
+
+    #[test]
+    fn launchers_and_editors_named_after_a_game_are_not_the_game() {
+        for name in ["minecraftlauncher.exe", "robloxstudiobeta.exe", "fortnitelauncher.exe"] {
+            assert!(!is_game_title_process(name), "{name}");
+            let context = detect_local_context(None, &procs(&[name]), Some(name), 20.0, true, 20.0, 1);
+            assert_eq!(signal(&context, "game_detected"), false, "{name}");
+        }
+        assert!(is_game_title_process("minecraft.windows.exe"));
+    }
+
+    #[test]
+    #[ignore] // machine-dependent - run manually with --ignored --nocapture
+    fn live_game_detection_on_this_machine() {
+        let mut collector = TelemetryCollector::new();
+        let _ = collector.collect_blocking();
+        let sample = collector.collect_blocking();
+        let local = sample.context_state.get("local_context").cloned().unwrap_or_default();
+        let launchers: Vec<_> = running_process_names(&collector.system)
+            .into_iter()
+            .filter(|name| detection::is_launcher_process(name) || name.contains("launcher"))
+            .collect();
+        println!("foreground pid = {:?}", detection::foreground_pid());
+        println!("launchers running = {launchers:?}");
+        println!("gpu={:.1} (available={}) cpu={:.1} idle={}s",
+            sample.gpu_usage, sample.gpu_usage_available, sample.cpu_usage, sample.idle_seconds);
+        println!("activity = {}", local.get("activity").unwrap_or(&Value::Null));
+        println!("signals  = {}", local.get("signals").unwrap_or(&Value::Null));
+        println!("known_game_present = {}", local.get("known_game_present").unwrap_or(&Value::Null));
+    }
+
+    #[test]
+    fn the_steam_client_window_no_longer_reads_as_a_game() {
+        let context = detect_local_context(
+            Some("Steam"),
+            &procs(&["steam.exe"]),
+            Some("steam.exe"),
+            10.0,
+            true,
+            10.0,
+            1,
+        );
+        assert_eq!(signal(&context, "game_detected"), false);
+        assert_eq!(signal(&context, "game_detection_reason"), "launcher_only");
     }
 
     #[test]
@@ -2650,7 +2898,7 @@ mod tests {
         // A compile/encode job: CPU pegged, GPU essentially untouched - the
         // cpu_dominant_activation path requires *some* GPU activity
         // specifically to avoid misclassifying this as a game.
-        let context = detect_local_context(None, &[], 5.0, 90.0, 0);
+        let context = detect_local_context(None, &[], None, 5.0, true, 90.0, 0);
         assert_eq!(context.get("activity").unwrap(), "general");
         assert_eq!(signal(&context, "game_detected"), false);
         assert_eq!(signal(&context, "game_detection_reason"), "no_game_signal");
@@ -2658,7 +2906,7 @@ mod tests {
 
     #[test]
     fn gpu_bound_co_activation_path_still_works_unchanged() {
-        let context = detect_local_context(None, &[], 80.0, 30.0, 0);
+        let context = detect_local_context(None, &[], None, 80.0, true, 30.0, 0);
         assert_eq!(signal(&context, "game_detected"), true);
         assert_eq!(signal(&context, "game_detection_reason"), "gpu_cpu_co_activation");
     }

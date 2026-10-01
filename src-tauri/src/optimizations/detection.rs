@@ -296,7 +296,7 @@ pub(crate) fn foreground_pid() -> Option<u32> {
     None
 }
 
-fn is_launcher_process(normalized: &str) -> bool {
+pub(crate) fn is_launcher_process(normalized: &str) -> bool {
     matches!(
         normalized,
         "steam.exe"
