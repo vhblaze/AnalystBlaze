@@ -367,6 +367,12 @@ mod tests {
         };
     }
 
+    /// Windows writes some SIDs back as aliases: the built-in Administrator
+    /// account (RID 500, which GitHub's runners use) comes back as "LA".
+    fn sddl_names_sid(dacl: &str, sid: &str) -> bool {
+        dacl.contains(&format!(";;;{sid})")) || (sid.ends_with("-500") && dacl.contains(";;;LA)"))
+    }
+
     fn temp_root(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "analystblaze-helper-keys-{tag}-{}",
@@ -410,7 +416,7 @@ mod tests {
         let dacl = read_dacl_sddl(&path).unwrap();
         // Protected, and exactly: SYSTEM full, Administrators full, user read.
         assert!(dacl.starts_with("D:P"), "{dacl}");
-        assert!(dacl.contains(&format!(";;;{sid})")), "{dacl}");
+        assert!(sddl_names_sid(&dacl, &sid), "{dacl}");
         for broad in [";;;BU)", ";;;WD)", ";;;IU)", ";;;AU)"] {
             assert!(!dacl.contains(broad), "key readable by a broad group: {dacl}");
         }
@@ -453,7 +459,8 @@ mod tests {
         let (key_b, _) = provision_user_key(&root, b).unwrap();
         assert_ne!(key_a, key_b);
         let dacl_b = read_dacl_sddl(&user_key_path(&root, b).unwrap()).unwrap();
-        assert!(!dacl_b.contains(&format!(";;;{a})")), "user A must not be able to read B's key: {dacl_b}");
+        assert!(sddl_names_sid(&dacl_b, b), "{dacl_b}");
+        assert!(!sddl_names_sid(&dacl_b, &a), "user A must not be able to read B's key: {dacl_b}");
 
         let _ = fs::remove_dir_all(&root);
     }
