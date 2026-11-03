@@ -787,6 +787,7 @@ impl TelemetryEngine {
             // the game may have started since. This is the same check against
             // the live local signal, so a disk sweep never lands mid-match.
             if execution_mode != "automation_disabled"
+                && execution_mode != NOT_ELIGIBLE_FOR_AUTOMATIC
                 && action_disrupts_gameplay(&command.action_name)
                 && optimizations::focus::should_pause_heavy_scans()
             {
@@ -811,6 +812,15 @@ impl TelemetryEngine {
                         "required_setting": "allow_automatic_sensitive_actions",
                     }),
                 )
+            } else if execution_mode == NOT_ELIGIBLE_FOR_AUTOMATIC {
+                let rejection = not_eligible_rejection(&command);
+                let _ = crate::audit::record_event(
+                    "warn",
+                    "optimization.remote.not_eligible_for_automatic",
+                    "Comando remoto em modo automatico recusado: acao fora da lista local de acoes automaticas.",
+                    rejection.details.clone(),
+                );
+                rejection
             } else if execution_mode == "deferred_gameplay" {
                 optimizations::ExecutionResult::rejected(
                     &command.action_name,
@@ -1102,8 +1112,11 @@ impl TelemetryEngine {
         app_handle: AppHandle,
         command: &CommandResponse,
     ) -> (bool, &'static str) {
-        let learned_auto = command.authorization_mode.as_deref() == Some("learned_auto")
-            && !command.requires_confirmation;
+        let learned_auto = match learned_auto_gate(command) {
+            LearnedAutoGate::NotEligible => return (false, NOT_ELIGIBLE_FOR_AUTOMATIC),
+            LearnedAutoGate::Eligible => true,
+            LearnedAutoGate::NotLearnedAuto => false,
+        };
         if learned_auto {
             let policy = optimizations::local_ai_policy::load_local_ai_policy();
             if policy.enabled && policy.allow_automatic_sensitive_actions {
@@ -2383,9 +2396,113 @@ fn window_looks_like_game(title: &str) -> bool {
     .any(|needle| normalized.contains(needle))
 }
 
+/// Execution mode reported to the server when the client refuses to run an
+/// action unattended. Not a failure of the action itself.
+const NOT_ELIGIBLE_FOR_AUTOMATIC: &str = "not_eligible_for_automatic";
+
+#[derive(Debug, PartialEq, Eq)]
+enum LearnedAutoGate {
+    /// Not an automatic command; the normal confirmation flow applies.
+    NotLearnedAuto,
+    /// Automatic command for an action on the local eligible list.
+    Eligible,
+    /// Automatic command for an action that may never run unattended.
+    NotEligible,
+}
+
+/// S3: decided only from the action name and the local list. Whatever the
+/// server sets in `requiresConfirmation`, an automatic command for an
+/// ineligible action is refused here, without a popup (decision 10: no
+/// prompts for automatic actions).
+fn learned_auto_gate(command: &CommandResponse) -> LearnedAutoGate {
+    if command.authorization_mode.as_deref() != Some("learned_auto") {
+        return LearnedAutoGate::NotLearnedAuto;
+    }
+    if !optimizations::safety::is_learned_auto_eligible(&command.action_name) {
+        return LearnedAutoGate::NotEligible;
+    }
+    if command.requires_confirmation {
+        return LearnedAutoGate::NotLearnedAuto;
+    }
+    LearnedAutoGate::Eligible
+}
+
+fn not_eligible_rejection(command: &CommandResponse) -> optimizations::ExecutionResult {
+    optimizations::ExecutionResult::rejected(
+        &command.action_name,
+        "action_not_eligible_for_automatic_execution",
+        json!({
+            "command_id": command.id,
+            "authorization_id": command.authorization_id,
+            "authorization_mode": command.authorization_mode,
+            "requires_confirmation": command.requires_confirmation,
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn remote_command(action: &str, mode: Option<&str>, requires_confirmation: bool) -> CommandResponse {
+        CommandResponse {
+            id: Uuid::new_v4(),
+            hw_id: Uuid::new_v4(),
+            action_name: action.to_string(),
+            action_payload: Some(json!({ "path": "C:\\Users\\someone\\Documents" })),
+            status: "pending".to_string(),
+            created_at: "2026-11-03T00:00:00Z".to_string(),
+            requires_confirmation,
+            authorization_mode: mode.map(ToString::to_string),
+            authorization_id: Some("auth-1".to_string()),
+            context_key: None,
+            risk_level: None,
+            confirmation_prompt: None,
+        }
+    }
+
+    #[test]
+    fn learned_auto_delete_disk_usage_item_is_refused() {
+        for requires_confirmation in [false, true] {
+            let command = remote_command("DELETE_DISK_USAGE_ITEM", Some("learned_auto"), requires_confirmation);
+            assert_eq!(learned_auto_gate(&command), LearnedAutoGate::NotEligible);
+        }
+        let rejection = not_eligible_rejection(&remote_command(
+            "DELETE_DISK_USAGE_ITEM",
+            Some("learned_auto"),
+            false,
+        ));
+        assert!(!rejection.success);
+        assert!(rejection
+            .message
+            .contains("action_not_eligible_for_automatic_execution"));
+        assert_eq!(
+            rejection.details.get("blocked_by").and_then(Value::as_str),
+            Some("local_safety_gate")
+        );
+    }
+
+    #[test]
+    fn learned_auto_never_list_is_refused() {
+        for action in optimizations::safety::NEVER_AUTOMATIC_ACTIONS {
+            let command = remote_command(action, Some("learned_auto"), false);
+            assert_eq!(learned_auto_gate(&command), LearnedAutoGate::NotEligible, "{action}");
+        }
+    }
+
+    #[test]
+    fn learned_auto_game_mode_is_accepted() {
+        let command = remote_command("APPLY_GAME_MODE", Some("learned_auto"), false);
+        assert_eq!(learned_auto_gate(&command), LearnedAutoGate::Eligible);
+    }
+
+    #[test]
+    fn non_automatic_commands_keep_the_confirmation_flow() {
+        let manual = remote_command("DELETE_DISK_USAGE_ITEM", Some("manual_confirmation"), true);
+        assert_eq!(learned_auto_gate(&manual), LearnedAutoGate::NotLearnedAuto);
+        let plain = remote_command("APPLY_GAME_MODE", None, false);
+        assert_eq!(learned_auto_gate(&plain), LearnedAutoGate::NotLearnedAuto);
+    }
     use crate::telemetry::advanced::AdvancedTelemetry;
     use crate::telemetry::network::{NetworkDiagnostics, NetworkProbe};
 

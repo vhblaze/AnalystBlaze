@@ -43,6 +43,64 @@ pub struct SafetyError {
     pub details: Value,
 }
 
+/// S3: the only actions the agent may run unattended under `learned_auto`.
+///
+/// Fixed in the client on purpose. The server decides *when* to suggest an
+/// action, but it cannot widen this list through `requiresConfirmation`,
+/// `authorizationMode` or `allowed_actions`: a compromised or buggy backend
+/// must not be able to make a PC delete, purge or reconfigure itself without
+/// the user looking. Everything here is reversible (snapshot or quarantine)
+/// or purely observational - see docs/optimization-safety-matrix.md.
+pub const LEARNED_AUTO_ELIGIBLE_ACTIONS: &[&str] = &[
+    "DETECT_FOREGROUND_GAME",
+    "APPLY_GAME_MODE",
+    "APPLY_ADAPTIVE_OPTIMIZATION",
+    "APPLY_BACKGROUND_QUIET_MODE",
+    "APPLY_FOREGROUND_BURST_MODE",
+    "APPLY_PC_CLEAN_FAST_BACKGROUND_PRIORITIES",
+    "APPLY_PC_CLEAN_FAST_PROFILE",
+    "APPLY_VISUAL_PERFORMANCE_MODE",
+    "APPLY_CLEANUP_CATEGORY",
+    "EMPTY_TEMP",
+    "ENTER_FOCUS_MODE",
+    "SET_POWER_PLAN_BALANCED",
+    "SET_POWER_PLAN_HIGH_PERFORMANCE",
+    "SET_POWER_PLAN_POWER_SAVER",
+    "SET_PROCESS_PRIORITY",
+    "DELAY_STARTUP_APP",
+    "DISABLE_STARTUP_APP",
+    "STOP_SERVICE",
+    "FLUSH_DNS_CACHE",
+    "RESTORE_DELAYED_STARTUP_APP",
+    "RESTORE_FOCUS_SESSION",
+    "RESTORE_LATENCY_SESSION",
+    "RESTORE_PERFORMANCE_SESSION",
+    "RESTORE_SERVICE",
+    "RESTORE_STARTUP_APP",
+    "RESTORE_VISUAL_EFFECTS",
+];
+
+/// Never automatic, whatever the server sends. Kept as its own list (and
+/// checked first) so a future edit to the eligible list cannot let one of
+/// these slip in: each is permanent or disrupts connectivity.
+pub const NEVER_AUTOMATIC_ACTIONS: &[&str] = &[
+    "DELETE_DISK_USAGE_ITEM",
+    "PURGE_CLEANUP_QUARANTINE",
+    "DISABLE_SERVICE_PERMANENTLY",
+    "SET_DNS_SERVERS",
+    "RESET_WINSOCK_CATALOG",
+];
+
+pub fn is_learned_auto_eligible(action_name: &str) -> bool {
+    let name = action_name.trim();
+    !NEVER_AUTOMATIC_ACTIONS
+        .iter()
+        .any(|never| never.eq_ignore_ascii_case(name))
+        && LEARNED_AUTO_ELIGIBLE_ACTIONS
+            .iter()
+            .any(|eligible| eligible.eq_ignore_ascii_case(name))
+}
+
 pub fn validate_command(
     action_name: &str,
     payload: Option<&Value>,
@@ -603,6 +661,19 @@ fn validate_action_payload(
                 json!({ "confirmation": "purge_cleanup_quarantine" }),
             ));
         }
+        "DELETE_DISK_USAGE_ITEM" if context.source != CommandSource::ManualUser => {
+            // S3: the path to delete must be picked in the local Disk
+            // Explorer UI. A path that arrives from the server (or any other
+            // non-interactive source) is refused outright, confirmed or not.
+            return Err(safety_error(
+                "disk_usage_item_path_must_be_local",
+                action_name,
+                payload,
+                context,
+                Some(profile),
+                json!({ "accepted_source": "manual_user" }),
+            ));
+        }
         "DELETE_DISK_USAGE_ITEM" => {
             let path = payload
                 .and_then(|value| value.get("path"))
@@ -1138,8 +1209,73 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        is_critical_process, is_critical_service, validate_command, CommandSource, SafetyContext,
+        command_profile, is_critical_process, is_critical_service, is_learned_auto_eligible,
+        supported_actions, validate_command, CommandSource, SafetyContext,
+        LEARNED_AUTO_ELIGIBLE_ACTIONS, NEVER_AUTOMATIC_ACTIONS,
     };
+
+
+    fn doc_list(doc: &str, marker: &str) -> Vec<String> {
+        let start = format!("<!-- {marker}:start -->");
+        let end = format!("<!-- {marker}:end -->");
+        let from = doc.find(&start).expect("start marker") + start.len();
+        let to = doc.find(&end).expect("end marker");
+        doc[from..to]
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- `"))
+            .filter_map(|line| line.strip_suffix('`'))
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn safety_matrix_doc_matches_automatic_lists() {
+        let doc = include_str!("../../../docs/optimization-safety-matrix.md");
+        let as_vec = |items: &[&str]| items.iter().map(ToString::to_string).collect::<Vec<_>>();
+        assert_eq!(doc_list(doc, "learned-auto-eligible"), as_vec(LEARNED_AUTO_ELIGIBLE_ACTIONS));
+        assert_eq!(doc_list(doc, "learned-auto-never"), as_vec(NEVER_AUTOMATIC_ACTIONS));
+    }
+
+    #[test]
+    fn never_automatic_actions_are_not_eligible_even_if_listed() {
+        for action in NEVER_AUTOMATIC_ACTIONS {
+            assert!(!is_learned_auto_eligible(action), "{action} must never run in learned_auto");
+            assert!(
+                !LEARNED_AUTO_ELIGIBLE_ACTIONS.contains(action),
+                "{action} must not appear in the eligible list"
+            );
+        }
+        assert!(!is_learned_auto_eligible("delete_disk_usage_item"));
+    }
+
+    #[test]
+    fn eligible_actions_are_known_and_not_critical() {
+        for action in LEARNED_AUTO_ELIGIBLE_ACTIONS {
+            assert!(supported_actions().contains(action), "{action} is not a supported action");
+            let profile = command_profile(action).expect("eligible action has a safety profile");
+            assert!(
+                profile.risk != super::RiskLevel::Critical,
+                "{action} is critical and cannot be automatic"
+            );
+            assert!(is_learned_auto_eligible(action));
+        }
+        assert!(!is_learned_auto_eligible("SOME_FUTURE_ACTION"));
+    }
+
+    #[test]
+    fn remote_disk_usage_delete_is_refused_even_when_confirmed() {
+        let allowed = vec!["DELETE_DISK_USAGE_ITEM".to_string()];
+        let payload = json!({ "path": "C:\\Users\\someone\\Downloads\\big.iso" });
+        for source in [CommandSource::RemoteCommand, CommandSource::LocalPolicy] {
+            let error = validate_command(
+                "DELETE_DISK_USAGE_ITEM",
+                Some(&payload),
+                &context(source, Some(&allowed), true),
+            )
+            .expect_err("non-local delete path must be refused");
+            assert_eq!(error.reason, "disk_usage_item_path_must_be_local");
+        }
+    }
 
     fn context(
         source: CommandSource,

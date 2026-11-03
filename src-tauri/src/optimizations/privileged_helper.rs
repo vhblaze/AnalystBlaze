@@ -2410,6 +2410,26 @@ mod protocol_tests {
 mod tests {
     use super::*;
 
+    fn doc_list(doc: &str, marker: &str) -> Vec<String> {
+        let start = format!("<!-- {marker}:start -->");
+        let end = format!("<!-- {marker}:end -->");
+        let from = doc.find(&start).expect("start marker") + start.len();
+        let to = doc.find(&end).expect("end marker");
+        doc[from..to]
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- `"))
+            .filter_map(|line| line.strip_suffix('`'))
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn safety_matrix_doc_matches_helper_allowlist() {
+        let doc = include_str!("../../../docs/optimization-safety-matrix.md");
+        let code: Vec<String> = supported_actions().iter().map(ToString::to_string).collect();
+        assert_eq!(doc_list(doc, "helper-actions"), code);
+    }
+
     #[test]
     fn trusted_service_source_accepts_program_files_binary() {
         let roots = vec![PathBuf::from(r"C:\Program Files")];

@@ -93,6 +93,94 @@ Enquanto a quarentena existir, os arquivos movidos por limpeza podem ser restaur
 | Servicos criticos | blocked | Defender, Windows Update, RPC, Event Log, DHCP, DNS Cache e similares sao protegidos. |
 | Prioridade realtime | blocked | nunca deve ser aplicada automaticamente. |
 
+## Acoes Automaticas (`learned_auto`)
+
+Fonte: `LEARNED_AUTO_ELIGIBLE_ACTIONS` e `NEVER_AUTOMATIC_ACTIONS` em `src-tauri/src/optimizations/safety.rs`.
+O teste `safety_matrix_doc_matches_automatic_lists` falha se esta secao e o codigo divergirem.
+
+Um comando remoto com `authorizationMode = learned_auto` so roda sem confirmacao se a acao estiver na lista abaixo.
+A lista e fixa no cliente: o servidor nao consegue amplia-la por `requiresConfirmation`, `authorizationMode` ou `allowed_actions`.
+Fora dela, o comando e recusado sem popup (decisao 10), registrado em `audit-log.jsonl` como `optimization.remote.not_eligible_for_automatic` e reportado ao servidor com `execution_mode = not_eligible_for_automatic`.
+
+Elegiveis (todas reversiveis por snapshot ou quarentena, ou apenas observacionais):
+
+<!-- learned-auto-eligible:start -->
+- `DETECT_FOREGROUND_GAME`
+- `APPLY_GAME_MODE`
+- `APPLY_ADAPTIVE_OPTIMIZATION`
+- `APPLY_BACKGROUND_QUIET_MODE`
+- `APPLY_FOREGROUND_BURST_MODE`
+- `APPLY_PC_CLEAN_FAST_BACKGROUND_PRIORITIES`
+- `APPLY_PC_CLEAN_FAST_PROFILE`
+- `APPLY_VISUAL_PERFORMANCE_MODE`
+- `APPLY_CLEANUP_CATEGORY`
+- `EMPTY_TEMP`
+- `ENTER_FOCUS_MODE`
+- `SET_POWER_PLAN_BALANCED`
+- `SET_POWER_PLAN_HIGH_PERFORMANCE`
+- `SET_POWER_PLAN_POWER_SAVER`
+- `SET_PROCESS_PRIORITY`
+- `DELAY_STARTUP_APP`
+- `DISABLE_STARTUP_APP`
+- `STOP_SERVICE`
+- `FLUSH_DNS_CACHE`
+- `RESTORE_DELAYED_STARTUP_APP`
+- `RESTORE_FOCUS_SESSION`
+- `RESTORE_LATENCY_SESSION`
+- `RESTORE_PERFORMANCE_SESSION`
+- `RESTORE_SERVICE`
+- `RESTORE_STARTUP_APP`
+- `RESTORE_VISUAL_EFFECTS`
+<!-- learned-auto-eligible:end -->
+
+Nunca automaticas, independente do que o servidor mandar:
+
+<!-- learned-auto-never:start -->
+- `DELETE_DISK_USAGE_ITEM`
+- `PURGE_CLEANUP_QUARANTINE`
+- `DISABLE_SERVICE_PERMANENTLY`
+- `SET_DNS_SERVERS`
+- `RESET_WINSOCK_CATALOG`
+<!-- learned-auto-never:end -->
+
+`DELETE_DISK_USAGE_ITEM` vai alem: o caminho so e aceito quando escolhido na interface local (`CommandSource::ManualUser`).
+Caminho vindo de comando remoto ou policy local e recusado com `disk_usage_item_path_must_be_local`, mesmo com confirmacao.
+
+## Allowlist Do Helper Privilegiado
+
+Fonte: `supported_actions()` em `src-tauri/src/optimizations/privileged_helper.rs` (27 acoes).
+O teste `safety_matrix_doc_matches_helper_allowlist` falha se esta lista e o codigo divergirem.
+
+<!-- helper-actions:start -->
+- `EMPTY_TEMP`
+- `PURGE_CLEANUP_QUARANTINE`
+- `CLEAR_STANDBY_LIST`
+- `STOP_SERVICE`
+- `RESTORE_SERVICE`
+- `SET_DNS_SERVERS`
+- `SET_INTERFACE_METRIC`
+- `SET_ADAPTER_ENABLED`
+- `APPLY_NETWORK_TUNE`
+- `REVERT_NETWORK_TUNE`
+- `RESET_WINSOCK_CATALOG`
+- `START_FRAME_CAPTURE`
+- `STOP_FRAME_CAPTURE`
+- `ENABLE_SCHEDULED_DEFRAG`
+- `RESIZE_SHADOW_STORAGE`
+- `START_SYSTEM_FILE_CHECK`
+- `SYSTEM_FILE_CHECK_STATUS`
+- `START_DISM_RESTORE_HEALTH`
+- `DISM_RESTORE_HEALTH_STATUS`
+- `RESTART_PNP_DEVICE`
+- `DISABLE_GAME_DVR`
+- `REPAIR_SERVICE`
+- `DISABLE_SERVICE_PERMANENTLY`
+- `THROTTLE_DEFENDER_SCANS`
+- `RESTORE_DEFENDER_SCAN_SETTINGS`
+- `RENEW_DEFENDER_DEFINITIONS`
+- `SCHEDULE_VOLUME_CHECK`
+<!-- helper-actions:end -->
+
 ## Regras Para Novas Acoes
 
 1. Defina a acao em `supported_actions`.
@@ -100,5 +188,5 @@ Enquanto a quarentena existir, os arquivos movidos por limpeza podem ser restaur
 3. Marque se exige confirmacao local, snapshot e helper privilegiado.
 4. Adicione validacao de payload em `validate_action_payload`.
 5. Se alterar estado, crie `SnapshotEntry` ou documente por que nao ha rollback.
-6. Atualize esta matriz com risco, restore e comportamento esperado.
+6. Atualize esta matriz com risco, restore e comportamento esperado (as listas entre marcadores sao conferidas por teste).
 7. Adicione teste cobrindo permissao, bloqueio e payload perigoso.
