@@ -2403,6 +2403,9 @@ fn recreate_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         .min_inner_size(1040.0, 680.0)
         .center()
         .visible(false)
+        // Dark native title bar, matching the app (also set in tauri.conf.json
+        // for the window created at startup).
+        .theme(Some(tauri::Theme::Dark))
         .build()
 }
 
@@ -2425,6 +2428,23 @@ pub(crate) fn show_main_window(app: &AppHandle) {
     let _ = window.unminimize();
     let _ = window.set_focus();
     sync_tray_toggle_label(true);
+
+    // Relaunching the exe with the window closed used to recreate it
+    // minimized (rect -32000,-32000; anexo 07 §2): the first ShowWindow of a
+    // process started minimized (autostart) honours that start state, and
+    // Windows' foreground lock can drop the focus request. A second pass a
+    // moment later restores it and briefly pins it on top so it really
+    // comes to the front.
+    let retry = window.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        if retry.is_minimized().unwrap_or(false) {
+            let _ = retry.unminimize();
+        }
+        let _ = retry.set_always_on_top(true);
+        let _ = retry.set_focus();
+        let _ = retry.set_always_on_top(false);
+    });
 }
 
 const PLAN_SYNC_PERIODIC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
