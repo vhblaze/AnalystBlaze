@@ -1163,7 +1163,7 @@ impl TelemetryEngine {
                 .confirmation_prompt
                 .clone()
                 .unwrap_or_else(|| command.action_name.replace('_', " ")),
-            description: "O dashboard autorizou esta acao. Confirme neste PC para permitir que a IA aprenda este contexto.".to_string(),
+            description: "O dashboard autorizou esta ação. Confirme neste PC para executá-la.".to_string(),
             risk: command
                 .risk_level
                 .clone()

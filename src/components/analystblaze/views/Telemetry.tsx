@@ -510,7 +510,7 @@ function SignalRow({
 }
 
 function StatusBadge({ status }: { status: "good" | "watch" | "critical" }) {
-  const label = status === "critical" ? "critico" : status === "watch" ? "atencao" : "estavel";
+  const label = status === "critical" ? "crítico" : status === "watch" ? "atenção" : "estável";
   return (
     <span className={`rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${badgeTone(status)}`}>
       {label}

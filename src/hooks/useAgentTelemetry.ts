@@ -57,7 +57,7 @@ function maybeNotifyCriticalState(
   const notify = () => {
     lastCriticalNotificationAt.current = Date.now();
     new Notification("AnalystBlaze", {
-      body: "Estado critico detectado no PC. Abra o dashboard para revisar.",
+      body: "Estado crítico detectado no PC. Abra o dashboard para revisar.",
       silent: false,
     });
   };
