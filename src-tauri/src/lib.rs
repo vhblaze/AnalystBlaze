@@ -29,8 +29,8 @@ use uuid::Uuid;
 
 use crate::api::ApiClient;
 use crate::auth::{
-    auth_callback_from_deep_link, profile_from_credentials, profile_from_token, profile_from_value,
-    AuthCallback, AuthProfile, AuthTokens, SecureStore, StoredCredentials,
+    pairing_code_from_deep_link, profile_from_credentials, profile_from_token, profile_from_value,
+    AuthProfile, AuthTokens, SecureStore, StoredCredentials,
 };
 use crate::config::AgentConfig;
 
@@ -1437,10 +1437,10 @@ async fn complete_auth_from_deep_link(
     app: AppHandle,
 ) -> Result<AgentStatus, String> {
     show_main_window(&app);
-    let tokens = match auth_callback_from_deep_link(&raw_url)? {
-        AuthCallback::Tokens(tokens) => tokens,
-        AuthCallback::PairingCode(code) => state.api.exchange_desktop_pairing_code(&code).await?,
-    };
+    // Only a one-time pairing code is accepted from the link (S1/deep link):
+    // the session comes from the server exchange, never from the URL.
+    let code = pairing_code_from_deep_link(&raw_url)?;
+    let tokens = state.api.exchange_desktop_pairing_code(&code).await?;
     complete_auth_tokens(tokens, state, app).await
 }
 

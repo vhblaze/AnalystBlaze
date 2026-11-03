@@ -49,12 +49,6 @@ pub struct AuthTokens {
     pub profile: AuthProfile,
 }
 
-#[derive(Debug, Clone)]
-pub enum AuthCallback {
-    Tokens(AuthTokens),
-    PairingCode(String),
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct AuthProfile {
     pub user_name: Option<String>,
@@ -121,17 +115,14 @@ impl SecureStore {
     }
 }
 
-#[cfg(test)]
-pub fn tokens_from_deep_link(raw_url: &str) -> Result<AuthTokens, String> {
-    match auth_callback_from_deep_link(raw_url)? {
-        AuthCallback::Tokens(tokens) => Ok(tokens),
-        AuthCallback::PairingCode(_) => {
-            Err("Deep link trouxe codigo de pareamento, nao um token JWT.".to_string())
-        }
-    }
-}
+/// Deep link params that would carry a session in the URL. Refused: the
+/// desktop signs in only by exchanging a one-time pairing code with the
+/// server, so a token in a link (logs, history, another app registering the
+/// scheme) is never trusted. `plan=`/`name=` are ignored for the same reason:
+/// the profile comes from the server response to the exchange.
+const TOKEN_AUTH_PARAMS: &[&str] = &["token", "access_token", "refresh_token"];
 
-pub fn auth_callback_from_deep_link(raw_url: &str) -> Result<AuthCallback, String> {
+pub fn pairing_code_from_deep_link(raw_url: &str) -> Result<String, String> {
     if raw_url.len() > MAX_DEEP_LINK_BYTES {
         return Err("Deep link de autenticacao excede o tamanho permitido.".to_string());
     }
@@ -143,31 +134,20 @@ pub fn auth_callback_from_deep_link(raw_url: &str) -> Result<AuthCallback, Strin
 
     let params = auth_params(&url);
     validate_auth_params(&params)?;
-    let access_token = find_param(&params, "token")
-        .or_else(|| find_param(&params, "access_token"))
-        .filter(|token| !token.trim().is_empty())
-        .map(|token| {
-            let refresh_token =
-                find_param(&params, "refresh_token").filter(|token| !token.trim().is_empty());
-            let profile = auth_profile(&params, &token);
-
-            AuthCallback::Tokens(AuthTokens {
-                access_token: token,
-                refresh_token,
-                profile,
-            })
-        });
-
-    if let Some(callback) = access_token {
-        return Ok(callback);
+    if params.iter().any(|(key, _)| {
+        TOKEN_AUTH_PARAMS
+            .iter()
+            .any(|token_param| key.eq_ignore_ascii_case(token_param))
+    }) {
+        return Err(
+            "Deep link com token nao e aceito; entre pelo codigo de pareamento.".to_string(),
+        );
     }
 
-    let pairing_code = find_param(&params, "code")
+    find_param(&params, "code")
         .or_else(|| find_param(&params, "pairing_code"))
         .filter(|code| !code.trim().is_empty())
-        .ok_or_else(|| "Deep link nao trouxe token JWT nem codigo de pareamento.".to_string())?;
-
-    Ok(AuthCallback::PairingCode(pairing_code))
+        .ok_or_else(|| "Deep link nao trouxe codigo de pareamento.".to_string())
 }
 
 pub fn profile_from_token(access_token: &str) -> AuthProfile {
@@ -574,70 +554,86 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        auth_callback_from_deep_link, profile_from_credentials, profile_from_value,
-        tokens_from_deep_link, AuthCallback, StoredCredentials,
+        pairing_code_from_deep_link, profile_from_credentials, profile_from_value,
+        StoredCredentials,
     };
 
-    #[test]
-    fn parses_query_token_callback() {
-        let tokens = tokens_from_deep_link(
-            "analystblaze://auth?token=access&refresh_token=refresh&name=Ana&plan=pro",
-        )
-        .expect("valid callback");
 
-        assert_eq!(tokens.access_token, "access");
-        assert_eq!(tokens.refresh_token.as_deref(), Some("refresh"));
-        assert_eq!(tokens.profile.user_name.as_deref(), Some("Ana"));
-        assert_eq!(tokens.profile.plan.as_deref(), Some("pro"));
-        assert_eq!(tokens.profile.has_paid_plan, Some(true));
-    }
 
-    #[test]
-    fn parses_fragment_access_token_callback() {
-        let tokens =
-            tokens_from_deep_link("analystblaze://auth#access_token=access&refresh_token=refresh")
-                .expect("valid callback");
 
-        assert_eq!(tokens.access_token, "access");
-        assert_eq!(tokens.refresh_token.as_deref(), Some("refresh"));
-    }
 
-    #[test]
-    fn accepts_path_based_auth_callback() {
-        let tokens = tokens_from_deep_link("analystblaze:/auth?access_token=access")
-            .expect("valid callback");
-
-        assert_eq!(tokens.access_token, "access");
-    }
 
     #[test]
     fn parses_pairing_code_callback() {
-        let callback = auth_callback_from_deep_link("analystblaze://auth?code=pair_123")
-            .expect("valid callback");
+        assert_eq!(
+            pairing_code_from_deep_link("analystblaze://auth?code=pair_123").as_deref(),
+            Ok("pair_123")
+        );
+        assert_eq!(
+            pairing_code_from_deep_link("analystblaze:/auth?pairing_code=pair_456").as_deref(),
+            Ok("pair_456")
+        );
+    }
 
-        match callback {
-            AuthCallback::PairingCode(code) => assert_eq!(code, "pair_123"),
-            AuthCallback::Tokens(_) => panic!("expected pairing code callback"),
+    #[test]
+    fn rejects_tokens_in_deep_link() {
+        for url in [
+            "analystblaze://auth?token=access",
+            "analystblaze://auth?access_token=access&refresh_token=refresh",
+            "analystblaze://auth#access_token=access",
+            "analystblaze://auth?code=pair_123&token=access",
+            "analystblaze://auth?code=pair_123&REFRESH_TOKEN=refresh",
+        ] {
+            assert!(pairing_code_from_deep_link(url).is_err(), "{url}");
         }
     }
 
     #[test]
+    fn ignores_plan_and_name_from_the_url() {
+        // Accepted, but only the code is used; plan/name never reach the profile.
+        assert_eq!(
+            pairing_code_from_deep_link("analystblaze://auth?code=pair_1&plan=family&name=Ana").as_deref(),
+            Ok("pair_1")
+        );
+    }
+
+    #[test]
     fn rejects_non_auth_callback() {
-        assert!(tokens_from_deep_link("analystblaze://billing?token=access").is_err());
+        assert!(pairing_code_from_deep_link("analystblaze://billing?code=pair_123").is_err());
+    }
+
+    #[test]
+    fn parses_free_plan_as_unpaid() {
+        let profile = profile_from_value(&json!({ "plan": "free" }));
+        assert_eq!(profile.plan.as_deref(), Some("starter"));
+        assert_eq!(profile.has_paid_plan, Some(false));
+    }
+
+    #[test]
+    fn parses_starter_plan_as_unpaid() {
+        let profile = profile_from_value(&json!({ "plan": "starter" }));
+        assert_eq!(profile.plan.as_deref(), Some("starter"));
+        assert_eq!(profile.has_paid_plan, Some(false));
+    }
+
+    #[test]
+    fn ignores_product_name_as_user_name() {
+        let profile = profile_from_value(&json!({ "name": "AnalystBlaze" }));
+        assert_eq!(profile.user_name, None);
     }
 
     #[test]
     fn rejects_oversized_deep_link() {
         let long_code = "a".repeat(2100);
         assert!(
-            auth_callback_from_deep_link(&format!("analystblaze://auth?code={long_code}")).is_err()
+            pairing_code_from_deep_link(&format!("analystblaze://auth?code={long_code}")).is_err()
         );
     }
 
     #[test]
     fn rejects_duplicate_auth_params() {
-        assert!(auth_callback_from_deep_link("analystblaze://auth?code=one&code=two").is_err());
-        assert!(auth_callback_from_deep_link(
+        assert!(pairing_code_from_deep_link("analystblaze://auth?code=one&code=two").is_err());
+        assert!(pairing_code_from_deep_link(
             "analystblaze://auth?access_token=one&access_token=two"
         )
         .is_err());
@@ -645,57 +641,17 @@ mod tests {
 
     #[test]
     fn rejects_command_like_deep_link_params() {
-        assert!(auth_callback_from_deep_link("analystblaze://auth?code=pair&cmd=calc").is_err());
-        assert!(auth_callback_from_deep_link(
+        assert!(pairing_code_from_deep_link("analystblaze://auth?code=pair&cmd=calc").is_err());
+        assert!(pairing_code_from_deep_link(
             "analystblaze://auth?code=pair&path=C:/Windows/System32"
         )
         .is_err());
     }
 
-    #[test]
-    fn parses_free_plan_as_unpaid() {
-        let tokens = tokens_from_deep_link("analystblaze://auth?token=access&plan=free")
-            .expect("valid callback");
 
-        assert_eq!(tokens.profile.plan.as_deref(), Some("starter"));
-        assert_eq!(tokens.profile.has_paid_plan, Some(false));
-    }
 
-    #[test]
-    fn parses_starter_plan_as_unpaid() {
-        let tokens = tokens_from_deep_link("analystblaze://auth?token=access&plan=starter")
-            .expect("valid callback");
 
-        assert_eq!(tokens.profile.plan.as_deref(), Some("starter"));
-        assert_eq!(tokens.profile.has_paid_plan, Some(false));
-    }
 
-    #[test]
-    fn parses_username_from_callback() {
-        let tokens =
-            tokens_from_deep_link("analystblaze://auth?token=access&username=Vitor%20Hugo")
-                .expect("valid callback");
-
-        assert_eq!(tokens.profile.user_name.as_deref(), Some("Vitor Hugo"));
-    }
-
-    #[test]
-    fn ignores_product_name_as_user_name() {
-        let tokens = tokens_from_deep_link("analystblaze://auth?token=access&name=AnalystBlaze")
-            .expect("valid callback");
-
-        assert_eq!(tokens.profile.user_name, None);
-    }
-
-    #[test]
-    fn skips_product_name_and_uses_real_username() {
-        let tokens = tokens_from_deep_link(
-            "analystblaze://auth?token=access&name=AnalystBlaze&username=Vitor%20Hugo",
-        )
-        .expect("valid callback");
-
-        assert_eq!(tokens.profile.user_name.as_deref(), Some("Vitor Hugo"));
-    }
 
     #[test]
     fn parses_account_profile_response() {
