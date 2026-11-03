@@ -70,12 +70,31 @@ fn shell_plugin_is_absent() -> bool {
 fn opener_calls_are_static_web_urls() -> bool {
     let lib = include_str!("../src/lib.rs");
 
-    lib.matches("tauri_plugin_opener::open_url").count() == 4
+    // Five calls, all listed: four configured web URLs plus
+    // open_windows_security, which maps a fixed page name to one of three
+    // hard-coded windowsdefender:// URLs (never interpolates input).
+    lib.matches("tauri_plugin_opener::open_url").count() == 5
         && lib.contains("open_url(&state.config.web_login_url")
         && lib.contains("open_url(&state.config.web_account_url")
         && lib.contains("open_url(&state.config.web_billing_url")
         && lib.contains("open_url(&state.config.web_insights_url")
+        && windows_security_opener_is_fixed_allowlist(lib)
         && !lib.contains("open_url(&raw_url")
+}
+
+fn windows_security_opener_is_fixed_allowlist(lib: &str) -> bool {
+    let Some(start) = lib.find("async fn open_windows_security(") else {
+        return false;
+    };
+    let body = &lib[start..];
+    let body = &body[..body.find("\n}").map(|end| end + 2).unwrap_or(body.len())];
+
+    body.contains("\"history\" => \"windowsdefender://history/\"")
+        && body.contains("\"threat\" => \"windowsdefender://threat/\"")
+        && body.contains("\"threatsettings\" => \"windowsdefender://threatsettings/\"")
+        && body.contains("other => return Err(")
+        && body.contains("tauri_plugin_opener::open_url(url, None::<&str>)")
+        && !body.contains("format!(\"windowsdefender")
 }
 
 fn tauri_core_meets_patch_floor() -> bool {
