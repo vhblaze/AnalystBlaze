@@ -430,7 +430,7 @@ impl TelemetryEngine {
                 let _ = self.mode_tx.send(TelemetryMode::Normal);
             }
             Err(error) => {
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 self.record_backend_failure("consultar modo realtime", &error);
@@ -525,7 +525,7 @@ impl TelemetryEngine {
                 self.coalesced_realtime_samples = self
                     .coalesced_realtime_samples
                     .saturating_add(coalesced_samples);
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 self.record_backend_failure("enviar telemetria realtime efemera", &error);
@@ -588,7 +588,7 @@ impl TelemetryEngine {
             };
 
             if let Err(error) = self.api.post_batch(&access_token, &hw_secret, &batch).await {
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 if is_batch_cooldown_error(&error) {
@@ -626,7 +626,7 @@ impl TelemetryEngine {
                 self.policy = Some(policy);
             }
             Err(error) => {
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 self.record_backend_failure("atualizar policy bundle local", &error);
@@ -753,7 +753,7 @@ impl TelemetryEngine {
         {
             Ok(result) => result,
             Err(error) => {
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 self.record_backend_failure("buscar comandos", &error);
@@ -1097,7 +1097,7 @@ impl TelemetryEngine {
             .post_agent_event(access_token, hw_secret, &event_payload)
             .await
         {
-            if self.clear_local_session_if_device_inactive(&error) {
+            if self.handle_session_error(&error).await {
                 return;
             }
             if is_request_validation_error(&error) {
@@ -1285,24 +1285,66 @@ impl TelemetryEngine {
         )
     }
 
-    fn clear_local_session_if_device_inactive(&mut self, error: &str) -> bool {
-        if !is_device_inactive_error(error) {
-            return false;
+    /// Bloco 5.4: the desktop is never logged out by time. An expired or
+    /// rejected access token is renewed in the background with the refresh
+    /// token; the session only ends when the server refuses that renewal,
+    /// and then the user is told the real reason. No network is not a 401:
+    /// the app keeps working locally and tries again on the next tick.
+    /// Returns true when the caller should stop this round.
+    async fn handle_session_error(&mut self, error: &str) -> bool {
+        if is_unauthorized_error(error) {
+            let Ok(mut credentials) = self.store.load() else {
+                return false;
+            };
+            let Some(refresh_token) = credentials.refresh_token.clone() else {
+                self.end_local_session("expired");
+                return true;
+            };
+            match self.api.refresh_session(&refresh_token).await {
+                crate::api::RefreshOutcome::Refreshed {
+                    access_token,
+                    refresh_token,
+                } => {
+                    credentials.access_token = Some(access_token);
+                    if refresh_token.is_some() {
+                        credentials.refresh_token = refresh_token;
+                    }
+                    if let Err(error) = self.store.save(&credentials) {
+                        eprintln!("Nao foi possivel salvar a sessao renovada: {error}");
+                    }
+                }
+                crate::api::RefreshOutcome::Refused(reason) => self.end_local_session(&reason),
+                crate::api::RefreshOutcome::Unavailable(error) => {
+                    eprintln!("Renovacao da sessao indisponivel agora ({error}); tentando de novo depois.");
+                }
+            }
+            return true;
         }
+        if is_account_gone_error(error) {
+            self.end_local_session("account_disabled");
+            return true;
+        }
+        if is_device_inactive_error(error) {
+            self.end_local_session("device_removed");
+            return true;
+        }
+        false
+    }
 
-        eprintln!("Sessao desktop desativada pelo servidor: {error}");
+    fn end_local_session(&mut self, reason: &str) {
+        eprintln!("Sessao desktop encerrada pelo servidor: {reason}");
         let _ = self.store.clear();
         let _ = self.mode_tx.send(TelemetryMode::Normal);
         self.last_sample = None;
         if let Ok(mut state) = self.telemetry_state.try_write() {
             *state = None;
         }
-        let _ = self.app_handle.emit(AGENT_SESSION_INVALIDATED_EVENT, ());
-        // The server just kicked this device out from under a possibly
-        // minimized/background window - surface it immediately rather than
-        // leaving the user unknowingly logged out.
+        let _ = self
+            .app_handle
+            .emit(AGENT_SESSION_INVALIDATED_EVENT, json!({ "reason": reason }));
+        // The server just ended this session under a possibly minimized
+        // window - surface it immediately with the reason.
         crate::show_main_window(&self.app_handle);
-        true
     }
 }
 
@@ -1374,6 +1416,22 @@ fn optimization_delta(before: &TelemetrySample, after: &TelemetrySample) -> Valu
     })
 }
 
+fn is_unauthorized_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("status 401")
+        || normalized.contains("invalid access token")
+        || normalized.contains("invalid_access_token")
+        || normalized.contains("token de acesso invalido")
+        || normalized.contains("token de acesso inválido")
+}
+
+fn is_account_gone_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("user not found")
+        || normalized.contains("usuario nao encontrado")
+        || normalized.contains("usuário não encontrado")
+}
+
 fn is_device_inactive_error(error: &str) -> bool {
     let normalized = error.to_ascii_lowercase();
     normalized.contains("not active")
@@ -1382,11 +1440,6 @@ fn is_device_inactive_error(error: &str) -> bool {
         || normalized.contains("no esta activo")
         || normalized.contains("hardware not found")
         || normalized.contains("invalid hardware")
-        || normalized.contains("user not found")
-        || normalized.contains("usuario nao encontrado")
-        || normalized.contains("usuário não encontrado")
-        || normalized.contains("invalid access token")
-        || normalized.contains("invalid_access_token")
 }
 
 fn is_batch_cooldown_error(error: &str) -> bool {
@@ -2459,6 +2512,31 @@ mod tests {
             risk_level: None,
             confirmation_prompt: None,
         }
+    }
+
+    #[test]
+    fn expired_access_is_renewed_not_treated_as_logout() {
+        // Bloco 5.4: a 401 goes to refresh; it must not count as "device gone".
+        let expired = "API retornou status 401 Unauthorized: Invalid access token.";
+        assert!(is_unauthorized_error(expired));
+        assert!(!is_device_inactive_error(expired));
+        assert!(!is_account_gone_error(expired));
+    }
+
+    #[test]
+    fn inactive_device_and_missing_account_end_the_session() {
+        assert!(is_device_inactive_error("API retornou status 403 Forbidden: Hardware not active"));
+        assert!(!is_unauthorized_error("API retornou status 403 Forbidden: Hardware not active"));
+        assert!(is_account_gone_error("API retornou status 404 Not Found: User not found"));
+    }
+
+    #[test]
+    fn network_failure_is_neither_logout_nor_refresh() {
+        // No internet must never pop the "session ended" modal.
+        let offline = "error sending request for url (https://api.analystblaze.com/api/v1/telemetry/batch)";
+        assert!(!is_unauthorized_error(offline));
+        assert!(!is_device_inactive_error(offline));
+        assert!(!is_account_gone_error(offline));
     }
 
     #[test]

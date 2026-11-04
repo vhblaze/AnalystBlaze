@@ -28,6 +28,9 @@ export type AgentStatus = {
    * ainda nao decidiu se quer move-lo. Enquanto for true a UI mostra o
    * dialogo "Mover este PC?" (confirmDeviceTransfer / cancelDeviceTransfer). */
   device_transfer_pending?: boolean | null;
+  /** Bloco 5.4: preenchido quando a conta ja tem 2 PCs ativos e o login deste
+   * PC espera o usuario escolher qual deles substituir (replaceDevice). */
+  device_limit_choices?: DeviceChoice[] | null;
   /** Verificacao de e-mail. `null`/ausente = o servidor nao informou (backend
    * antigo) - a UI trata como verificado, pra nunca acusar falsamente que a
    * conta vai ser desativada. */
@@ -1614,9 +1617,36 @@ export async function listenToGameModeUsage(onUsage: (usage: GameModeUsage) => v
   return listen<GameModeUsage>("game-mode-usage-updated", (event) => onUsage(event.payload));
 }
 
-export async function listenToAgentSessionInvalidated(onInvalidated: () => void) {
+/** Motivo com que o servidor encerrou a sessao do desktop (Bloco 5.2/5.4):
+ * device_removed, password_changed, reuse_detected, logout, logout_all,
+ * account_disabled, expired ou invalid. */
+export type SessionEndReason = string;
+
+export async function listenToAgentSessionInvalidated(onInvalidated: (reason: SessionEndReason) => void) {
   if (!isTauriRuntime()) return () => undefined;
-  return listen("agent-session-invalidated", onInvalidated);
+  return listen<{ reason?: string } | null>("agent-session-invalidated", (event) =>
+    onInvalidated(event.payload?.reason ?? "invalid"),
+  );
+}
+
+export type DeviceChoice = {
+  id: string;
+  name?: string | null;
+  machine_type?: string | null;
+  os_version?: string | null;
+  last_ping?: string | null;
+};
+
+/** Remove o PC escolhido da conta e registra este no lugar. */
+export async function replaceDevice(hwId: string) {
+  if (!isTauriRuntime()) return fallbackStatus;
+  return invoke<AgentStatus>("replace_device", { hwId });
+}
+
+/** Desiste da troca: nada e removido e o login e descartado. */
+export async function cancelDeviceReplacement() {
+  if (!isTauriRuntime()) return fallbackStatus;
+  return invoke<AgentStatus>("cancel_device_replacement");
 }
 
 export async function listenToRemoteCommandConfirmation(

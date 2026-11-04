@@ -76,6 +76,21 @@ export type User = {
   /** Dias até a conta ser desativada por falta de verificação. */
   emailVerificationDaysRemaining: number | null;
 };
+const SESSION_END_REASONS = [
+  "device_removed",
+  "password_changed",
+  "reuse_detected",
+  "logout",
+  "logout_all",
+  "account_disabled",
+  "expired",
+] as const;
+
+export function sessionEndedMessageKey(reason: string): string {
+  const known = (SESSION_END_REASONS as readonly string[]).includes(reason) ? reason : "invalid";
+  return `agent.messages.sessionEnded.${known}`;
+}
+
 export type AgentMessage = { key: string; params?: Record<string, string | number | boolean> };
 
 export function canUseAutomaticGameMode(status?: AgentStatus | null) {
@@ -184,9 +199,11 @@ export function useAuth() {
     });
 
     let disposeInvalidated: (() => void) | undefined;
-    listenToAgentSessionInvalidated(() => {
+    listenToAgentSessionInvalidated((reason) => {
       setSample(null);
-      setMessage({ key: "agent.messages.deviceInvalidated" });
+      // Bloco 5.4: says what really happened (PC removed, password changed,
+      // ...) instead of a generic "session ended".
+      setMessage({ key: sessionEndedMessageKey(reason) });
       void refreshStatus().catch(() => undefined);
     }).then((dispose) => {
       disposeInvalidated = dispose;

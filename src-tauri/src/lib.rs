@@ -81,6 +81,11 @@ struct AgentState {
     /// and never persisted - a cancelled or abandoned prompt leaves nothing
     /// behind, and an app restart drops it.
     pending_device_transfer: Mutex<Option<PendingDeviceTransfer>>,
+    /// Bloco 5.4: login that stopped short of registering because the
+    /// account already has its two active devices. Held until the user picks
+    /// which one to replace (replace_device) or gives up
+    /// (cancel_device_replacement); never persisted.
+    pending_device_limit: Mutex<Option<PendingDeviceLimit>>,
     /// The frontend's currently selected UI locale (e.g. "pt-BR"), pushed
     /// down via set_agent_locale on mount and on every locale change - sent
     /// as Accept-Language on requests that can surface a server error
@@ -118,6 +123,9 @@ struct AgentStatus {
     /// ainda não decidiu se quer movê-lo. A UI mostra o diálogo "Mover este
     /// PC?" enquanto isso for `true`.
     device_transfer_pending: bool,
+    /// Bloco 5.4: non-empty while the "this account already has 2 active
+    /// PCs - which one do you want to replace?" prompt is pending.
+    device_limit_choices: Vec<api::DeviceChoice>,
     /// Verificação de e-mail. `None` = servidor não informou (backend antigo);
     /// a UI trata como verificado para nunca acusar falsamente.
     email_verified: Option<bool>,
@@ -1474,6 +1482,25 @@ async fn complete_auth_tokens(
     {
         Ok(registration) => registration,
         Err(error) => {
+            if is_device_limit_error(&error) {
+                // The server never switches a PC off to make room anymore:
+                // ask which one this PC replaces instead.
+                let devices = state
+                    .api
+                    .active_devices(&tokens.access_token)
+                    .await
+                    .unwrap_or_default();
+                if devices.is_empty() {
+                    return Err(error);
+                }
+                *state
+                    .pending_device_limit
+                    .lock()
+                    .map_err(|_| "Estado do agente bloqueado.".to_string())? =
+                    Some(PendingDeviceLimit { tokens, devices });
+                show_main_window(&app);
+                return status(&state);
+            }
             let Some((hw_id, hw_secret)) = prior_device.filter(|_| is_already_linked_error(&error))
             else {
                 return Err(error);
@@ -1519,6 +1546,47 @@ async fn finish_registration(
     if credentials_complete(&credentials) {
         ensure_agent_running(&state, &app)?;
     }
+    status(&state)
+}
+
+struct PendingDeviceLimit {
+    tokens: AuthTokens,
+    devices: Vec<api::DeviceChoice>,
+}
+
+fn is_device_limit_error(error: &str) -> bool {
+    error.contains("DEVICE_LIMIT_REACHED")
+}
+
+/// The user picked which active PC this one replaces. That PC is removed from
+/// the account (its desktop session ends with reason "device_removed"), then
+/// this PC is registered with the login that hit the limit.
+#[tauri::command]
+async fn replace_device(
+    hw_id: String,
+    state: State<'_, AgentState>,
+    app: AppHandle,
+) -> Result<AgentStatus, String> {
+    let pending = state
+        .pending_device_limit
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .take()
+        .ok_or_else(|| "Nenhuma troca de dispositivo pendente.".to_string())?;
+    if !pending.devices.iter().any(|device| device.id == hw_id) {
+        return Err("Dispositivo escolhido nao esta na lista da conta.".to_string());
+    }
+    state.api.remove_device(&pending.tokens.access_token, &hw_id).await?;
+    complete_auth_tokens(pending.tokens, state, app).await
+}
+
+/// The user gave up: nothing is removed and the login is dropped.
+#[tauri::command]
+fn cancel_device_replacement(state: State<'_, AgentState>) -> Result<AgentStatus, String> {
+    *state
+        .pending_device_limit
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())? = None;
     status(&state)
 }
 
@@ -2077,6 +2145,7 @@ pub fn run() {
         game_mode_usage_cancel: Mutex::new(None),
         locale: Mutex::new("pt-BR".to_string()),
         pending_device_transfer: Mutex::new(None),
+        pending_device_limit: Mutex::new(None),
     };
 
     let updater_api_base_url = state.config.api_base_url.clone();
@@ -2272,6 +2341,8 @@ pub fn run() {
             forget_device,
             confirm_device_transfer,
             cancel_device_transfer,
+            replace_device,
+            cancel_device_replacement,
             collect_once,
             telemetry_snapshot,
             fetch_authenticated_insights,
@@ -2532,6 +2603,13 @@ fn status(state: &AgentState) -> Result<AgentStatus, String> {
         .lock()
         .map_err(|_| "Estado do agente bloqueado.".to_string())?
         .is_some();
+    let device_limit_choices = state
+        .pending_device_limit
+        .lock()
+        .map_err(|_| "Estado do agente bloqueado.".to_string())?
+        .as_ref()
+        .map(|pending| pending.devices.clone())
+        .unwrap_or_default();
 
     Ok(AgentStatus {
         authenticated: credentials.access_token.is_some(),
@@ -2553,6 +2631,7 @@ fn status(state: &AgentState) -> Result<AgentStatus, String> {
         plan_synced_at: credentials.plan_synced_at,
         plan_sync_error,
         device_transfer_pending,
+        device_limit_choices,
         email_verified: account_profile.email_verified,
         email_verification_days_remaining: account_profile.email_verification_days_remaining,
     })
