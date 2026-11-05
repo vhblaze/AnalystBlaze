@@ -3,6 +3,25 @@
 export const dashboard = {
   dashboard: {
     d3: {
+      factorMeasured: "medido {{value}}, limite {{limit}}",
+      factorTotal: "Saúde agora (100 menos os pontos acima)",
+      factors: {
+        cpu_critical: "Processador em uso muito alto",
+        cpu_sustained_load: "Processador sob carga",
+        ram_pressure_critical: "Memória quase cheia",
+        ram_pressure: "Memória alta",
+        gpu_thermal_critical: "GPU muito quente",
+        gpu_thermal_watch: "GPU esquentando",
+        cpu_thermal_critical: "CPU muito quente",
+        cpu_thermal_watch: "CPU esquentando",
+        disk_space_low: "Disco quase cheio",
+        background_process_load: "Muitos programas abertos",
+        disk_smart_predict_failure: "O disco avisa que pode falhar (SMART)",
+        defender_attention: "Defender desligado ou indisponível",
+        system_event_errors: "Muitos erros críticos do Windows em 24 h",
+        network_packet_loss: "Perda de pacotes na rede",
+        network_jitter: "Ping instável",
+      },
       subtitleNotConnected: "O agente ainda não está conectado neste PC.",
       subtitleWaiting: "Esperando a primeira leitura do PC.",
       subtitleGood: "Seu PC está bem.",
