@@ -8,13 +8,17 @@ import type { DiskNearFullInfo } from "@/services/insights";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { History } from "@/components/screens/history/History";
+import { auditLog, optimizationSnapshots } from "@/features/history/useHistory";
+import { releaseMemory } from "@/services/tauri/agent";
 import { MyPC } from "@/components/screens/mypc/MyPC";
+import { WindowsHealth } from "@/components/screens/mypc/WindowsHealth";
 import type { RequestConfirmation, RunConfirmed } from "./useConfirmation";
+import type { ControlsActions } from "@/components/screens/controls/actions";
 
-const Dashboard = lazy(() => import("@/components/analystblaze/views/Dashboard").then((module) => ({ default: module.Dashboard })));
+const Dashboard = lazy(() => import("@/components/screens/dashboard/Dashboard").then((module) => ({ default: module.Dashboard })));
 const Telemetry = lazy(() => import("@/components/analystblaze/views/Telemetry").then((module) => ({ default: module.Telemetry })));
 const Insights = lazy(() => import("@/components/analystblaze/views/Insights").then((module) => ({ default: module.Insights })));
-const LocalControls = lazy(() => import("@/components/analystblaze/views/LocalControls").then((module) => ({ default: module.LocalControls })));
+const Controls = lazy(() => import("@/components/screens/controls/Controls").then((module) => ({ default: module.Controls })));
 const DiskExplorer = lazy(() => import("@/components/analystblaze/views/DiskExplorer").then((module) => ({ default: module.DiskExplorer })));
 const Network = lazy(() => import("@/components/analystblaze/views/Network").then((module) => ({ default: module.Network })));
 const Settings = lazy(() => import("@/components/analystblaze/views/Settings").then((module) => ({ default: module.Settings })));
@@ -237,6 +241,212 @@ export function ScreenOutlet({
     [runConfirmed, activateGameModeWithUpsell, auth],
   );
 
+  // Ações de Controles e de Meu PC › Saúde, com a mesma confirmação de sempre.
+  const controlsActions: ControlsActions = {
+    onActivateGameMode: () =>
+              runConfirmed(
+                {
+                  title: "Ativar Modo Gamer",
+                  description: "Aplica o perfil completo de jogo: prioridade alta para o alvo, fundo reduzido, limpeza segura, energia/visual e rede.",
+                  risk: "sensivel",
+                  snapshot: true,
+                },
+                activateGameModeWithUpsell,
+              ),
+    onRestoreOptimizations: () =>
+              runConfirmed(
+                {
+                  title: "Restaurar snapshots",
+                  description: "O agente vai tentar desfazer alterações pendentes de energia, limpeza, apps de inicialização e serviços.",
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                auth.restoreOptimizations,
+              ),
+    onStartSystemFileCheck: () =>
+              runConfirmed(
+                {
+                  title: "Verificar arquivos de sistema (SFC)",
+                  description: "Executa sfc /scannow. Pode levar vários minutos e usa privilégios administrativos - não interrompa nem reinicie o PC enquanto estiver em andamento.",
+                  risk: "sensivel",
+                  snapshot: false,
+                },
+                auth.startSystemFileCheck,
+              ),
+    onStartDismRestoreHealth: () =>
+              runConfirmed(
+                {
+                  title: "Reparar componentes do Windows (DISM)",
+                  description: "Executa DISM /Online /Cleanup-Image /RestoreHealth. Pode levar bem mais tempo que o SFC e precisa de conexão com a internet - não interrompa nem reinicie o PC enquanto estiver em andamento.",
+                  risk: "sensivel",
+                  snapshot: false,
+                },
+                auth.startDismRestoreHealth,
+              ),
+    onDisableStartup: (name, location) =>
+              runConfirmed(
+                {
+                  title: `Desativar ${name}`,
+                  description: `Remove o app da inicialização do Windows em ${location ?? "registro detectado"} e cria snapshot para restaurar depois.`,
+                  risk: "sensivel",
+                  snapshot: true,
+                },
+                () => auth.disableStartup(name, location),
+              ),
+    onRestoreStartup: (name) =>
+              runConfirmed(
+                {
+                  title: name ? `Restaurar ${name}` : "Restaurar apps de inicialização",
+                  description: "Restaura o valor original salvo no snapshot local do Registro.",
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                () => auth.restoreStartup(name),
+              ),
+    onStopService: (name) =>
+              runConfirmed(
+                {
+                  title: `Parar serviço ${name}`,
+                  description: "O serviço será parado apenas se passar pela denylist local. Um snapshot guarda se ele estava rodando antes.",
+                  risk: "sensivel",
+                  snapshot: true,
+                },
+                () => auth.stopService(name),
+              ),
+    onRestoreService: (name) =>
+              runConfirmed(
+                {
+                  title: name ? `Restaurar serviço ${name}` : "Restaurar serviços",
+                  description: "Tenta religar apenas serviços que estavam rodando antes da ação.",
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                () => auth.restoreService(name),
+              ),
+    onSetPowerPlan: (plan) =>
+              runConfirmed(
+                {
+                  title: plan === "high_performance" ? "Ativar alto desempenho" : plan === "power_saver" ? "Ativar economia de energia" : "Ativar plano equilibrado",
+                  description: "Altera o plano de energia do Windows e cria snapshot local para restaurar o plano anterior depois.",
+                  risk: "sensivel",
+                  snapshot: true,
+                },
+                () => auth.setPowerPlan(plan),
+              ),
+    onApplyVisualPerformance: () =>
+              runConfirmed(
+                {
+                  title: "Ativar visual de desempenho",
+                  description: "Reduz animacoes, transparencia e efeitos visuais do Windows para deixar o sistema mais leve (reversível por snapshot). Pode causar um pequeno engasgo de um instante em outros programas abertos, principalmente navegadores - e o Windows avisando todo mundo da mudança, um comportamento normal do sistema, não um erro.",
+                  risk: "sensivel",
+                  snapshot: true,
+                },
+                auth.applyVisualPerformance,
+              ),
+    onRestoreVisualPerformance: () =>
+              runConfirmed(
+                {
+                  title: "Restaurar efeitos visuais",
+                  description: "Restaura os valores visuais do Windows salvos no snapshot local mais recente.",
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                auth.restoreVisualPerformance,
+              ),
+    onDeepCleanTemp: () =>
+              runConfirmed(
+                {
+                  title: "Limpeza profunda TEMP",
+                  description: "Move arquivos temporários destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
+                  risk: "sensivel",
+                  snapshot: true,
+                },
+                auth.cleanTempDeep,
+              ),
+    onPurgeCleanup: () =>
+              runConfirmed(
+                {
+                  title: "Purgar quarentena",
+                  description: "Apaga permanentemente a quarentena de limpeza. Depois disso esses arquivos não poderão ser restaurados.",
+                  risk: "sensivel",
+                  snapshot: false,
+                },
+                auth.purgeCleanup,
+              ),
+    onRestoreGameMode: () =>
+              runConfirmed(
+                {
+                  title: "Restaurar Modo Gamer",
+                  description: "Restaura snapshots da sessão ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponíveis.",
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                auth.restoreGameMode,
+              ),
+    onApplyPcCleanFast: () =>
+              runConfirmed(
+                {
+                  title: "Aplicar PC limpo/rapido",
+                  description: "Executa Performance Scan, limpeza segura, ajuste visual, priorizacao de apps de fundo e Modo Gamer se houver jogo detectado.",
+                  risk: "sensivel",
+                  snapshot: true,
+                },
+                auth.pcCleanFast,
+              ),
+    onRestorePerformanceSession: (sessionId) =>
+              runConfirmed(
+                {
+                  title: "Restaurar Performance Suite",
+                  description: "Restaura snapshots criados pelo perfil PC limpo/rápido, incluindo visual, prioridades e inicialização atrasada quando existirem.",
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                () => auth.restorePerformance(sessionId),
+              ),
+    onApplyCleanupCategory: (category, mode) =>
+              runConfirmed(
+                {
+                  title: category === "cleanup_quarantine" ? "Purgar quarentena" : "Aplicar limpeza",
+                  description: category === "cleanup_quarantine"
+                    ? "Apaga permanentemente a quarentena para liberar espaço real."
+                    : "Move arquivos elegiveis desta categoria para quarentena reversível.",
+                  risk: category === "cleanup_quarantine" ? "sensivel" : "seguro",
+                  snapshot: category !== "cleanup_quarantine",
+                },
+                () => auth.applyCleanupCategory(category, mode),
+              ),
+    onDelayStartupApp: (name, location) =>
+              runConfirmed(
+                {
+                  title: `Atrasar ${name}`,
+                  description: `Remove temporariamente ${name} da inicialização direta e coloca na fila local do AnalystBlaze para iniciar depois.`,
+                  risk: "sensivel",
+                  snapshot: true,
+                },
+                () => auth.delayStartup(name, location),
+              ),
+    onRestoreDelayedStartupApp: (name) =>
+              runConfirmed(
+                {
+                  title: name ? `Restaurar ${name}` : "Restaurar inicialização atrasada",
+                  description: "Restaura o valor de inicialização salvo em snapshot local.",
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                () => auth.restoreDelayedStartup(name),
+              ),
+    onDisableGameDvr: () =>
+      runConfirmed(
+        {
+          title: "Desativar gravação do Game Bar",
+          description: "Desliga a gravação em segundo plano do Xbox Game Bar (Game DVR). Reversível - a chave anterior fica salva no histórico de ações.",
+          risk: "sensivel",
+          snapshot: true,
+        },
+        auth.disableGameDvr,
+      ),
+  };
+
   if (!auth.ready) {
     return <div className="text-sm text-fg-3">{t("app.loading")}</div>;
   }
@@ -249,49 +459,78 @@ export function ScreenOutlet({
             user={auth.user}
             status={auth.status}
             telemetry={telemetry}
-            networkActionPending={auth.networkActionPending}
+            busy={auth.busy}
+            navigate={navigate}
             onStartAgent={auth.start}
-            onActivateGameMode={async () => {
-              await runConfirmed(
+            onCollectSample={auth.collectSample}
+            onActivateGameMode={() =>
+              runConfirmed(
                 {
-                  title: "Ativar Modo Gamer",
-                  description: "O agente aplica jogo em alta prioridade, reduz fundo, ajusta energia/visual, faz limpeza segura reversível e mede rede. A restauração fica pronta para quando você sair do jogo.",
+                  title: t("confirm.gameMode.title"),
+                  description: t("confirm.gameMode.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
                 activateGameModeWithUpsell,
-              );
-            }}
-            onRestoreGameMode={async () => {
-              await runConfirmed(
+              )
+            }
+            onRestoreGameMode={() =>
+              runConfirmed(
                 {
-                  title: "Desativar Modo Gamer",
-                  description: "Restaura snapshots da sessão ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponíveis.",
+                  title: t("confirm.gameModeOff.title"),
+                  description: t("confirm.gameModeOff.body"),
                   risk: "seguro",
                   snapshot: false,
                 },
                 auth.restoreGameMode,
-              );
-            }}
-            onApplyPcCleanFast={async () => {
-              await runConfirmed(
+              )
+            }
+            onApplyPcCleanFast={() =>
+              runConfirmed(
                 {
-                  title: "Aplicar PC limpo/rapido",
-                  description: "Executa Performance Scan, limpeza segura, ajuste visual, priorizacao de apps de fundo e Modo Gamer se houver jogo detectado.",
+                  title: t("confirm.pcCleanFast.title"),
+                  description: t("confirm.pcCleanFast.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
                 auth.pcCleanFast,
-              );
-            }}
-            onOpenDiskUsage={openDiskUsageDetails}
-            onOpenNetwork={openNetworkDetails}
-            busy={auth.busy}
+              )
+            }
+            onRestoreAll={() =>
+              runConfirmed(
+                {
+                  title: t("confirm.restoreAll.title"),
+                  description: t("confirm.restoreAll.body"),
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                async () => {
+                  const result = await auth.restoreOptimizations();
+                  await Promise.allSettled([auditLog.refresh(), optimizationSnapshots.refresh()]);
+                  return result;
+                },
+              )
+            }
+            onReleaseMemory={() =>
+              runConfirmed(
+                {
+                  title: t("confirm.releaseMemory.title"),
+                  description: t("confirm.releaseMemory.body"),
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                async () => {
+                  const result = await releaseMemory();
+                  await Promise.allSettled([auditLog.refresh()]);
+                  return result;
+                },
+              )
+            }
           />
         </Suspense>
       );
     case "history":
-      return <History onOpenControls={() => handleViewChange("controls")} />;
+      return <History />;
     case "insights":
       return (
         <Suspense fallback={<ViewFallback />}>
@@ -310,221 +549,12 @@ export function ScreenOutlet({
     case "controls":
       return (
         <Suspense fallback={<ViewFallback />}>
-          <LocalControls
+          <Controls
+            section={current.section ?? null}
             status={auth.status}
-            automaticGameModeAllowed={canUseAutomaticGameMode(auth.status)}
             busy={auth.busy}
-            onActivateGameMode={() =>
-              runConfirmed(
-                {
-                  title: "Ativar Modo Gamer",
-                  description: "Aplica o perfil completo de jogo: prioridade alta para o alvo, fundo reduzido, limpeza segura, energia/visual e rede.",
-                  risk: "sensivel",
-                  snapshot: true,
-                },
-                activateGameModeWithUpsell,
-              )
-            }
-            onRestoreOptimizations={() =>
-              runConfirmed(
-                {
-                  title: "Restaurar snapshots",
-                  description: "O agente vai tentar desfazer alterações pendentes de energia, limpeza, apps de inicialização e serviços.",
-                  risk: "seguro",
-                  snapshot: false,
-                },
-                auth.restoreOptimizations,
-              )
-            }
-            onStartSystemFileCheck={() =>
-              runConfirmed(
-                {
-                  title: "Verificar arquivos de sistema (SFC)",
-                  description: "Executa sfc /scannow. Pode levar vários minutos e usa privilégios administrativos - não interrompa nem reinicie o PC enquanto estiver em andamento.",
-                  risk: "sensivel",
-                  snapshot: false,
-                },
-                auth.startSystemFileCheck,
-              )
-            }
-            onStartDismRestoreHealth={() =>
-              runConfirmed(
-                {
-                  title: "Reparar componentes do Windows (DISM)",
-                  description: "Executa DISM /Online /Cleanup-Image /RestoreHealth. Pode levar bem mais tempo que o SFC e precisa de conexão com a internet - não interrompa nem reinicie o PC enquanto estiver em andamento.",
-                  risk: "sensivel",
-                  snapshot: false,
-                },
-                auth.startDismRestoreHealth,
-              )
-            }
-            onDisableStartup={(name, location) =>
-              runConfirmed(
-                {
-                  title: `Desativar ${name}`,
-                  description: `Remove o app da inicialização do Windows em ${location ?? "registro detectado"} e cria snapshot para restaurar depois.`,
-                  risk: "sensivel",
-                  snapshot: true,
-                },
-                () => auth.disableStartup(name, location),
-              )
-            }
-            onRestoreStartup={(name) =>
-              runConfirmed(
-                {
-                  title: name ? `Restaurar ${name}` : "Restaurar apps de inicialização",
-                  description: "Restaura o valor original salvo no snapshot local do Registro.",
-                  risk: "seguro",
-                  snapshot: false,
-                },
-                () => auth.restoreStartup(name),
-              )
-            }
-            onStopService={(name) =>
-              runConfirmed(
-                {
-                  title: `Parar serviço ${name}`,
-                  description: "O serviço será parado apenas se passar pela denylist local. Um snapshot guarda se ele estava rodando antes.",
-                  risk: "sensivel",
-                  snapshot: true,
-                },
-                () => auth.stopService(name),
-              )
-            }
-            onRestoreService={(name) =>
-              runConfirmed(
-                {
-                  title: name ? `Restaurar serviço ${name}` : "Restaurar serviços",
-                  description: "Tenta religar apenas serviços que estavam rodando antes da ação.",
-                  risk: "seguro",
-                  snapshot: false,
-                },
-                () => auth.restoreService(name),
-              )
-            }
-            onSetPowerPlan={(plan) =>
-              runConfirmed(
-                {
-                  title: plan === "high_performance" ? "Ativar alto desempenho" : plan === "power_saver" ? "Ativar economia de energia" : "Ativar plano equilibrado",
-                  description: "Altera o plano de energia do Windows e cria snapshot local para restaurar o plano anterior depois.",
-                  risk: "sensivel",
-                  snapshot: true,
-                },
-                () => auth.setPowerPlan(plan),
-              )
-            }
-            onApplyVisualPerformance={() =>
-              runConfirmed(
-                {
-                  title: "Ativar visual de desempenho",
-                  description: "Reduz animacoes, transparencia e efeitos visuais do Windows para deixar o sistema mais leve (reversível por snapshot). Pode causar um pequeno engasgo de um instante em outros programas abertos, principalmente navegadores - e o Windows avisando todo mundo da mudança, um comportamento normal do sistema, não um erro.",
-                  risk: "sensivel",
-                  snapshot: true,
-                },
-                auth.applyVisualPerformance,
-              )
-            }
-            onRestoreVisualPerformance={() =>
-              runConfirmed(
-                {
-                  title: "Restaurar efeitos visuais",
-                  description: "Restaura os valores visuais do Windows salvos no snapshot local mais recente.",
-                  risk: "seguro",
-                  snapshot: false,
-                },
-                auth.restoreVisualPerformance,
-              )
-            }
-            onDeepCleanTemp={() =>
-              runConfirmed(
-                {
-                  title: "Limpeza profunda TEMP",
-                  description: "Move arquivos temporários destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
-                  risk: "sensivel",
-                  snapshot: true,
-                },
-                auth.cleanTempDeep,
-              )
-            }
-            onPurgeCleanup={() =>
-              runConfirmed(
-                {
-                  title: "Purgar quarentena",
-                  description: "Apaga permanentemente a quarentena de limpeza. Depois disso esses arquivos não poderão ser restaurados.",
-                  risk: "sensivel",
-                  snapshot: false,
-                },
-                auth.purgeCleanup,
-              )
-            }
-            onRestoreGameMode={() =>
-              runConfirmed(
-                {
-                  title: "Restaurar Modo Gamer",
-                  description: "Restaura snapshots da sessão ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponíveis.",
-                  risk: "seguro",
-                  snapshot: false,
-                },
-                auth.restoreGameMode,
-              )
-            }
-            onApplyPcCleanFast={() =>
-              runConfirmed(
-                {
-                  title: "Aplicar PC limpo/rapido",
-                  description: "Executa Performance Scan, limpeza segura, ajuste visual, priorizacao de apps de fundo e Modo Gamer se houver jogo detectado.",
-                  risk: "sensivel",
-                  snapshot: true,
-                },
-                auth.pcCleanFast,
-              )
-            }
-            onRestorePerformanceSession={(sessionId) =>
-              runConfirmed(
-                {
-                  title: "Restaurar Performance Suite",
-                  description: "Restaura snapshots criados pelo perfil PC limpo/rápido, incluindo visual, prioridades e inicialização atrasada quando existirem.",
-                  risk: "seguro",
-                  snapshot: false,
-                },
-                () => auth.restorePerformance(sessionId),
-              )
-            }
-            onApplyCleanupCategory={(category, mode) =>
-              runConfirmed(
-                {
-                  title: category === "cleanup_quarantine" ? "Purgar quarentena" : "Aplicar limpeza",
-                  description: category === "cleanup_quarantine"
-                    ? "Apaga permanentemente a quarentena para liberar espaço real."
-                    : "Move arquivos elegiveis desta categoria para quarentena reversível.",
-                  risk: category === "cleanup_quarantine" ? "sensivel" : "seguro",
-                  snapshot: category !== "cleanup_quarantine",
-                },
-                () => auth.applyCleanupCategory(category, mode),
-              )
-            }
-            onDelayStartupApp={(name, location) =>
-              runConfirmed(
-                {
-                  title: `Atrasar ${name}`,
-                  description: `Remove temporariamente ${name} da inicialização direta e coloca na fila local do AnalystBlaze para iniciar depois.`,
-                  risk: "sensivel",
-                  snapshot: true,
-                },
-                () => auth.delayStartup(name, location),
-              )
-            }
-            onRestoreDelayedStartupApp={(name) =>
-              runConfirmed(
-                {
-                  title: name ? `Restaurar ${name}` : "Restaurar inicialização atrasada",
-                  description: "Restaura o valor de inicialização salvo em snapshot local.",
-                  risk: "seguro",
-                  snapshot: false,
-                },
-                () => auth.restoreDelayedStartup(name),
-              )
-            }
+            navigate={navigate}
+            actions={controlsActions}
           />
         </Suspense>
       );
@@ -540,7 +570,8 @@ export function ScreenOutlet({
             onOpenAccountSettings={auth.openAccountSettings}
             onOpenBilling={auth.openBilling}
             onSyncPlan={auth.syncPlan}
-            onOpenHistory={() => handleViewChange("controls")}
+            onOpenHistory={() => navigate(route("history"))}
+            onOpenControls={() => navigate(route("controls"))}
           />
         </Suspense>
       );
@@ -652,15 +683,10 @@ export function ScreenOutlet({
                 }
               />
             ) : (
-              <EmptyState
-                icon={<ShieldCheck />}
-                title={t("mypc.healthPendingTitle")}
-                reason={t("mypc.healthPendingReason")}
-                action={
-                  <Button variant="outline" onClick={() => handleViewChange("insights")}>
-                    {t("mypc.healthOpenInsights")}
-                  </Button>
-                }
+              <WindowsHealth
+                onStartSfc={controlsActions.onStartSystemFileCheck}
+                onStartDism={controlsActions.onStartDismRestoreHealth}
+                onOpenInsights={() => handleViewChange("insights")}
               />
             )}
           </Suspense>

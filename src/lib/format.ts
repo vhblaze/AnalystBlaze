@@ -151,3 +151,34 @@ export function formatMetricNumber(value: number | null | undefined, unit: strin
   if (unit === "ms") return formatMsValue(value, empty);
   return String(Math.round(value));
 }
+
+/** Strips vendor/marketing boilerplate off a raw CPU brand string so the
+ * card shows "Ryzen 5 5600X" instead of "AMD Ryzen 5 5600X 6-Core
+ * Processor" (or "i7-10700K" instead of "Intel(R) Core(TM) i7-10700K CPU
+ * @ 3.80GHz") - a real user found the full string got cut off in the card. */
+export function shortCpuName(raw: string | null | undefined, empty = MISSING) {
+  if (!raw || !raw.trim()) return MISSING;
+  return raw
+    .trim()
+    .replace(/^AMD\s+/i, "")
+    .replace(/^Intel\(R\)\s*Core\(TM\)\s*/i, "")
+    .replace(/^(Genuine\s+)?Intel\(R\)\s*/i, "")
+    .replace(/\s*\d+-Core Processor\s*$/i, "")
+    .replace(/\s*Processor\s*$/i, "")
+    .replace(/\s*CPU\s*@\s*[\d.]+\s*GHz\s*$/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim() || raw.trim();
+}
+
+/** Same idea for GPU names - "RTX 3060" instead of "NVIDIA GeForce RTX 3060". */
+export function shortGpuName(raw: string | null | undefined, empty = MISSING) {
+  if (!raw || !raw.trim()) return MISSING;
+  return raw
+    .trim()
+    .replace(/^NVIDIA\s+GeForce\s+/i, "")
+    .replace(/^NVIDIA\s+/i, "")
+    .replace(/^AMD\s+Radeon\s+/i, "")
+    .replace(/^Radeon\s+/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim() || raw.trim();
+}

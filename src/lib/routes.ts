@@ -10,7 +10,10 @@ export type ScreenKey = "dashboard" | "history" | "insights" | "controls" | "myp
 
 export type MyPcTab = "performance" | "disk" | "network" | "health";
 
-export type Route = { screen: ScreenKey; tab?: MyPcTab };
+/** Detalhes de Controles (doc 13 §4): cada grupo da lista abre o seu. */
+export type ControlsSection = "gamemode" | "cleanup" | "startup" | "services" | "protected" | "energy" | "advanced";
+
+export type Route = { screen: ScreenKey; tab?: MyPcTab; section?: ControlsSection };
 
 /** Chaves das telas antigas (v0.1.77), usadas por views e atalhos que ainda não mudaram. */
 export type LegacyView = "dashboard" | "telemetry" | "insights" | "controls" | "disk" | "network" | "settings";
@@ -33,8 +36,9 @@ export const MYPC_TABS: ReadonlyArray<{ key: MyPcTab; labelKey: string }> = [
 
 export const DEFAULT_ROUTE: Route = { screen: "dashboard" };
 
-export function route(screen: ScreenKey, tab?: MyPcTab): Route {
-  if (screen === "mypc") return { screen, tab: tab ?? "performance" };
+export function route(screen: ScreenKey, sub?: MyPcTab | ControlsSection): Route {
+  if (screen === "mypc") return { screen, tab: (sub as MyPcTab | undefined) ?? "performance" };
+  if (screen === "controls" && sub) return { screen, section: sub as ControlsSection };
   return { screen };
 }
 
@@ -52,12 +56,14 @@ export function fromLegacyView(view: LegacyView): Route {
 }
 
 export function sameRoute(a: Route, b: Route): boolean {
-  return a.screen === b.screen && (a.screen !== "mypc" || a.tab === b.tab);
+  return a.screen === b.screen && a.tab === b.tab && a.section === b.section;
 }
 
 /** Nome do evento de navegação (telemetria de uso). */
 export function routeId(value: Route): string {
-  return value.screen === "mypc" ? `mypc.${value.tab ?? "performance"}` : value.screen;
+  if (value.screen === "mypc") return `mypc.${value.tab ?? "performance"}`;
+  if (value.section) return `${value.screen}.${value.section}`;
+  return value.screen;
 }
 
 /**
@@ -66,5 +72,7 @@ export function routeId(value: Route): string {
  */
 export function routeTitleKeys(value: Route): string[] {
   const screen = SCREENS.find((item) => item.key === value.screen);
-  return [screen?.labelKey ?? "nav.dashboard"];
+  const keys = [screen?.labelKey ?? "nav.dashboard"];
+  if (value.screen === "controls" && value.section) keys.push(`controls.d3.sections.${value.section}.title`);
+  return keys;
 }

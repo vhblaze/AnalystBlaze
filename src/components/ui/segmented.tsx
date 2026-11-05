@@ -13,6 +13,8 @@ type SegmentedProps<T extends string> = {
   onChange: (value: T) => void;
   "aria-label": string;
   size?: "md" | "sm";
+  /** `box`: caixa com opções coladas (Liga/Adia/Não). `pill`: pílulas soltas (filtros do Histórico, 1 min/10 min/1 hora). */
+  variant?: "box" | "pill";
   className?: string;
 };
 
@@ -22,6 +24,7 @@ export function Segmented<T extends string>({
   value,
   onChange,
   size = "md",
+  variant = "box",
   className,
   ...aria
 }: SegmentedProps<T>) {
@@ -45,7 +48,12 @@ export function Segmented<T extends string>({
     <div
       role="radiogroup"
       aria-label={aria["aria-label"]}
-      className={cn("inline-flex items-center gap-0.5 rounded-control border border-line bg-bg/40 p-0.5", className)}
+      className={cn(
+        variant === "box"
+          ? "inline-flex items-center gap-0.5 rounded-control border border-line bg-bg/40 p-0.5"
+          : "inline-flex flex-wrap items-center gap-2",
+        className,
+      )}
     >
       {options.map((option, index) => {
         const active = option.value === value;
@@ -63,9 +71,14 @@ export function Segmented<T extends string>({
             onClick={() => onChange(option.value)}
             onKeyDown={(event) => move(event, index)}
             className={cn(
-              "rounded-[8px] font-medium transition-colors duration-fast ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-40",
+              "font-medium transition-colors duration-fast ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 disabled:cursor-not-allowed disabled:opacity-40",
               size === "md" ? "h-8 px-3.5 text-[13px]" : "h-7 px-2.5 text-xs",
-              active ? "bg-accent/15 text-fg" : "text-fg-3 hover:text-fg",
+              variant === "box"
+                ? cn("rounded-[8px]", active ? "bg-accent/15 text-fg" : "text-fg-3 hover:text-fg")
+                : cn(
+                    "rounded-pill border",
+                    active ? "border-accent/70 bg-accent/10 text-fg" : "border-line text-fg-2 hover:border-fg-4/60 hover:text-fg",
+                  ),
             )}
           >
             {option.label}

@@ -1,4 +1,6 @@
 import { useCallback, useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { LoggedOutNotice } from "./LoggedOutNotice";
 import { UpdateNotice } from "./UpdateNotice";
 import { useAgentTelemetry } from "@/hooks/useAgentTelemetry";
@@ -19,6 +21,7 @@ import { ConfirmationDialog } from "@/components/shell/dialogs/ConfirmationDialo
 import { DeviceLimitDialog } from "@/components/shell/dialogs/DeviceLimitDialog";
 import { EmailVerificationNotice } from "@/components/shell/dialogs/EmailVerificationNotice";
 import { RemoteConfirmationNotice } from "@/components/shell/dialogs/RemoteConfirmationNotice";
+import { RestoreToDateButton } from "@/components/screens/history/History";
 
 // Mantido para quem ainda importa daqui.
 export { splitBackendErrorCode };
@@ -89,6 +92,13 @@ export function AppShell() {
           title={routeTitleKeys(current).map((key) => t(key))}
           right={
             <>
+              {current.screen === "history" && <RestoreToDateButton />}
+              {current.screen === "controls" && current.section && (
+                <Button size="sm" variant="link" onClick={() => navigate(route("controls"))}>
+                  <ArrowLeft />
+                  {t("nav.controls")}
+                </Button>
+              )}
               <CommandPalette items={commandItems} />
               <Notifications items={notificationItems} onItemClick={onNotificationClick} />
             </>
