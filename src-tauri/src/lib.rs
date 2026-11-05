@@ -1026,6 +1026,14 @@ async fn delay_startup_app(
 }
 
 #[tauri::command]
+async fn delayed_startup_apps(
+) -> Result<Vec<optimizations::performance_suite::DelayedStartupSummary>, String> {
+    tokio::task::spawn_blocking(optimizations::performance_suite::list_delayed_startup_apps)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn restore_delayed_startup_app(
     name: Option<String>,
 ) -> Result<optimizations::ExecutionResult, String> {
@@ -2353,6 +2361,7 @@ pub fn run() {
             scan_startup_impact,
             delay_startup_app,
             restore_delayed_startup_app,
+            delayed_startup_apps,
             local_ai_policy,
             save_local_ai_policy,
             disable_startup_app,

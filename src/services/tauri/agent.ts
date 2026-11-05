@@ -1466,6 +1466,20 @@ export async function saveLocalAiPolicy(policy: LocalAiPolicy): Promise<LocalAiP
   return invoke<LocalAiPolicy>("save_local_ai_policy", { policy });
 }
 
+/** App que o AnalystBlaze tirou da inicialização direta pelo "Atrasar". */
+export type DelayedStartupApp = {
+  name: string;
+  location: string;
+  delaySeconds: number;
+  createdAt: number;
+};
+
+/** Apps tirados da inicialização pelo "Atrasar". Eles NÃO abrem sozinhos depois. */
+export async function getDelayedStartupApps(): Promise<DelayedStartupApp[]> {
+  requireTauriRuntime("Apps de inicialização adiados");
+  return invoke<DelayedStartupApp[]>("delayed_startup_apps");
+}
+
 export async function disableStartupApp(name: string, location?: string | null): Promise<OptimizationResult> {
   if (!isTauriRuntime()) throw new Error("Tauri runtime unavailable for startup actions.");
   return invoke<OptimizationResult>("disable_startup_app", { name, location });

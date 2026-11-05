@@ -44,6 +44,7 @@ export function Settings({
   onOpenBilling,
   onSyncPlan,
   onOpenHistory,
+  onOpenControls,
 }: {
   user: User | null;
   status: AgentStatus | null;
@@ -54,6 +55,8 @@ export function Settings({
   onOpenBilling: () => Promise<void>;
   onSyncPlan: () => Promise<unknown>;
   onOpenHistory?: () => void;
+  /** Automações e componente de sistema agora ficam em Controles. */
+  onOpenControls?: () => void;
 }) {
   const { theme, setTheme } = useTheme();
   const { t, locale, setLocale } = useI18n();
@@ -324,162 +327,21 @@ export function Settings({
         </div>
       </section>
 
-      <section className={`glass-panel p-6 transition-all ${adaptive ? "ring-1 ring-accent/40": ""}`}>
-        <div className="flex items-center gap-2 pb-4">
-          <Brain className="h-3.5 w-3.5 text-accent" />
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.adaptive")}</h2>
-          {adaptive && (
-            <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent-strong/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-accent-soft">
-              <span className="h-1 w-1 animate-pulse rounded-full bg-accent" />
-              {t("settings.adaptiveActive")}
-            </span>
+      <section className="glass-panel p-6">
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <div className="text-sm font-semibold text-fg">{t("controls.d3.movedTitle")}</div>
+            <div className="mt-0.5 text-xs text-fg-3">{t("controls.d3.movedDesc")}</div>
+          </div>
+          {onOpenControls && (
+            <button
+              type="button"
+              onClick={onOpenControls}
+              className="shrink-0 text-sm font-medium text-accent-2 underline underline-offset-4 hover:text-accent"
+            >
+              {t("controls.d3.movedAction")}
+            </button>
           )}
-        </div>
-
-        <div className="flex items-start justify-between gap-4 rounded-xl border border-line bg-bg/40 p-5">
-          <div className="flex items-start gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-accent/30 bg-accent-strong/10">
-              <Sparkles className="h-4 w-4 text-accent" />
-            </div>
-            <div>
-              <div className="text-sm font-semibold text-fg">{t("settings.adaptiveDecision")}</div>
-              <div className="mt-0.5 max-w-md text-xs text-fg-4">
-                {t("settings.adaptiveDesc")}
-              </div>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {["energy", "processes", "network", "fans"].map((tag) => (
-                  <span key={tag} className="rounded-md border border-line bg-bg/60 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-fg-3">
-                    {t(`settings.tags.${tag}`)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-          <Switch checked={aiPolicy.enabled} onCheckedChange={(enabled) => updateAiPolicy({ enabled, agent_mode: enabled ? "automatic" : "manual" })} />
-        </div>
-
-        {adaptive && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-warn/20 bg-warn/5 px-3 py-2 text-[11px] text-warn-soft/80">
-            <Zap className="h-3 w-3" />
-            {t("settings.adaptiveWarning")}
-          </div>
-        )}
-        {!automaticGameModeAllowed && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-line bg-accent/5 px-3 py-2 text-[11px] text-accent-soft/80">
-            <Shield className="h-3 w-3" />
-            {t("settings.aiAutomationPlanNotice")}
-          </div>
-        )}
-        {weeklyAiUsage && weeklyAiUsage.limitSeconds != null && (
-          <div className={`mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${weeklyAiUsage.limitReached ? "border-warn/20 bg-warn/5 text-warn-soft/80" : "border-line bg-accent/5 text-accent-soft/80"}`}>
-            <Zap className="h-3 w-3" />
-            {weeklyAiUsage.limitReached
-              ? "Limite semanal de automacao atingido. Volta na próxima semana, ou assine um plano pago para automacao continua."
-              : `Automacao: ${formatMinutes(weeklyAiUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito).`}
-          </div>
-        )}
-
-        <div className="mt-4 grid gap-3 md:grid-cols-2">
-          <Row
-            label={t("settings.aiAutoGame")}
-            description={t("settings.aiAutoGameDesc")}
-            control={<Switch disabled={!automaticGameModeAllowed} checked={automaticGameModeAllowed && aiPolicy.auto_game_mode} onCheckedChange={(auto_game_mode) => updateAiPolicy({ auto_game_mode })} />}
-          />
-          <Row
-            label={t("settings.aiAutoPcClean")}
-            description={t("settings.aiAutoPcCleanDesc")}
-            control={<Switch disabled={!automaticGameModeAllowed} checked={automaticGameModeAllowed && aiPolicy.auto_pc_clean} onCheckedChange={(auto_pc_clean) => updateAiPolicy({ auto_pc_clean })} />}
-          />
-          <Row
-            label={t("settings.aiAutoRestore")}
-            description={t("settings.aiAutoRestoreDesc")}
-            control={<Switch checked={aiPolicy.auto_restore_game_mode} onCheckedChange={(auto_restore_game_mode) => updateAiPolicy({ auto_restore_game_mode })} />}
-          />
-          <Row
-            label={t("settings.aiAutomaticSensitive")}
-            description={t("settings.aiAutomaticSensitiveDesc")}
-            control={<Switch checked={aiPolicy.allow_automatic_sensitive_actions} onCheckedChange={(allow_automatic_sensitive_actions) => updateAiPolicy({ allow_automatic_sensitive_actions })} />}
-          />
-          <Row
-            label={t("settings.aiAutoBestDns")}
-            description={t("settings.aiAutoBestDnsDesc")}
-            control={<Switch checked={aiPolicy.auto_best_dns} onCheckedChange={(auto_best_dns) => updateAiPolicy({ auto_best_dns })} />}
-          />
-          <Row
-            label={t("settings.aiPowerPlan")}
-            description={t("settings.aiPowerPlanDesc")}
-            control={<Switch checked={aiPolicy.optimize_power_plan} onCheckedChange={(optimize_power_plan) => updateAiPolicy({ optimize_power_plan })} />}
-          />
-          <Row
-            label={t("settings.aiCleanup")}
-            description={t("settings.aiCleanupDesc")}
-            control={<Switch checked={aiPolicy.safe_temp_cleanup} onCheckedChange={(safe_temp_cleanup) => updateAiPolicy({ safe_temp_cleanup })} />}
-          />
-          <Row
-            label={t("settings.aiEnergyEstimation")}
-            description={t("settings.aiEnergyEstimationDesc")}
-            control={<Switch checked={aiPolicy.energy_estimation_enabled} onCheckedChange={(energy_estimation_enabled) => updateAiPolicy({ energy_estimation_enabled })} />}
-          />
-          <Row
-            label={t("settings.aiThermalAnalysis")}
-            description={t("settings.aiThermalAnalysisDesc")}
-            control={<Switch checked={aiPolicy.thermal_analysis_enabled} onCheckedChange={(thermal_analysis_enabled) => updateAiPolicy({ thermal_analysis_enabled })} />}
-          />
-          <Row
-            label={t("settings.aiStartup")}
-            description={t("settings.aiStartupDesc")}
-            control={<Switch checked={aiPolicy.manage_startup_apps} onCheckedChange={(manage_startup_apps) => updateAiPolicy({ manage_startup_apps })} />}
-          />
-          <Row
-            label={t("settings.aiServices")}
-            description={t("settings.aiServicesDesc")}
-            control={<Switch checked={aiPolicy.manage_services} onCheckedChange={(manage_services) => updateAiPolicy({ manage_services, max_risk: manage_services ? "sensitive" : aiPolicy.max_risk })} />}
-          />
-          <Row
-            label={t("settings.aiBackground")}
-            description={t("settings.aiBackgroundDesc")}
-            control={<Switch checked={aiPolicy.reduce_background_processes} onCheckedChange={(reduce_background_processes) => updateAiPolicy({ reduce_background_processes })} />}
-          />
-        </div>
-
-        <div className="mt-3 rounded-xl border border-line bg-bg/40 p-4">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="text-sm font-semibold text-fg">{t("settings.aiRisk")}</div>
-              <div className="mt-0.5 text-xs text-fg-4">{t("settings.aiRiskDesc")}</div>
-            </div>
-            <Select value={aiPolicy.max_risk} onValueChange={(max_risk) => updateAiPolicy({ max_risk })}>
-              <SelectTrigger className="w-40 border-line bg-bg/60 font-mono text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="safe">{t("settings.aiRiskSafe")}</SelectItem>
-                <SelectItem value="sensitive">{t("settings.aiRiskSensitive")}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-col gap-3">
-          <PolicyGroup
-            icon={<Trash2 className="h-4 w-4 text-accent" />}
-            title={t("settings.aiCleanupGroup")}
-            description={t("settings.aiCleanupGroupDesc")}
-            onOpenHistory={onOpenHistory}
-          >
-            <NumberRule label={t("settings.aiCleanupTempAge")} value={aiPolicy.cleanup_temp_min_age_minutes} min={5} max={10080} step={5} suffix="min" onChange={(cleanup_temp_min_age_minutes) => updateAiPolicy({ cleanup_temp_min_age_minutes })} />
-            <NumberRule label={t("settings.aiCleanupCacheAge")} value={aiPolicy.cleanup_cache_min_age_minutes} min={10} max={10080} step={10} suffix="min" onChange={(cleanup_cache_min_age_minutes) => updateAiPolicy({ cleanup_cache_min_age_minutes })} />
-            <NumberRule label={t("settings.aiCleanupSystemAge")} value={aiPolicy.cleanup_system_min_age_minutes} min={60} max={43200} step={60} suffix="min" onChange={(cleanup_system_min_age_minutes) => updateAiPolicy({ cleanup_system_min_age_minutes })} />
-          </PolicyGroup>
-
-          <PolicyGroup
-            icon={<Battery className="h-4 w-4 text-accent" />}
-            title={t("settings.aiEnergyGroup")}
-            description={t("settings.aiEnergyGroupDesc")}
-            onOpenHistory={onOpenHistory}
-          >
-            <NumberRule label={t("settings.aiIdleEcoThreshold")} value={aiPolicy.adaptive_idle_eco_threshold_seconds} min={60} max={10800} step={30} suffix="s" onChange={(adaptive_idle_eco_threshold_seconds) => updateAiPolicy({ adaptive_idle_eco_threshold_seconds })} />
-          </PolicyGroup>
         </div>
       </section>
 
@@ -555,95 +417,6 @@ export function Settings({
         </div>
       </section>
 
-      <section className="glass-panel p-6">
-        <div className="flex items-center gap-2 pb-4">
-          <Wrench className="h-3.5 w-3.5 text-accent" />
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.privilegedHelper")}</h2>
-        </div>
-        <p className="text-xs text-fg-4">{t("settings.privilegedHelperDesc")}</p>
-
-        <div className="mt-4 rounded-xl border border-line bg-bg/40 p-4">
-          <p className="text-xs text-fg-4">
-            {helperStatus?.message ?? t("settings.helperUnknown")}
-          </p>
-          <div className="mt-3 flex items-center gap-2 text-xs">
-            <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 font-medium ${helperStateStyle}`}>
-              <span className="h-1.5 w-1.5 rounded-full bg-current" />
-              {helperStateLabel}
-            </span>
-          </div>
-          <div className="mt-3 grid gap-2 text-xs text-fg-3 sm:grid-cols-3">
-            <span className="rounded-lg border border-line bg-bg/50 px-3 py-2">
-              {t("settings.helperInstalled")}: {helperStatus?.installed ? t("common.yes") : t("common.no")}
-            </span>
-            <span className="rounded-lg border border-line bg-bg/50 px-3 py-2">
-              {t("settings.helperRunning")}: {helperStatus?.running ? t("common.yes") : t("common.no")}
-            </span>
-            <span className="rounded-lg border border-line bg-bg/50 px-3 py-2">
-              {t("settings.helperVersion")}: {helperStatus?.version ?? MISSING}
-            </span>
-          </div>
-
-          {helperMessage && (
-            <div className="mt-3 flex items-start gap-2 rounded-xl border border-line bg-accent/10 px-4 py-3 text-sm text-accent-soft">
-              {helperMessage}
-            </div>
-          )}
-          {helperError && (
-            <div className="mt-3 flex items-start gap-2 rounded-xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm text-danger-soft">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              {helperError}
-            </div>
-          )}
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button
-              disabled={helperBusy || !runtimeAvailable || helperStatus?.available === true || helperStatus?.canRequestUac === false}
-              onClick={() => void runHelperAction(installPrivilegedHelper, helperStatus?.installed ? t("settings.helperRepaired") : t("settings.helperInstalledMsg"))}
-              title={helperStatus?.canRequestUac === false ? t("settings.helperNeedsPerMachine") : (helperStatus?.installed ? t("settings.helperRepairHint") : t("settings.helperInstallHint"))}
-              className="rounded-lg border border-ok/30 bg-ok/10 px-3 py-2 text-xs font-medium text-ok-soft transition hover:bg-ok/15 disabled:opacity-50"
-            >
-              {helperStatus?.installed ? t("settings.helperInstallRepair") : t("settings.helperInstallButton")}
-            </button>
-            <button
-              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed || helperStatus?.running === true}
-              onClick={() => void runHelperAction(startPrivilegedHelper, t("settings.helperStarted"))}
-              className="rounded-lg border border-ok/30 bg-ok/10 px-3 py-2 text-xs font-medium text-ok-soft transition hover:bg-ok/15 disabled:opacity-50"
-            >
-              {t("settings.helperStart")}
-            </button>
-            <button
-              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed || helperStatus?.running === false}
-              onClick={() => void runHelperAction(stopPrivilegedHelper, t("settings.helperStopped"))}
-              className="rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-xs font-medium text-warn-soft transition hover:bg-warn/15 disabled:opacity-50"
-            >
-              {t("settings.helperStop")}
-            </button>
-            <button
-              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed}
-              onClick={() => void runHelperAction(restartPrivilegedHelper, t("settings.helperRestarted"))}
-              className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
-            >
-              {t("settings.helperRestart")}
-            </button>
-            <button
-              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed}
-              onClick={() => void runHelperTest()}
-              title={t("settings.helperTestHint")}
-              className="rounded-lg border border-accent-2/30 bg-accent-2/10 px-3 py-2 text-xs font-medium text-accent-2 transition hover:bg-accent-2/15 disabled:opacity-50"
-            >
-              {t("settings.helperTest")}
-            </button>
-            <button
-              disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed}
-              onClick={() => void runHelperAction(uninstallPrivilegedHelper, t("settings.helperRemoved"))}
-              className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs font-medium text-danger-soft transition hover:bg-danger/15 disabled:opacity-50"
-            >
-              {t("settings.helperRemove")}
-            </button>
-          </div>
-        </div>
-      </section>
 
       <section className="glass-panel p-6">
         <div className="flex items-center gap-2 pb-4">

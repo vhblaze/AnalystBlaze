@@ -1,4 +1,11 @@
-import { getLocalAiPolicy, saveLocalAiPolicy, type LocalAiPolicy } from "@/services/tauri/agent";
+import {
+  getLocalAiPolicy,
+  getWeeklyAiUsage,
+  listenToWeeklyAiUsage,
+  saveLocalAiPolicy,
+  type LocalAiPolicy,
+  type WeeklyAiUsage,
+} from "@/services/tauri/agent";
 import { createAgentResource } from "@/features/shared/agentResource";
 
 /** Quais automações o usuário aprovou. Lida em Controles e em Configurações; gravada num lugar só. */
@@ -23,4 +30,15 @@ export function useAutomationPolicy(options?: { auto?: boolean }) {
     refresh: resource.refresh,
     set: resource.set,
   };
+}
+
+/** Minutos de automação usados nesta semana (Starter). Atualiza por evento do agente. */
+export const weeklyAutomationUsage = createAgentResource<WeeklyAiUsage | null>({
+  name: "automations.weeklyUsage",
+  fetch: getWeeklyAiUsage,
+  subscribe: (push) => listenToWeeklyAiUsage(push),
+});
+
+export function useWeeklyAutomationUsage() {
+  return weeklyAutomationUsage.use().data ?? null;
 }
