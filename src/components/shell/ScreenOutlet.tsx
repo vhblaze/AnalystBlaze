@@ -10,6 +10,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { History } from "@/components/screens/history/History";
 import { auditLog, optimizationSnapshots } from "@/features/history/useHistory";
 import { releaseMemory } from "@/services/tauri/agent";
+import { runPcCleanFastWithProgress } from "@/features/gamemode/pcCleanFastRun";
 import { MyPC } from "@/components/screens/mypc/MyPC";
 import { WindowsHealth } from "@/components/screens/mypc/WindowsHealth";
 import type { RequestConfirmation, RunConfirmed } from "./useConfirmation";
@@ -97,6 +98,17 @@ export function ScreenOutlet({
             snapshot: true,
           },
           activateGameModeWithUpsell,
+        );
+      }
+      if (actionName === "APPLY_PC_CLEAN_FAST_PROFILE") {
+        return runConfirmed(
+          {
+            title: t("confirm.pcCleanFast.title"),
+            description: t("confirm.pcCleanFast.body"),
+            risk: "sensivel",
+            snapshot: true,
+          },
+          () => runPcCleanFastWithProgress(auth.pcCleanFast),
         );
       }
       if (actionName === "EMPTY_TEMP") {
@@ -391,7 +403,7 @@ export function ScreenOutlet({
                   risk: "sensivel",
                   snapshot: true,
                 },
-                auth.pcCleanFast,
+                () => runPcCleanFastWithProgress(auth.pcCleanFast),
               ),
     onRestorePerformanceSession: (sessionId) =>
               runConfirmed(
@@ -491,7 +503,7 @@ export function ScreenOutlet({
                   risk: "sensivel",
                   snapshot: true,
                 },
-                auth.pcCleanFast,
+                () => runPcCleanFastWithProgress(auth.pcCleanFast),
               )
             }
             onRestoreAll={() =>
