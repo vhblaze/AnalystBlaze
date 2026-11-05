@@ -35,6 +35,37 @@ pub struct TelemetryHealth {
     pub score: u8,
     pub level: String,
     pub reasons: Vec<String>,
+    /// L3 (redesign D3): a conta da nota, um item por regra que tirou pontos.
+    /// `score` = 100 - soma dos `points` (limitado a 0..100).
+    pub breakdown: Vec<HealthDeduction>,
+}
+
+/// Uma regra da Saúde que tirou pontos nesta leitura.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HealthDeduction {
+    /// Mesmo código de `reasons` ("ram_pressure", "cpu_critical", ...).
+    pub factor: String,
+    pub points: u8,
+    /// O valor medido que disparou a regra, quando é um número.
+    pub measured: Option<f64>,
+    /// O limite da regra, na mesma unidade de `measured`.
+    pub threshold: Option<f64>,
+}
+
+/// Só o que a Saúde usa de uma amostra, para a conta ser testável sozinha.
+#[derive(Debug, Clone, Default)]
+pub struct HealthInputs {
+    pub cpu_usage: f64,
+    pub ram_usage_percent: f64,
+    pub gpu_temperature: Option<f64>,
+    pub cpu_temperature: Option<f64>,
+    pub disk_usage_percent: f64,
+    pub active_processes: usize,
+    pub disk_predict_failure: bool,
+    pub defender_unavailable: bool,
+    pub event_log_critical_errors_24h: u32,
+    pub packet_loss_percent: f64,
+    pub jitter_ms: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +121,9 @@ pub struct TelemetryDashboardSnapshot {
     pub health_score: u8,
     pub health_level: String,
     pub health_reasons: Vec<String>,
+    /// L3: a conta da Saúde ponto a ponto (ver TelemetryHealth::breakdown).
+    #[serde(default)]
+    pub health_breakdown: Vec<HealthDeduction>,
     pub optimization_status: String,
     pub active_profile: String,
     pub telemetry_mode: String,
@@ -163,6 +197,7 @@ impl TelemetryDashboardSnapshot {
             health_score: health.score,
             health_level: health.level,
             health_reasons: health.reasons,
+            health_breakdown: health.breakdown,
             optimization_status: optimization_status(sample, device_online),
             active_profile: active_profile(sample, telemetry_mode),
             telemetry_mode: telemetry_mode.to_string(),
@@ -173,79 +208,86 @@ impl TelemetryDashboardSnapshot {
 
 impl TelemetryHealth {
     pub fn from_sample(sample: &TelemetrySample) -> Self {
-        let mut score: i32 = 100;
-        let mut reasons = Vec::new();
+        Self::from_inputs(&HealthInputs {
+            cpu_usage: sample.cpu_usage,
+            ram_usage_percent: sample.ram_usage_percent,
+            gpu_temperature: sample.gpu_temperature_available.then_some(sample.gpu_temperature),
+            cpu_temperature: sample.cpu_temperature_available.then_some(sample.cpu_temperature),
+            disk_usage_percent: sample.disk_usage_percent,
+            active_processes: sample.active_processes,
+            disk_predict_failure: sample.advanced.disk_predict_failure == Some(true),
+            defender_unavailable: sample.advanced.defender_status.as_deref() == Some("disabled_or_unavailable"),
+            event_log_critical_errors_24h: sample.advanced.event_log_critical_errors_24h.unwrap_or(0),
+            packet_loss_percent: sample.network.packet_loss_percent.unwrap_or_default(),
+            jitter_ms: sample.network.jitter_ms.unwrap_or_default(),
+        })
+    }
 
-        if sample.cpu_usage >= 90.0 {
-            score -= 22;
-            reasons.push("cpu_critical".to_string());
-        } else if sample.cpu_usage >= 75.0 {
-            score -= 10;
-            reasons.push("cpu_sustained_load".to_string());
+    /// Regras fixas: cada uma tira um número exato de pontos de 100. Nada é
+    /// estimado. São as mesmas regras e pesos de antes; agora cada uma fica
+    /// registrada em `breakdown` para a tela mostrar a conta.
+    pub fn from_inputs(inputs: &HealthInputs) -> Self {
+        let mut breakdown: Vec<HealthDeduction> = Vec::new();
+        let mut deduct = |factor: &str, points: u8, measured: Option<f64>, threshold: Option<f64>| {
+            breakdown.push(HealthDeduction { factor: factor.to_string(), points, measured, threshold });
+        };
+
+        if inputs.cpu_usage >= 90.0 {
+            deduct("cpu_critical", 22, Some(inputs.cpu_usage), Some(90.0));
+        } else if inputs.cpu_usage >= 75.0 {
+            deduct("cpu_sustained_load", 10, Some(inputs.cpu_usage), Some(75.0));
         }
 
-        if sample.ram_usage_percent >= 92.0 {
-            score -= 24;
-            reasons.push("ram_pressure_critical".to_string());
-        } else if sample.ram_usage_percent >= 82.0 {
-            score -= 12;
-            reasons.push("ram_pressure".to_string());
+        if inputs.ram_usage_percent >= 92.0 {
+            deduct("ram_pressure_critical", 24, Some(inputs.ram_usage_percent), Some(92.0));
+        } else if inputs.ram_usage_percent >= 82.0 {
+            deduct("ram_pressure", 12, Some(inputs.ram_usage_percent), Some(82.0));
         }
 
-        if sample.gpu_temperature_available && sample.gpu_temperature >= 87.0 {
-            score -= 20;
-            reasons.push("gpu_thermal_critical".to_string());
-        } else if sample.gpu_temperature_available && sample.gpu_temperature >= 78.0 {
-            score -= 10;
-            reasons.push("gpu_thermal_watch".to_string());
+        if let Some(gpu) = inputs.gpu_temperature {
+            if gpu >= 87.0 {
+                deduct("gpu_thermal_critical", 20, Some(gpu), Some(87.0));
+            } else if gpu >= 78.0 {
+                deduct("gpu_thermal_watch", 10, Some(gpu), Some(78.0));
+            }
         }
 
-        if sample.cpu_temperature_available && sample.cpu_temperature >= 92.0 {
-            score -= 20;
-            reasons.push("cpu_thermal_critical".to_string());
-        } else if sample.cpu_temperature_available && sample.cpu_temperature >= 82.0 {
-            score -= 10;
-            reasons.push("cpu_thermal_watch".to_string());
+        if let Some(cpu) = inputs.cpu_temperature {
+            if cpu >= 92.0 {
+                deduct("cpu_thermal_critical", 20, Some(cpu), Some(92.0));
+            } else if cpu >= 82.0 {
+                deduct("cpu_thermal_watch", 10, Some(cpu), Some(82.0));
+            }
         }
 
-        if sample.disk_usage_percent >= 95.0 {
-            score -= 10;
-            reasons.push("disk_space_low".to_string());
+        if inputs.disk_usage_percent >= 95.0 {
+            deduct("disk_space_low", 10, Some(inputs.disk_usage_percent), Some(95.0));
         }
 
-        if sample.active_processes >= 280 {
-            score -= 6;
-            reasons.push("background_process_load".to_string());
+        if inputs.active_processes >= 280 {
+            deduct("background_process_load", 6, Some(inputs.active_processes as f64), Some(280.0));
         }
 
-        if sample.advanced.disk_predict_failure == Some(true) {
-            score -= 30;
-            reasons.push("disk_smart_predict_failure".to_string());
+        if inputs.disk_predict_failure {
+            deduct("disk_smart_predict_failure", 30, None, None);
         }
 
-        if sample.advanced.defender_status.as_deref() == Some("disabled_or_unavailable") {
-            score -= 8;
-            reasons.push("defender_attention".to_string());
+        if inputs.defender_unavailable {
+            deduct("defender_attention", 8, None, None);
         }
 
-        if sample.advanced.event_log_critical_errors_24h.unwrap_or(0) >= 10 {
-            score -= 8;
-            reasons.push("system_event_errors".to_string());
+        if inputs.event_log_critical_errors_24h >= 10 {
+            deduct("system_event_errors", 8, Some(inputs.event_log_critical_errors_24h as f64), Some(10.0));
         }
 
-        if sample.network.packet_loss_percent.unwrap_or_default() >= 2.0 {
-            score -= 10;
-            reasons.push("network_packet_loss".to_string());
-        } else if sample.network.jitter_ms.unwrap_or_default() >= 20.0 {
-            score -= 6;
-            reasons.push("network_jitter".to_string());
+        if inputs.packet_loss_percent >= 2.0 {
+            deduct("network_packet_loss", 10, Some(inputs.packet_loss_percent), Some(2.0));
+        } else if inputs.jitter_ms >= 20.0 {
+            deduct("network_jitter", 6, Some(inputs.jitter_ms), Some(20.0));
         }
 
-        if reasons.is_empty() {
-            reasons.push("stable".to_string());
-        }
-
-        let score = score.clamp(0, 100) as u8;
+        let lost: i32 = breakdown.iter().map(|item| item.points as i32).sum();
+        let score = (100 - lost).clamp(0, 100) as u8;
         let level = if score >= 90 {
             "excellent"
         } else if score >= 75 {
@@ -255,11 +297,16 @@ impl TelemetryHealth {
         } else {
             "critical"
         };
+        let mut reasons: Vec<String> = breakdown.iter().map(|item| item.factor.clone()).collect();
+        if reasons.is_empty() {
+            reasons.push("stable".to_string());
+        }
 
         Self {
             score,
             level: level.to_string(),
             reasons,
+            breakdown,
         }
     }
 }
@@ -294,4 +341,63 @@ fn active_profile(sample: &TelemetrySample, telemetry_mode: &str) -> String {
         return "performance".to_string();
     }
     "balanced".to_string()
+}
+
+#[cfg(test)]
+mod health_tests {
+    use super::*;
+
+    #[test]
+    fn calm_pc_scores_100_with_no_deductions() {
+        let health = TelemetryHealth::from_inputs(&HealthInputs { cpu_usage: 20.0, ram_usage_percent: 40.0, ..Default::default() });
+        assert_eq!(health.score, 100);
+        assert_eq!(health.level, "excellent");
+        assert!(health.breakdown.is_empty());
+        assert_eq!(health.reasons, vec!["stable".to_string()]);
+    }
+
+    #[test]
+    fn breakdown_explains_every_point_lost() {
+        let health = TelemetryHealth::from_inputs(&HealthInputs {
+            cpu_usage: 80.0,
+            ram_usage_percent: 87.0,
+            gpu_temperature: Some(80.0),
+            jitter_ms: 25.0,
+            ..Default::default()
+        });
+        let lost: u32 = health.breakdown.iter().map(|item| item.points as u32).sum();
+        assert_eq!(health.score as u32, 100 - lost);
+        // 100 - 10 (cpu) - 12 (memória) - 10 (gpu) - 6 (jitter)
+        assert_eq!(health.score, 62);
+        assert_eq!(
+            health.breakdown[1],
+            HealthDeduction { factor: "ram_pressure".to_string(), points: 12, measured: Some(87.0), threshold: Some(82.0) }
+        );
+        assert_eq!(health.reasons, vec!["cpu_sustained_load", "ram_pressure", "gpu_thermal_watch", "network_jitter"]);
+    }
+
+    #[test]
+    fn missing_sensors_never_cost_points() {
+        let health = TelemetryHealth::from_inputs(&HealthInputs { gpu_temperature: None, cpu_temperature: None, ..Default::default() });
+        assert_eq!(health.score, 100);
+    }
+
+    #[test]
+    fn score_floors_at_zero() {
+        let health = TelemetryHealth::from_inputs(&HealthInputs {
+            cpu_usage: 99.0,
+            ram_usage_percent: 99.0,
+            gpu_temperature: Some(95.0),
+            cpu_temperature: Some(99.0),
+            disk_usage_percent: 99.0,
+            active_processes: 400,
+            disk_predict_failure: true,
+            defender_unavailable: true,
+            event_log_critical_errors_24h: 50,
+            packet_loss_percent: 10.0,
+            ..Default::default()
+        });
+        assert_eq!(health.score, 0);
+        assert_eq!(health.level, "critical");
+    }
 }

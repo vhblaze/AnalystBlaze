@@ -126,11 +126,22 @@ export type DiskActivity = {
   };
 };
 
+/** Uma regra da Saúde que tirou pontos (telemetry/state.rs::HealthDeduction). */
+export type HealthDeduction = {
+  factor: string;
+  points: number;
+  measured?: number | null;
+  threshold?: number | null;
+};
+
 export type AgentTelemetrySnapshot = AgentTelemetrySample & {
   disk_activity?: DiskActivity | null;
   health_score: number;
   health_level: "excellent" | "good" | "watch" | "critical" | string;
   health_reasons: string[];
+  /** L3: a conta da Saúde, uma linha por regra que tirou pontos. Builds
+   * antigos do agente não mandam (lista vazia). */
+  health_breakdown?: HealthDeduction[];
   optimization_status: string;
   active_profile: string;
   telemetry_mode: string;

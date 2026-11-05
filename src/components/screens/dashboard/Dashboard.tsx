@@ -196,6 +196,7 @@ export function Dashboard({
         <HealthRing
           score={telemetry ? telemetry.health_score : null}
           reasons={telemetry?.health_reasons ?? []}
+          breakdown={telemetry?.health_breakdown ?? []}
           onMeasure={() => void measureHealth()}
           measuring={measuring}
         />
