@@ -65,6 +65,18 @@ pub enum RefreshOutcome {
     Unavailable(String),
 }
 
+/// Um PC da conta, como o servidor lista (Configurações › Conta e PCs).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountDevice {
+    pub id: String,
+    pub name: Option<String>,
+    pub machine_type: Option<String>,
+    pub os_version: Option<String>,
+    pub last_ping: Option<String>,
+    pub registered_at: Option<String>,
+    pub is_active: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceChoice {
     pub id: String,
@@ -395,6 +407,45 @@ impl ApiClient {
             );
         }
         RefreshOutcome::Unavailable(format!("status {status}"))
+    }
+
+    /// Todos os PCs da conta, ativos ou não, para a lista de Configurações.
+    pub async fn account_devices(&self, access_token: &str) -> Result<Vec<AccountDevice>, String> {
+        let response = self
+            .http
+            .get(self.url("/api/v1/hardware"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        let payload = ok_json::<Value>(response).await?;
+        Ok(payload
+            .get("devices")
+            .and_then(Value::as_array)
+            .map(|devices| {
+                devices
+                    .iter()
+                    .filter_map(|device| {
+                        let text = |key: &str| {
+                            device
+                                .get(key)
+                                .and_then(Value::as_str)
+                                .filter(|value| !value.trim().is_empty())
+                                .map(ToString::to_string)
+                        };
+                        Some(AccountDevice {
+                            id: text("id")?,
+                            name: text("name"),
+                            machine_type: text("machine_type"),
+                            os_version: text("os_version"),
+                            last_ping: text("last_ping"),
+                            registered_at: text("registered_at"),
+                            is_active: device.get("is_active").and_then(Value::as_bool).unwrap_or(false),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
     }
 
     /// Active devices of the account, for the "which PC do you want to

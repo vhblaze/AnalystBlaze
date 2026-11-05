@@ -1792,6 +1792,28 @@ export async function replaceDevice(hwId: string) {
 }
 
 /** Desiste da troca: nada e removido e o login e descartado. */
+/** Um PC da conta, como o servidor lista. */
+export type AccountDevice = {
+  id: string;
+  name?: string | null;
+  machine_type?: string | null;
+  os_version?: string | null;
+  last_ping?: string | null;
+  registered_at?: string | null;
+  is_active: boolean;
+};
+
+export async function listAccountDevices(): Promise<AccountDevice[]> {
+  requireTauriRuntime("PCs da conta");
+  return invoke<AccountDevice[]>("list_account_devices");
+}
+
+/** Tira um PC da conta. Se for este PC, a sessão local termina. */
+export async function removeAccountDevice(hwId: string): Promise<AgentStatus> {
+  requireTauriRuntime("Remover PC da conta");
+  return invoke<AgentStatus>("remove_account_device", { hwId });
+}
+
 export async function cancelDeviceReplacement() {
   if (!isTauriRuntime()) return fallbackStatus;
   return invoke<AgentStatus>("cancel_device_replacement");
