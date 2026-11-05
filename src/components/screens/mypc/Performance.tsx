@@ -34,7 +34,7 @@ import {
   shortCpuName,
 } from "@/lib/format";
 import type { AgentTelemetrySample } from "@/services/tauri/agent";
-import { performanceStrings } from "./strings/performance";
+import { mypc as ptMypc } from "@/i18n/pt/mypc";
 
 /**
  * Meu PC › Desempenho (board Tela-MeuPC): a telemetria completa com a pele D3.
@@ -658,7 +658,7 @@ function SystemPanel({
     return sample?.power_profile ?? null;
   })();
   const context =
-    contextKey && contextKey in performanceStrings["pt-BR"].contextValue
+    contextKey && contextKey in ptMypc.mypc.performance.contextValue
       ? t(`mypc.performance.contextValue.${contextKey}`)
       : null;
 

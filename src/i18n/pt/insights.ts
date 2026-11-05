@@ -1,0 +1,51 @@
+// Textos em português · insights. Mesmas chaves nas duas línguas.
+// Gerado na etapa 7 do doc 15 a partir do translations.ts antigo; edite à vontade.
+export const insights = {
+  insights: {
+    errorFallback: "Falha ao buscar insights no backend",
+    errorTitle: "Não foi possível carregar os insights",
+    errorRetry: "Tentar novamente",
+    openInWeb: "Abrir no site",
+    categories: {
+      performance: "performance",
+      energy: "energia",
+      network: "rede",
+      cleanup: "limpeza",
+    },
+  },
+  insightsD3: {
+    title: "{{count}} coisas para melhorar",
+    titleNone: "Nada para melhorar agora",
+    subtitle: "Sugestões a partir do que o agente mede neste PC. A mais importante vem primeiro.",
+    loading: "Lendo as sugestões…",
+    emptyTitle: "Nenhuma sugestão agora",
+    emptyReason: "Quando o agente medir algo que dá para melhorar, aparece aqui com o motivo.",
+    letDo: "Deixar o AnalystBlaze fazer",
+    doNow: "Fazer agora",
+    doMyself: "Quero fazer eu mesmo",
+    disable: "Desativar",
+    notNow: "Agora não",
+    showAll: "Ver todas ({{count}} a mais)",
+    showLess: "Mostrar só as 3 principais",
+    reversible: "dá para desfazer",
+    notReversible: "não dá para desfazer",
+    risk: {
+      baixo: "Risco baixo",
+      medio: "Risco médio",
+      alto: "Risco alto",
+    },
+    healthLabel: "Saúde do Windows",
+    healthLabelCount: "Saúde do Windows · {{count}} avisos",
+    healthOk: "Nenhum aviso do Windows na última leitura.",
+    healthNote: "Não são sugestões de desempenho: ficam em Meu PC.",
+    healthOpen: "Ver em Meu PC › Saúde do Windows",
+    howLabel: "Como as sugestões funcionam",
+    how: {
+      max: "No máximo 3 por vez; as outras ficam em \"ver todas\".",
+      notNow: "\"Agora não\" esconde a sugestão por 24 horas.",
+      nothingAlone: "Nada muda sem você pedir ou sem uma automação que você ligou.",
+      history: "O que o AnalystBlaze faz vai para o Histórico, com Desfazer.",
+    },
+    silenced: "Mostrar de novo as {{count}} escondidas",
+  },
+} as const;

@@ -1,0 +1,33 @@
+name: Frontend
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # pt-BR e en-US com as mesmas chaves, nenhuma chave usada que não existe
+      # e nenhuma chave órfã (doc 15 §8, etapa 7).
+      - name: Check translations
+        run: npm run i18n:check
+
+      # tsc + vite build: o mesmo que o release roda antes do tauri build.
+      - name: Typecheck and build
+        run: npm run build

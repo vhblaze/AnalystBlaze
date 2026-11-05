@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "i18n:check": "node scripts/check-i18n.mjs",
     "preview": "vite preview",
     "tauri": "powershell -ExecutionPolicy Bypass -File scripts/tauri-sac-router.ps1",
     "cargo:check": "powershell -ExecutionPolicy Bypass -File scripts/cargo-sac.ps1 check",
