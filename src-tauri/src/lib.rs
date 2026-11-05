@@ -1128,6 +1128,13 @@ async fn release_memory() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command("CLEAR_STANDBY_LIST", Some(release_memory_payload())).await)
 }
 
+/// L2: tempo de boot medido pelo Windows (log de Diagnostics-Performance).
+/// Só lê; o log exige admin, então passa pelo componente de sistema.
+#[tauri::command]
+async fn boot_performance() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("READ_BOOT_PERFORMANCE", None).await)
+}
+
 #[tauri::command]
 async fn set_dns_servers(
     adapter_name: String,
@@ -2301,6 +2308,7 @@ pub fn run() {
             energy_diagnostics,
             flush_dns_cache,
             release_memory,
+            boot_performance,
             renew_dhcp_lease,
             apply_network_tune,
             confirm_network_tune,

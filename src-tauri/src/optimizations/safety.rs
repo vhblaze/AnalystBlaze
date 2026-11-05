@@ -237,6 +237,13 @@ pub fn command_profile(action_name: &str) -> Option<CommandSafetyProfile> {
             ),
             requires_privileged_helper: false,
         }),
+        // Só lê o log de desempenho do Windows; precisa de admin para ler.
+        "READ_BOOT_PERFORMANCE" => Some(CommandSafetyProfile {
+            risk: RiskLevel::Safe,
+            requires_local_confirmation: false,
+            requires_snapshot: false,
+            requires_privileged_helper: true,
+        }),
         "CLEAR_STANDBY_LIST" => Some(CommandSafetyProfile {
             risk: RiskLevel::Sensitive,
             requires_local_confirmation: true,
@@ -450,6 +457,7 @@ pub fn supported_actions() -> &'static [&'static str] {
         "EMPTY_TEMP",
         "PURGE_CLEANUP_QUARANTINE",
         "CLEAR_STANDBY_LIST",
+        "READ_BOOT_PERFORMANCE",
         "FLUSH_DNS_CACHE",
         "RENEW_DHCP_LEASE",
         "APPLY_NETWORK_TUNE",

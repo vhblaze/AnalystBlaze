@@ -182,6 +182,18 @@ export const controls = {
         turnedOn: "{{name}} volta a abrir com o Windows",
         emptyTitle: "Nenhum app abre com o Windows",
         emptyReason: "O agente não encontrou apps na inicialização.",
+        boot: {
+          last: "No último boot o Windows levou {{time}} para ficar pronto",
+          lastDetail: "medido pelo próprio Windows · média dos últimos {{count}}: {{average}}",
+          lastDetailSingle: "medido pelo próprio Windows",
+          delayed: "atrasou {{time}}",
+          delayedHint: "O Windows mediu que este app atrasou o boot em {{time}}",
+          noEvents: "O Windows não registrou nenhum boot nos últimos 30 dias.",
+          needsHelper: "Para ler o tempo de boot, instale o componente de sistema em Avançado. Sem ele, mostramos alto, médio ou baixo.",
+          unavailable: "Não deu para ler o tempo de boot: {{reason}}",
+          reading: "Lendo o tempo de boot…",
+          retry: "Ler de novo",
+        },
         footnote: "\"Não\" só impede o app de abrir sozinho: ele continua instalado e volta com 1 clique. Cada mudança entra no Histórico.",
       },
       cleanup: {

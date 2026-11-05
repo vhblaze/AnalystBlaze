@@ -2,6 +2,7 @@ pub mod active_use;
 pub mod adaptive;
 pub mod app_usage;
 pub mod autostart;
+pub mod boot_time;
 pub mod cleanup;
 pub mod defender;
 pub mod detection;
@@ -270,6 +271,7 @@ async fn execute_command_checked_with_helper(
         "EMPTY_TEMP" => cleanup::empty_temp(payload).await,
         "PURGE_CLEANUP_QUARANTINE" => cleanup::purge_cleanup_quarantine(payload).await,
         "CLEAR_STANDBY_LIST" => memory::clear_standby_list(payload).await,
+        "READ_BOOT_PERFORMANCE" => boot_time::read_boot_performance(payload).await,
         "FLUSH_DNS_CACHE" => network_admin::flush_dns_cache(payload).await,
         "RENEW_DHCP_LEASE" => network_tune::renew_dhcp_lease(payload).await,
         "APPLY_NETWORK_TUNE" => network_tune::apply_network_tune(payload).await,
