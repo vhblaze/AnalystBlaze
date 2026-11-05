@@ -930,18 +930,21 @@ export function Insights({
   }, [shadowConsentNeeded, onResolveShadowConsent, t]);
 
   const visibleInsights = useMemo(() => {
+    // Reinício pendente, pontos de restauração (Shadow Storage), serviços e
+    // eventos do Windows e dispositivos com erro moraram aqui; agora ficam em
+    // Meu PC › Saúde do Windows (doc 14 §1.3), um lugar só.
+    void shadowStorageInsight;
+    void systemHealthInsight;
+    void failingDeviceInsights;
     const local = [
-      shadowStorageInsight,
       diskUsageInsight,
       vpnLatencyInsight,
       gameServerLatencyInsight,
       diskNearFullInsight,
       scheduledDefragInsight,
-      systemHealthInsight,
       defenderDiskInsight,
       defenderThrottledInsight,
       modemUsbLinkInsight,
-      ...failingDeviceInsights,
     ].filter((insight): insight is Insight => insight != null);
     const all = [...local, ...insights];
     return all.filter((insight) => !(insightKey(insight) in dismissed));

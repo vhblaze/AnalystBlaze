@@ -1,3 +1,8 @@
+import { healthStrings, specsStrings } from "@/components/screens/mypc/strings/health";
+import { diskStrings } from "@/components/screens/mypc/strings/disk";
+import { networkStrings } from "@/components/screens/mypc/strings/network";
+import { performanceStrings } from "@/components/screens/mypc/strings/performance";
+
 export type Locale = "pt-BR" | "en-US";
 
 export const DEFAULT_LOCALE: Locale = "pt-BR";
@@ -70,6 +75,11 @@ export const translations = {
       viewAccount: "Ver conta",
     },
     mypc: {
+      health: healthStrings["pt-BR"],
+      disk: diskStrings["pt-BR"],
+      network: networkStrings["pt-BR"],
+      performance: performanceStrings["pt-BR"],
+      specs: specsStrings["pt-BR"],
       tabs: {
         performance: "Desempenho",
         disk: "Disco",
@@ -222,6 +232,10 @@ export const translations = {
       },
     },
     confirm: {
+      restartWindows: {
+        title: "Reiniciar o computador",
+        body: "Fecha todos os programas abertos e reinicia o Windows em alguns segundos. Salve o que estiver aberto antes.",
+      },
       gameMode: {
         title: "Ativar Modo Jogo",
         body: "Dá prioridade ao jogo, baixa a prioridade dos apps em segundo plano, ajusta energia e efeitos visuais, faz uma limpeza reversível e mede a rede. Nenhum app é fechado. Tudo volta ao desligar.",
@@ -833,7 +847,7 @@ export const translations = {
         cleanup: {
           title: "{{size}} para recuperar",
           titleNothing: "Nada a limpar agora",
-          subtitle: "Tudo vai para a quarentena por 7 dias e pode voltar. Esvaziar a quarentena fica em Avançado.",
+          subtitle: "Tudo vai para a quarentena e pode voltar até você esvaziá-la, em Avançado.",
           clean: "Limpar",
           done: "{{name}}: movido para a quarentena",
           usesHelper: "usa o componente de sistema",
@@ -982,12 +996,12 @@ export const translations = {
         quarantine: {
           label: "Quarentena",
           title: "Esvaziar a quarentena",
-          size: "{{size}} guardados por 7 dias",
+          size: "{{size}} guardados até você esvaziar",
           empty: "A quarentena está vazia",
           purge: "Esvaziar",
           confirm: "Apaga de vez {{size}}. Não dá para desfazer pelo AnalystBlaze.",
           done: "Quarentena esvaziada",
-          foot: "O que a limpeza tira fica aqui por 7 dias e pode voltar. Esvaziar não tem volta.",
+          foot: "O que a limpeza tira fica aqui e pode voltar. Nada sai sozinho; esvaziar não tem volta.",
         },
         revert: {
           label: "Reverter e registros",
@@ -1357,6 +1371,11 @@ export const translations = {
       viewAccount: "View account",
     },
     mypc: {
+      health: healthStrings["en-US"],
+      disk: diskStrings["en-US"],
+      network: networkStrings["en-US"],
+      performance: performanceStrings["en-US"],
+      specs: specsStrings["en-US"],
       tabs: {
         performance: "Performance",
         disk: "Disk",
@@ -1509,6 +1528,10 @@ export const translations = {
       },
     },
     confirm: {
+      restartWindows: {
+        title: "Restart the computer",
+        body: "Closes all open programs and restarts Windows in a few seconds. Save what is open first.",
+      },
       gameMode: {
         title: "Turn on Game Mode",
         body: "Gives the game priority, lowers background apps' priority, adjusts power and visual effects, runs a reversible cleanup and measures the network. No app is closed. Everything goes back when you turn it off.",
@@ -2120,7 +2143,7 @@ export const translations = {
         cleanup: {
           title: "{{size}} to recover",
           titleNothing: "Nothing to clean right now",
-          subtitle: "Everything goes to quarantine for 7 days and can come back. Emptying quarantine is in Advanced.",
+          subtitle: "Everything goes to quarantine and can come back until you empty it, in Advanced.",
           clean: "Clean",
           done: "{{name}}: moved to quarantine",
           usesHelper: "uses the system component",
@@ -2269,12 +2292,12 @@ export const translations = {
         quarantine: {
           label: "Quarantine",
           title: "Empty the quarantine",
-          size: "{{size}} kept for 7 days",
+          size: "{{size}} kept until you empty it",
           empty: "The quarantine is empty",
           purge: "Empty",
           confirm: "Deletes {{size}} for good. AnalystBlaze cannot undo it.",
           done: "Quarantine emptied",
-          foot: "What cleanup removes stays here for 7 days and can come back. Emptying cannot be undone.",
+          foot: "What cleanup removes stays here and can come back. Nothing leaves on its own; emptying cannot be undone.",
         },
         revert: {
           label: "Undo and logs",

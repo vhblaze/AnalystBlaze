@@ -1,7 +1,9 @@
-import { Folder, Lock, Shield } from "lucide-react";
+import { Lock, Shield } from "lucide-react";
 import type { DiskTreeNodeSummary } from "@/services/tauri/agent";
 import { formatBytes } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
+/* Layout copiado de analystblaze/DiskTreemap.tsx (a view antiga sai depois). */
 /** Squarified treemap layout (Bruls, Huizing & van Wijk, 1999) - lays out
  * rectangles proportional to `value` while keeping aspect ratios close to
  * square, which is what makes a treemap scannable instead of a strip of
@@ -92,82 +94,95 @@ export function squarify(items: TreemapInput[], w: number, h: number): TreemapRe
   return out;
 }
 
-/** Colors validated with the dataviz skill's palette checker (categorical
- * pair, dark mode, slate-950 surface): folders=cyan-600, files=violet-600
- * both clear the OKLCH lightness band + CVD separation checks. Protected/
- * system items use the app's existing amber "watch" status tone instead of
- * a third categorical hue - status is reserved, never part of the identity
- * pair (see dataviz skill: status colors ship with icon+label, not color
- * alone). Text never carries the fill color, only slate/amber ink tokens. */
-const DIR_FILL = "bg-accent-strong/80 hover:bg-accent-strong/90 border-accent/30";
-const FILE_FILL = "bg-violet-strong/70 hover:bg-violet-strong/80 border-violet/30";
-const LOCKED_FILL = "bg-warn-strong/40 hover:bg-warn-strong/50 border-warn/30";
+/** Espaço lógico do layout; o mapa escala por porcentagem. */
+const LAYOUT_W = 1000;
+const LAYOUT_H = 840;
 
+/**
+ * Cores por token (doc 15 §3): pastas = accent, arquivos = violet,
+ * protegido/do Windows = warn. O texto fica sempre em fg, nunca na cor do
+ * preenchimento; o status protegido vem também com ícone (Shield/Lock).
+ */
+const FILL = {
+  dir: "border-accent/45 bg-accent/15 hover:bg-accent/25",
+  file: "border-violet/45 bg-violet/15",
+  locked: "border-warn/50 bg-warn/15",
+} as const;
 
 export function DiskTreemap({
   items,
   onOpen,
-  minLabelArea = 2200,
+  label,
+  lockedHint,
+  minLabelArea = 9000,
+  className,
 }: {
   items: DiskTreeNodeSummary[];
   onOpen: (item: DiskTreeNodeSummary) => void;
-  /** Below this pixel-area, a rect only shows on hover (via title) instead
-   * of an inline label, so tiny slivers don't overflow with text. */
+  /** Rótulo para leitor de tela ("Mapa do espaço desta pasta"). */
+  label: string;
+  /** Sufixo do title dos itens que não dá para apagar. */
+  lockedHint: string;
+  /** Abaixo desta área (no espaço 1000×840) o retângulo só mostra o nome no title. */
   minLabelArea?: number;
+  className?: string;
 }) {
   const sorted = [...items].sort((a, b) => b.sizeBytes - a.sizeBytes);
   const byId = new Map(sorted.map((item) => [item.path, item]));
   const rects = squarify(
     sorted.map((item) => ({ id: item.path, value: item.sizeBytes })),
-    1000,
-    620,
+    LAYOUT_W,
+    LAYOUT_H,
   );
 
-  if (rects.length === 0) {
-    return null;
-  }
+  if (rects.length === 0) return null;
 
   return (
-    <div className="relative w-full overflow-hidden rounded-xl border border-line bg-bg/40" style={{ aspectRatio: "1000 / 620" }}>
+    <div
+      role="group"
+      aria-label={label}
+      className={cn("relative w-full overflow-hidden rounded-control", className)}
+      style={{ aspectRatio: `${LAYOUT_W} / ${LAYOUT_H}` }}
+    >
       {rects.map((rect) => {
         const item = byId.get(rect.id);
         if (!item) return null;
         const locked = !item.actionable;
-        const fill = locked ? LOCKED_FILL : item.isDir ? DIR_FILL : FILE_FILL;
-        const area = rect.w * rect.h;
-        const showLabel = area >= minLabelArea;
+        const fill = locked ? FILL.locked : item.isDir ? FILL.dir : FILL.file;
+        const showLabel = rect.w * rect.h >= minLabelArea && rect.w >= 60;
         const clickable = item.isDir;
         return (
           <button
             key={rect.id}
             type="button"
-            title={`${item.name} - ${formatBytes(item.sizeBytes)}${locked ? " (protegido/sistema, somente informativo)" : ""}`}
+            title={`${item.name} · ${formatBytes(item.sizeBytes)}${locked ? ` · ${lockedHint}` : ""}`}
+            aria-label={`${item.name} · ${formatBytes(item.sizeBytes)}`}
             disabled={!clickable}
             onClick={() => clickable && onOpen(item)}
-            className={`group absolute overflow-hidden border text-left transition-colors ${fill} ${clickable ? "cursor-pointer" : "cursor-default"}`}
+            className={cn(
+              "absolute overflow-hidden rounded-[6px] border text-left transition-colors duration-fast ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+              fill,
+              clickable ? "cursor-pointer" : "cursor-default",
+            )}
             style={{
-              left: `${(rect.x / 1000) * 100}%`,
-              top: `${(rect.y / 620) * 100}%`,
-              width: `${(rect.w / 1000) * 100}%`,
-              height: `${(rect.h / 620) * 100}%`,
-              margin: "1px",
+              left: `calc(${(rect.x / LAYOUT_W) * 100}% + 2px)`,
+              top: `calc(${(rect.y / LAYOUT_H) * 100}% + 2px)`,
+              width: `calc(${(rect.w / LAYOUT_W) * 100}% - 4px)`,
+              height: `calc(${(rect.h / LAYOUT_H) * 100}% - 4px)`,
             }}
           >
             {showLabel && (
-              <div className="pointer-events-none flex h-full flex-col justify-between p-1.5">
-                <div className="flex items-center gap-1 truncate">
-                  {locked ? (
-                    item.protected ? (
-                      <Shield className="h-3 w-3 shrink-0 text-warn-soft" />
+              <div className="pointer-events-none flex h-full flex-col justify-between p-2">
+                <div className="flex min-w-0 items-center gap-1">
+                  {locked &&
+                    (item.protected ? (
+                      <Shield className="size-3 shrink-0 text-warn" aria-hidden />
                     ) : (
-                      <Lock className="h-3 w-3 shrink-0 text-warn-soft" />
-                    )
-                  ) : item.isDir ? (
-                    <Folder className="h-3 w-3 shrink-0 text-accent-soft" />
-                  ) : null}
-                  <span className="truncate text-[11px] font-medium text-fg">{item.name}</span>
+                      <Lock className="size-3 shrink-0 text-warn" aria-hidden />
+                    ))}
+                  <span className="truncate text-[12px] font-medium text-fg">{item.name}</span>
                 </div>
-                <span className="truncate font-mono text-[10px] text-fg/80">{formatBytes(item.sizeBytes)}</span>
+                <span className="truncate text-[11px] tabular-nums text-fg-2">{formatBytes(item.sizeBytes)}</span>
               </div>
             )}
           </button>
@@ -177,20 +192,30 @@ export function DiskTreemap({
   );
 }
 
-export function DiskTreemapLegend({ t }: { t: (key: string) => string }) {
+export function DiskTreemapLegend({
+  folders,
+  files,
+  locked,
+  className,
+}: {
+  folders: string;
+  files: string;
+  locked: string;
+  className?: string;
+}) {
   return (
-    <div className="flex flex-wrap items-center gap-4 font-mono text-[10px] uppercase tracking-widest text-fg-4">
+    <div className={cn("flex flex-wrap items-center gap-4 text-xs text-fg-3", className)}>
       <span className="flex items-center gap-1.5">
-        <span className="h-2.5 w-2.5 rounded-sm bg-accent-strong" />
-        {t("diskExplorer.legendFolders")}
+        <span className="size-2.5 rounded-[3px] bg-accent" aria-hidden />
+        {folders}
       </span>
       <span className="flex items-center gap-1.5">
-        <span className="h-2.5 w-2.5 rounded-sm bg-violet-strong" />
-        {t("diskExplorer.legendFiles")}
+        <span className="size-2.5 rounded-[3px] bg-violet" aria-hidden />
+        {files}
       </span>
       <span className="flex items-center gap-1.5">
-        <span className="h-2.5 w-2.5 rounded-sm bg-warn-strong" />
-        {t("diskExplorer.legendLocked")}
+        <span className="size-2.5 rounded-[3px] bg-warn" aria-hidden />
+        {locked}
       </span>
     </div>
   );
