@@ -76,7 +76,8 @@ export function WindowsHealth({
 
   const actionFor = (item: HealthItem) => {
     const action = item.action;
-    if (!action) return <span className="text-xs text-ok">{t("mypc.health.ok")}</span>;
+    // "ok" só em item ok; um aviso sem ação (temperatura, driver antigo) não ganha rótulo.
+    if (!action) return item.severity === "ok" ? <span className="text-xs text-ok">{t("mypc.health.ok")}</span> : null;
     const variant = item.id === firstDanger ? "primary" : "outline";
     switch (action.kind) {
       case "restart_windows":
