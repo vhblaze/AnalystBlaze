@@ -431,6 +431,7 @@ export const mypc: Mirror<typeof pt> = {
         notReady: "Sign in to change the reading pace.",
       },
       system: {
+        heaviest: "Heaviest right now",
         title: "System",
         processes: "Processes",
         uptime: "On for",

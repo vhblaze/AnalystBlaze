@@ -2592,6 +2592,22 @@ mod tests {
         }
     }
 
+    #[test]
+    fn top_processes_never_leave_the_pc() {
+        // L1: nomes e memória por programa ficam só no PC. A amostra serializada
+        // (o que vai para o servidor e para a fila em disco) não pode ter o campo.
+        let mut sample = sample_with_context(json!({}), json!({}));
+        sample.top_processes = vec![crate::telemetry::collector::ProcessMemory {
+            name: "chrome".to_string(),
+            memory_mb: 9600.0,
+            cpu_percent: 10.0,
+            process_count: 30,
+        }];
+        let serialized = serde_json::to_value(&sample).expect("sample serializes");
+        assert!(serialized.get("top_processes").is_none());
+        assert!(!serialized.to_string().contains("9600"));
+    }
+
     fn sample_with_context(context_state: Value, details: Value) -> TelemetrySample {
         TelemetrySample {
             event_timestamp: chrono::Utc::now().timestamp(),
@@ -2638,6 +2654,7 @@ mod tests {
             disk_usage_percent: 23.0,
             disk_activity: None,
             active_processes: 80,
+            top_processes: Vec::new(),
             system_uptime_seconds: 3600,
             active_window: Some("Test Window".to_string()),
             idle_seconds: 10,

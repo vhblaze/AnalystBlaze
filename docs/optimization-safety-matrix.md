@@ -148,13 +148,14 @@ Caminho vindo de comando remoto ou policy local e recusado com `disk_usage_item_
 
 ## Allowlist Do Helper Privilegiado
 
-Fonte: `supported_actions()` em `src-tauri/src/optimizations/privileged_helper.rs` (27 acoes).
+Fonte: `supported_actions()` em `src-tauri/src/optimizations/privileged_helper.rs` (28 acoes).
 O teste `safety_matrix_doc_matches_helper_allowlist` falha se esta lista e o codigo divergirem.
 
 <!-- helper-actions:start -->
 - `EMPTY_TEMP`
 - `PURGE_CLEANUP_QUARANTINE`
 - `CLEAR_STANDBY_LIST`
+- `READ_BOOT_PERFORMANCE`
 - `STOP_SERVICE`
 - `RESTORE_SERVICE`
 - `SET_DNS_SERVERS`

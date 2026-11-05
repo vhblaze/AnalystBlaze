@@ -17,7 +17,7 @@ export const THRESHOLDS = {
 
 export type WeighingNow =
   | { kind: "game_mode"; game: string | null }
-  | { kind: "memory"; percent: number }
+  | { kind: "memory"; percent: number; topProcess: { name: string; memoryMb: number } | null }
   | { kind: "disk"; mountPoint: string; freeBytes: number }
   | { kind: "cpu"; percent: number }
   | { kind: "network"; latencyMs: number }
@@ -52,7 +52,12 @@ export function pickWeighingNow({
 
   const memory = telemetry.ram_usage_percent;
   if (typeof memory === "number" && memory >= THRESHOLDS.memoryPercent && allowed("memory")) {
-    return { kind: "memory", percent: memory };
+    const top = telemetry.top_processes?.[0];
+    return {
+      kind: "memory",
+      percent: memory,
+      topProcess: top ? { name: top.name, memoryMb: top.memory_mb } : null,
+    };
   }
 
   const volume = systemVolume(volumes);

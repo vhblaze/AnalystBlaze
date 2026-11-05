@@ -134,6 +134,14 @@ export type HealthDeduction = {
   threshold?: number | null;
 };
 
+/** Um programa e quanto ele usa (telemetry/collector.rs::ProcessMemory). */
+export type ProcessMemory = {
+  name: string;
+  memory_mb: number;
+  cpu_percent: number;
+  process_count: number;
+};
+
 export type AgentTelemetrySnapshot = AgentTelemetrySample & {
   disk_activity?: DiskActivity | null;
   health_score: number;
@@ -142,6 +150,8 @@ export type AgentTelemetrySnapshot = AgentTelemetrySample & {
   /** L3: a conta da Saúde, uma linha por regra que tirou pontos. Builds
    * antigos do agente não mandam (lista vazia). */
   health_breakdown?: HealthDeduction[];
+  /** L1: os programas que mais usam memória agora. Só local; nunca enviado. */
+  top_processes?: ProcessMemory[];
   optimization_status: string;
   active_profile: string;
   telemetry_mode: string;
@@ -888,6 +898,36 @@ export type ReleaseMemoryDetails = {
 export async function releaseMemory(): Promise<OptimizationResult> {
   requireTauriRuntime("Liberar memória");
   return invoke<OptimizationResult>("release_memory");
+}
+
+/** L2: tempo de boot que o próprio Windows mediu (Diagnostics-Performance). */
+export type BootRecord = {
+  bootMs: number;
+  mainPathMs: number | null;
+  postBootMs: number | null;
+  recordedAt: string;
+};
+
+export type SlowStartupApp = {
+  name: string;
+  friendlyName: string | null;
+  degradationMs: number;
+  recordedAt: string;
+};
+
+export type BootPerformance = {
+  status: "ok" | "no_events" | "unavailable";
+  lastBoot: BootRecord | null;
+  recentBoots: BootRecord[];
+  slowApps: SlowStartupApp[];
+};
+
+/** Lê o log de boot pelo componente de sistema. Só lê; não muda nada. */
+export async function readBootPerformance(): Promise<BootPerformance> {
+  requireTauriRuntime("Tempo de boot");
+  const result = await invoke<OptimizationResult>("boot_performance");
+  if (!result.success) throw new Error(result.message);
+  return result.details as BootPerformance;
 }
 
 export async function getOptimizationSnapshots(limit = 80): Promise<OptimizationSnapshot[]> {

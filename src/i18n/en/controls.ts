@@ -185,6 +185,18 @@ export const controls: Mirror<typeof pt> = {
         turnedOn: "{{name}} opens with Windows again",
         emptyTitle: "No app opens with Windows",
         emptyReason: "The agent found no startup apps.",
+        boot: {
+          last: "On the last boot Windows took {{time}} to be ready",
+          lastDetail: "measured by Windows itself · average of the last {{count}}: {{average}}",
+          lastDetailSingle: "measured by Windows itself",
+          delayed: "delayed it {{time}}",
+          delayedHint: "Windows measured that this app delayed boot by {{time}}",
+          noEvents: "Windows has not recorded any boot in the last 30 days.",
+          needsHelper: "To read the boot time, install the system component in Advanced. Without it, we show high, medium or low.",
+          unavailable: "Could not read the boot time: {{reason}}",
+          reading: "Reading the boot time…",
+          retry: "Read again",
+        },
         footnote: "\"Off\" only stops the app from opening on its own: it stays installed and comes back with 1 click. Every change goes to History.",
       },
       cleanup: {
