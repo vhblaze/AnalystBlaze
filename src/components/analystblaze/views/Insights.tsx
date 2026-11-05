@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowRight, Bot, Brain, Cpu, Droplets, ExternalLink, RefreshCw, Sparkles, User, Wind, X, Zap } from "lucide-react";
-import { fetchInsights, type DiskNearFullInfo, type Insight } from "@/services/insights";
+import type { DiskNearFullInfo, Insight } from "@/services/insights";
+import { serverInsights } from "@/features/insights/useInsights";
 import { diskOptimizationInsight as diskOptimizationInsightResource } from "@/features/disk/useDiskUsage";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
@@ -881,9 +882,9 @@ export function Insights({
       diskOptimizationInsightResource.refresh().then(setDiskOptimizationInsightData).catch(() => undefined);
     }
     try {
-      const result = await fetchInsights(t, locale);
-      setInsights(result.insights);
-      track("insights_refreshed", { source: result.source });
+      const list = await serverInsights.refresh(locale);
+      setInsights(list);
+      track("insights_refreshed", { source: "remote" });
     } catch (e: any) {
       setError(e?.message ?? t("insights.errorFallback"));
       track("insights_refresh_failed");

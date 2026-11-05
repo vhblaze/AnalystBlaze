@@ -500,6 +500,10 @@ export type LocalAiPolicy = {
   start_minimized: boolean;
   /** Instala a atualização baixada sozinho, só com o PC parado, sem jogo e sem Modo Jogo. */
   auto_install_updates: boolean;
+  /** Avisos do Windows: melhorou de verdade, sugestão nova, resumo às 22:00. */
+  notify_on_improvement: boolean;
+  notify_on_new_insight: boolean;
+  notify_daily_summary: boolean;
   telemetry_diagnostics_enabled: boolean;
 };
 
@@ -1573,6 +1577,9 @@ export async function getLocalAiPolicy(): Promise<LocalAiPolicy> {
       autostart_enabled: true,
       start_minimized: true,
       auto_install_updates: false,
+      notify_on_improvement: true,
+      notify_on_new_insight: true,
+      notify_daily_summary: false,
       telemetry_diagnostics_enabled: false,
     };
   }
