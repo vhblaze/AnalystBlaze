@@ -43,7 +43,10 @@
       },
       "nsis": {
         "installMode": "perMachine",
-        "installerHooks": "installer/hooks.nsh"
+        "installerHooks": "installer/hooks.nsh",
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "installer/images/header.bmp",
+        "sidebarImage": "installer/images/sidebar.bmp"
       }
     },
     "icon": [
