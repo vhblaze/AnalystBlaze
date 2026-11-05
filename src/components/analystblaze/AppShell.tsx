@@ -1,9 +1,10 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoggedOutNotice } from "./LoggedOutNotice";
 import { UpdateNotice } from "./UpdateNotice";
 import { useAgentTelemetry } from "@/hooks/useAgentTelemetry";
+import { startTelemetryHistory } from "@/features/telemetry/telemetryHistory";
 import { useAuth } from "@/hooks/useAuth";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useUpdater } from "@/hooks/useUpdater";
@@ -22,6 +23,7 @@ import { DeviceLimitDialog } from "@/components/shell/dialogs/DeviceLimitDialog"
 import { EmailVerificationNotice } from "@/components/shell/dialogs/EmailVerificationNotice";
 import { RemoteConfirmationNotice } from "@/components/shell/dialogs/RemoteConfirmationNotice";
 import { RestoreToDateButton } from "@/components/screens/history/History";
+import { PcSpecs } from "@/components/screens/mypc/PcSpecs";
 
 // Mantido para quem ainda importa daqui.
 export { splitBackendErrorCode };
@@ -33,6 +35,21 @@ export { splitBackendErrorCode };
  */
 export function AppShell() {
   const [current, setCurrent] = useState<Route>(DEFAULT_ROUTE);
+  // Histórico de 1 hora da aba Desempenho: começa a gravar quando o app abre.
+  useEffect(() => {
+    startTelemetryHistory();
+  }, []);
+  // Acessibilidade (Configurações): vale desde a abertura do app, não só
+  // depois que a tela de Configurações é aberta.
+  useEffect(() => {
+    try {
+      const root = document.documentElement;
+      root.classList.toggle("ab-high-contrast", localStorage.getItem("analystblaze.accessibility.highContrast") === "1");
+      root.classList.toggle("ab-reduce-motion", localStorage.getItem("analystblaze.accessibility.reduceMotion") === "1");
+    } catch {
+      // Sem localStorage: fica o padrão.
+    }
+  }, []);
   const auth = useAuth();
   const telemetry = useAgentTelemetry();
   const updater = useUpdater();
@@ -92,6 +109,7 @@ export function AppShell() {
           title={routeTitleKeys(current).map((key) => t(key))}
           right={
             <>
+              {current.screen === "mypc" && <PcSpecs />}
               {current.screen === "history" && <RestoreToDateButton />}
               {current.screen === "controls" && current.section && (
                 <Button size="sm" variant="link" onClick={() => navigate(route("controls"))}>

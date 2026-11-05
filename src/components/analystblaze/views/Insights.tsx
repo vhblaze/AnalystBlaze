@@ -14,6 +14,10 @@ import {
 } from "@/services/tauri/agent";
 import { formatBytes } from "@/lib/format";
 import { networkDiagnostics as networkDiagnosticsResource, useNetwork } from "@/features/network/useNetwork";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { windowsHealthItems } from "@/features/health/windowsDiagnostics";
 
 const DISK_USAGE_WARNING_THRESHOLD_PERCENT = 80;
 const NETWORK_LAG_FLAGS = ["packet_loss_detected", "jitter_high", "latency_high"] as const;
@@ -33,6 +37,8 @@ const DISK_NEAR_FULL_BASE_PERCENT = 90;
 
 const DISMISS_STORAGE_KEY = "analystblaze.dismissedInsights";
 const DISMISS_TTL_MS = 24 * 60 * 60 * 1000;
+/** No máximo 3 sugestões por vez; as outras ficam em "ver todas" (doc 11 §7). */
+const MAX_VISIBLE = 3;
 /** The server only ever pairs a card with an actionName from its own small
  * validated allowlist (see safe_action_policy.py) - these are the ones the
  * desktop already knows how to run locally, so "I'll do it myself" has
@@ -253,7 +259,7 @@ export function Insights({
   onApplyInsightActionLocally,
   onRequestAgentApplyInsight,
   shadowConsentNeeded,
-  onResolveShadowConsent,
+  onOpenWindowsHealth,
 }: {
   telemetry?: AgentTelemetrySnapshot | null;
   /** Set by DiskExplorer, on demand, the moment it detects some individual
@@ -279,6 +285,8 @@ export function Insights({
    * two-choice card instead of a modal (see AppShell). */
   shadowConsentNeeded?: boolean;
   onResolveShadowConsent?: (choice: "auto" | "manual") => Promise<void>;
+  /** Saúde do Windows mora em Meu PC; aqui fica só o resumo com o link. */
+  onOpenWindowsHealth?: () => void;
 }) {
   const { t, locale } = useI18n();
   const track = useTelemetry("insights");
@@ -288,6 +296,7 @@ export function Insights({
   const [dismissed, setDismissed] = useState<Record<string, number>>(() => loadDismissed());
   const [actionBusyKey, setActionBusyKey] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   // Only fetched here, on demand, for the local VPN+latency insight below -
   // the passive telemetry sample doesn't probe the adapter/VPN detection
   // (kept out of the 2s telemetry loop deliberately, see collect_network_sample).
@@ -321,7 +330,7 @@ export function Insights({
       const result = await onApplyInsightActionLocally(actionName, actionContext);
       track("insight_action_applied_locally", { actionName });
       if (actionName === "START_SYSTEM_FILE_CHECK") {
-        setActionMessage("Verificação iniciada em segundo plano. Acompanhe o progresso em Controles > Avançado > Saúde do Windows.");
+        setActionMessage("Verificação iniciada em segundo plano. Acompanhe o progresso em Meu PC › Saúde do Windows.");
         dismissInsight(insight);
       } else if (HONEST_OUTCOME_ACTIONS.has(actionName)) {
         const outcome = result as { success?: boolean; message?: string } | null;
@@ -565,54 +574,6 @@ export function Insights({
     };
   }, [diskOptimizationInsightData]);
 
-  const systemHealthInsight = useMemo<Insight | null>(() => {
-    const advanced = telemetry?.advanced as
-      | {
-          event_log_critical_errors_24h?: number | null;
-          failing_services?: Array<{ name: string; kind: string }>;
-          shell_crashes?: Array<{ process: string }>;
-        }
-      | null
-      | undefined;
-    if (!advanced) return null;
-
-    const criticalErrors = advanced.event_log_critical_errors_24h ?? 0;
-    const failingServices = advanced.failing_services ?? [];
-    const shellCrashes = advanced.shell_crashes ?? [];
-    if (criticalErrors < EVENT_LOG_CRITICAL_THRESHOLD && failingServices.length === 0) {
-      return null;
-    }
-
-    const signals: string[] = [];
-    if (criticalErrors >= EVENT_LOG_CRITICAL_THRESHOLD) {
-      signals.push(`${criticalErrors} erros críticos no Visualizador de Eventos nas últimas 24h`);
-    }
-    if (failingServices.length > 0) {
-      const names = failingServices.slice(0, 3).map((service) => service.name).join(", ");
-      signals.push(`${failingServices.length} serviço(s) do Windows falhando (${names})`);
-    }
-    if (shellCrashes.length > 0) {
-      signals.push(`${shellCrashes.length} travamento(s) recente(s) do shell do Windows`);
-    }
-
-    // More independent signals firing together raises confidence a bit -
-    // still capped well below "certain", since none of this confirms actual
-    // file corruption, only correlates with the kind of problem sfc/DISM
-    // can rule in or out.
-    const confidence = Math.min(0.65, 0.35 + signals.length * 0.1);
-
-    return {
-      title: "Possível problema no Windows",
-      explanation: `Detectamos ${signals.join(" e ")}. Isso pode (não necessariamente) indicar arquivos de sistema corrompidos. Uma verificação com as ferramentas oficiais do Windows (sfc, e DISM se precisar) confirma e corrige - leva alguns minutos rodando em segundo plano.`,
-      impact: "Possível corrupcao de arquivos de sistema",
-      category: "performance",
-      risk: "baixo",
-      reversible: true,
-      confidence,
-      reason: signals.join("; "),
-      actionName: "START_SYSTEM_FILE_CHECK",
-    };
-  }, [telemetry?.advanced]);
 
   const modemUsbLinkIssue = useMemo<ModemUsbLinkIssue | null>(() => {
     const advanced = telemetry?.advanced as { modem_usb_link_issue?: ModemUsbLinkIssue | null } | null | undefined;
@@ -703,34 +664,6 @@ export function Insights({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modemUsbLinkIssue, modemAnswer]);
 
-  const failingDeviceInsights = useMemo<Insight[]>(() => {
-    const advanced = telemetry?.advanced as
-      | { failing_devices?: Array<{ name?: string | null; device_id: string; device_class?: string | null; problem_code: number }> }
-      | null
-      | undefined;
-    const correlated = new Set(
-      [modemUsbLinkIssue?.usb_device_id, modemUsbLinkIssue?.root_net_device_id].filter(
-        (id): id is string => Boolean(id),
-      ),
-    );
-    const devices = (advanced?.failing_devices ?? []).filter((device) => !correlated.has(device.device_id));
-    return devices.map((device) => {
-      const label = PROBLEM_CODE_LABELS[device.problem_code] ?? `Código ${device.problem_code}`;
-      const name = device.name?.trim() || device.device_class || "Dispositivo desconhecido";
-      return {
-        title: `${name} com problema no Windows`,
-        explanation: `O Windows reportou "${label}" para este dispositivo. Um ciclo de desativar/reativar (o mesmo que fazer manualmente no Gerenciador de Dispositivos) resolve boa parte desses casos - se não resolver, pode ser necessário reiniciar o computador.`,
-        impact: label,
-        category: "performance",
-        risk: "baixo",
-        reversible: true,
-        confidence: 0.6,
-        reason: `ConfigManagerErrorCode ${device.problem_code} em ${device.device_id}`,
-        actionName: "RESTART_PNP_DEVICE",
-        actionContext: { deviceId: device.device_id },
-      } satisfies Insight;
-    });
-  }, [telemetry?.advanced, modemUsbLinkIssue]);
 
   const [defenderThrottledAt, setDefenderThrottledAt] = useState<number | null>(() => loadDefenderThrottledAt());
 
@@ -907,56 +840,32 @@ export function Insights({
     };
   }, [defenderThrottledAt]);
 
-  const shadowStorageInsight = useMemo<Insight | null>(() => {
-    if (!shadowConsentNeeded || !onResolveShadowConsent) return null;
-    return {
-      title: t("shadowStorage.cardTitle"),
-      explanation: t("shadowStorage.cardBody"),
-      impact: t("shadowStorage.cardImpact"),
-      category: "limpeza",
-      risk: "baixo",
-      reversible: true,
-      confidence: 0.95,
-      reason: t("shadowStorage.cardReason"),
-      action: {
-        label: t("shadowStorage.cardAuto"),
-        onClick: () => void onResolveShadowConsent("auto"),
-      },
-      secondaryAction: {
-        label: t("shadowStorage.cardManual"),
-        onClick: () => void onResolveShadowConsent("manual"),
-      },
-    };
-  }, [shadowConsentNeeded, onResolveShadowConsent, t]);
 
   const visibleInsights = useMemo(() => {
+    // Reinício pendente, pontos de restauração (Shadow Storage), serviços e
+    // eventos do Windows e dispositivos com erro moraram aqui; agora ficam em
+    // Meu PC › Saúde do Windows (doc 14 §1.3), um lugar só.
     const local = [
-      shadowStorageInsight,
       diskUsageInsight,
       vpnLatencyInsight,
       gameServerLatencyInsight,
       diskNearFullInsight,
       scheduledDefragInsight,
-      systemHealthInsight,
       defenderDiskInsight,
       defenderThrottledInsight,
       modemUsbLinkInsight,
-      ...failingDeviceInsights,
     ].filter((insight): insight is Insight => insight != null);
     const all = [...local, ...insights];
     return all.filter((insight) => !(insightKey(insight) in dismissed));
   }, [
-    shadowStorageInsight,
     diskUsageInsight,
     vpnLatencyInsight,
     gameServerLatencyInsight,
     diskNearFullInsight,
     scheduledDefragInsight,
-    systemHealthInsight,
     defenderDiskInsight,
     defenderThrottledInsight,
     modemUsbLinkInsight,
-    failingDeviceInsights,
     insights,
     dismissed,
   ]);
@@ -1002,192 +911,192 @@ export function Insights({
     }
   };
 
+  const healthWarnings = windowsHealthItems({ telemetry: telemetry ?? null, shadowConsentNeeded: Boolean(shadowConsentNeeded) }).filter(
+    (item) => item.severity !== "ok",
+  );
+  const shown = showAll ? visibleInsights : visibleInsights.slice(0, MAX_VISIBLE);
+  const hiddenCount = visibleInsights.length - shown.length;
+  const silencedCount = Object.keys(dismissed).length;
+
+  const riskLine = (ins: Insight) =>
+    [
+      ins.risk ? t(`insightsD3.risk.${ins.risk}`) : null,
+      ins.reversible === true ? t("insightsD3.reversible") : ins.reversible === false ? t("insightsD3.notReversible") : null,
+      ins.impact || null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+
   return (
-    <div className="flex flex-col gap-8">
-      <header className="flex items-end justify-between gap-4">
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-accent/70">
-            <Sparkles className="h-3 w-3" />
-            {t("insights.eyebrow")}
+    <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-5">
+      <div className="flex flex-col gap-5">
+        <header className="flex flex-col gap-3">
+          <div>
+            <h2 className="text-[28px] font-semibold tracking-tight text-fg">
+              {visibleInsights.length > 0
+                ? t("insightsD3.title", { count: Math.min(visibleInsights.length, MAX_VISIBLE) })
+                : t("insightsD3.titleNone")}
+            </h2>
+            <p className="mt-1 text-sm text-fg-3">{t("insightsD3.subtitle")}</p>
           </div>
-          <h1 className="text-[36px] font-semibold tracking-tight text-fg">
-            {t("insights.title")}
-          </h1>
-          <p className="max-w-xl text-sm text-fg-3">
-            {t("insights.description")}
-          </p>
-        </div>
-        <div className="flex flex-wrap justify-end gap-2">
-          <button
-            onClick={openOnWeb}
-            className="inline-flex items-center gap-2 rounded-xl border border-accent/30 bg-bg/50 px-4 py-2.5 text-sm font-semibold text-accent-soft transition-all hover:border-accent/60 hover:bg-accent/10"
-          >
-            <ExternalLink className="h-4 w-4" />
-            {t("insights.openInWeb")}
-          </button>
-          <button
-            onClick={generate}
-            disabled={loading}
-            className="group inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-gradient-to-r from-accent-strong/20 to-violet-strong/10 px-4 py-2.5 text-sm font-semibold text-accent-soft transition-all hover:border-accent/60 disabled:opacity-50"
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : "transition-transform group-hover:rotate-180"}`} />
-            {loading ? t("common.refreshing") : t("common.refresh")}
-          </button>
-        </div>
-      </header>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => void generate()} disabled={loading}>
+              <RefreshCw className={loading ? "animate-spin" : undefined} />
+              {loading ? t("common.refreshing") : t("common.refresh")}
+            </Button>
+            <Button size="sm" variant="link" onClick={() => void openOnWeb()}>
+              <ExternalLink />
+              {t("insights.openInWeb")}
+            </Button>
+          </div>
+        </header>
 
-      {error && visibleInsights.length > 0 && (
-        <div className="rounded-xl border border-danger-strong/30 bg-danger-strong/10 p-4 text-sm text-danger-soft">
-          {error}
-        </div>
-      )}
+        {actionMessage && <p className="rounded-control border border-line bg-surface-2 px-4 py-3 text-sm text-fg-2">{actionMessage}</p>}
+        {error && visibleInsights.length > 0 && <p className="text-sm text-danger">{error}</p>}
 
-      {actionMessage && (
-        <div className="rounded-xl border border-accent-strong/30 bg-accent-strong/10 p-4 text-sm text-accent-soft">
-          {actionMessage}
-        </div>
-      )}
-
-      {loading && visibleInsights.length === 0 ? (
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="glass-panel h-44 animate-pulse p-6">
-              <div className="h-3 w-24 rounded bg-surface-2/60" />
-              <div className="mt-4 h-5 w-2/3 rounded bg-surface-2/60" />
-              <div className="mt-3 h-3 w-full rounded bg-surface-2/40" />
-              <div className="mt-2 h-3 w-5/6 rounded bg-surface-2/40" />
-            </div>
-          ))}
-        </div>
-      ) : error && visibleInsights.length === 0 ? (
-        <div className="glass-panel flex flex-col items-center gap-3 rounded-2xl border border-danger-strong/20 p-10 text-center">
-          <AlertCircle className="h-8 w-8 text-danger" />
-          <h3 className="text-lg font-semibold text-fg">{t("insights.errorTitle")}</h3>
-          <p className="max-w-sm text-sm text-fg-3">{error}</p>
-          <button
-            onClick={generate}
-            className="mt-1 inline-flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-2 text-sm font-semibold text-danger-soft transition-all hover:border-danger/50 hover:bg-danger/15"
-          >
-            <RefreshCw className="h-4 w-4" />
-            {t("insights.errorRetry")}
-          </button>
-        </div>
-      ) : visibleInsights.length === 0 ? (
-        <div className="glass-panel flex flex-col items-center gap-2 rounded-2xl border border-line p-10 text-center">
-          <Sparkles className="h-8 w-8 text-accent/60" />
-          <h3 className="text-lg font-semibold text-fg">{t("insights.emptyTitle")}</h3>
-          <p className="max-w-sm text-sm text-fg-3">{t("insights.emptyDescription")}</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-          {visibleInsights.map((ins) => {
-            const m = meta[ins.category] ?? meta.performance;
-            const Icon = m.icon;
-            const key = insightKey(ins);
-            const busy = actionBusyKey === key;
-            const canRunLocally = Boolean(
-              ins.actionName && LOCALLY_EXECUTABLE_ACTIONS.has(ins.actionName) && onApplyInsightActionLocally,
-            );
-            const canRequestAgent = Boolean(
-              ins.actionName &&
-                (LOCAL_ONLY_ACTIONS.has(ins.actionName) ? onApplyInsightActionLocally : onRequestAgentApplyInsight),
-            );
-            const secondaryBusy = actionBusyKey === `${key}:secondary`;
-            const canRunSecondaryLocally = Boolean(
-              ins.secondaryActionName && LOCALLY_EXECUTABLE_ACTIONS.has(ins.secondaryActionName) && onApplyInsightActionLocally,
-            );
-            return (
-              <article
-                key={key}
-                className={`group relative overflow-hidden rounded-2xl border ${m.ring} bg-gradient-to-br ${m.tone} p-6 transition-all hover:-translate-y-0.5`}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="grid h-10 w-10 place-items-center rounded-xl border border-white/10 bg-bg/60">
-                    <Icon className="h-5 w-5 text-accent-soft" />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${m.chip}`}>
-                      {categoryLabel(ins.category, t)}
-                    </span>
-                    <button
-                      onClick={() => dismissInsight(ins)}
-                      title="Dispensar"
-                      className="grid h-6 w-6 shrink-0 place-items-center rounded-md border border-white/10 bg-bg/60 text-fg-4 transition hover:border-danger/40 hover:text-danger-soft"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </div>
-                <h3 className="mt-4 text-lg font-semibold tracking-tight text-fg">
-                  {ins.title}
-                </h3>
-                <p className="mt-2 text-sm leading-relaxed text-fg-3">{ins.explanation}</p>
-                <div className="mt-4 flex items-center gap-2 border-t border-white/5 pt-3">
-                  <Brain className="h-3.5 w-3.5 text-accent" />
-                  <span className="font-mono text-[11px] uppercase tracking-widest text-fg-4">
-                    {t("insights.impact")}
-                  </span>
-                  <span className="ml-auto font-mono text-sm font-semibold text-gradient-brand">
-                    {ins.impact}
-                  </span>
-                </div>
-                {ins.action && (
-                  <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
-                    <button
-                      onClick={ins.action.onClick}
-                      className="group/action inline-flex items-center gap-1.5 text-xs font-semibold text-accent-soft transition hover:text-accent-soft"
-                    >
-                      {ins.action.label}
-                      <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover/action:translate-x-0.5" />
-                    </button>
+        {loading && visibleInsights.length === 0 ? (
+          <EmptyState title={t("insightsD3.loading")} />
+        ) : error && visibleInsights.length === 0 ? (
+          <EmptyState
+            icon={<AlertCircle />}
+            title={t("insights.errorTitle")}
+            reason={error}
+            action={
+              <Button variant="outline" onClick={() => void generate()}>
+                <RefreshCw />
+                {t("insights.errorRetry")}
+              </Button>
+            }
+          />
+        ) : visibleInsights.length === 0 ? (
+          <EmptyState title={t("insightsD3.emptyTitle")} reason={t("insightsD3.emptyReason")} />
+        ) : (
+          <>
+            {shown.map((ins, index) => {
+              const key = insightKey(ins);
+              const busy = actionBusyKey === key;
+              const canRunLocally = Boolean(
+                ins.actionName && LOCALLY_EXECUTABLE_ACTIONS.has(ins.actionName) && onApplyInsightActionLocally,
+              );
+              const canRequestAgent = Boolean(
+                ins.actionName &&
+                  (LOCAL_ONLY_ACTIONS.has(ins.actionName) ? onApplyInsightActionLocally : onRequestAgentApplyInsight),
+              );
+              const secondaryBusy = actionBusyKey === `${key}:secondary`;
+              const canRunSecondaryLocally = Boolean(
+                ins.secondaryActionName && LOCALLY_EXECUTABLE_ACTIONS.has(ins.secondaryActionName) && onApplyInsightActionLocally,
+              );
+              // Um primário por tela: só a sugestão mais importante (a primeira).
+              const mainVariant = index === 0 ? "primary" : "outline";
+              const line = riskLine(ins);
+              return (
+                <Card key={key} padding="lg">
+                  <h3 className="text-[18px] font-semibold tracking-tight text-fg">{ins.title}</h3>
+                  <p className="mt-2 text-sm leading-relaxed text-fg-2">{ins.explanation}</p>
+                  {line && <p className="mt-2 text-xs text-fg-3">{line}</p>}
+                  <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
+                    {canRequestAgent ? (
+                      <Button variant={mainVariant} disabled={busy} onClick={() => void requestAgentApply(ins)}>
+                        {busy ? t("controls.d3.working") : t("insightsD3.letDo")}
+                      </Button>
+                    ) : canRunLocally ? (
+                      <Button variant={mainVariant} disabled={busy} onClick={() => void applyLocally(ins)}>
+                        {busy ? t("controls.d3.working") : ins.actionLabel ?? t("insightsD3.doNow")}
+                      </Button>
+                    ) : ins.action ? (
+                      <Button variant={mainVariant} onClick={ins.action.onClick}>
+                        {ins.action.label}
+                      </Button>
+                    ) : null}
+                    {canRequestAgent && canRunLocally && (
+                      <Button variant="link" disabled={busy} onClick={() => void applyLocally(ins)}>
+                        {ins.actionLabel ?? t("insightsD3.doMyself")}
+                      </Button>
+                    )}
+                    {ins.action && (canRequestAgent || canRunLocally) && (
+                      <Button variant="link" onClick={ins.action.onClick}>
+                        {ins.action.label}
+                      </Button>
+                    )}
                     {ins.secondaryAction && (
-                      <button
-                        onClick={ins.secondaryAction.onClick}
-                        className="text-xs font-semibold text-fg-3 transition hover:text-fg"
-                      >
+                      <Button variant="link" onClick={ins.secondaryAction.onClick}>
                         {ins.secondaryAction.label}
-                      </button>
-                    )}
-                  </div>
-                )}
-                {(canRunLocally || canRequestAgent || canRunSecondaryLocally) && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {canRequestAgent && (
-                      <button
-                        disabled={busy}
-                        onClick={() => void requestAgentApply(ins)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
-                      >
-                        <Bot className="h-3.5 w-3.5" />
-                        Deixar o agente fazer
-                      </button>
-                    )}
-                    {canRunLocally && (
-                      <button
-                        disabled={busy}
-                        onClick={() => void applyLocally(ins)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-ok/40 bg-ok/10 px-3 py-1.5 text-xs font-semibold text-ok-soft transition hover:bg-ok/15 disabled:opacity-50"
-                      >
-                        <User className="h-3.5 w-3.5" />
-                        {ins.actionLabel ?? "Fazer eu mesmo"}
-                      </button>
+                      </Button>
                     )}
                     {canRunSecondaryLocally && (
-                      <button
-                        disabled={secondaryBusy}
-                        onClick={() => void applySecondaryLocally(ins)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs font-semibold text-danger-soft transition hover:bg-danger/15 disabled:opacity-50"
-                      >
-                        {ins.secondaryActionLabel ?? "Desativar"}
-                      </button>
+                      <Button size="sm" variant="outline" disabled={secondaryBusy} onClick={() => void applySecondaryLocally(ins)}>
+                        {ins.secondaryActionLabel ?? t("insightsD3.disable")}
+                      </Button>
                     )}
+                    <button
+                      type="button"
+                      onClick={() => dismissInsight(ins)}
+                      className="ml-auto text-sm text-fg-3 transition-colors hover:text-fg"
+                    >
+                      {t("insightsD3.notNow")}
+                    </button>
                   </div>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      )}
+                </Card>
+              );
+            })}
+            {(hiddenCount > 0 || showAll) && visibleInsights.length > MAX_VISIBLE && (
+              <Button variant="link" className="self-start" onClick={() => setShowAll((value) => !value)}>
+                {showAll ? t("insightsD3.showLess") : t("insightsD3.showAll", { count: hiddenCount })}
+              </Button>
+            )}
+          </>
+        )}
+      </div>
+
+      <aside className="flex flex-col gap-5">
+        <Card
+          label={
+            healthWarnings.length > 0
+              ? t("insightsD3.healthLabelCount", { count: healthWarnings.length })
+              : t("insightsD3.healthLabel")
+          }
+          className={healthWarnings.length > 0 ? "border-warn/40" : undefined}
+        >
+          <p className="text-sm text-fg-2">
+            {healthWarnings.length > 0
+              ? healthWarnings.map((item) => t(`mypc.health.items.${item.titleKey}`, item.titleParams)).join(" · ")
+              : t("insightsD3.healthOk")}
+          </p>
+          <p className="mt-1 text-xs text-fg-3">{t("insightsD3.healthNote")}</p>
+          {onOpenWindowsHealth && (
+            <Button size="sm" variant="link" className="mt-3" onClick={onOpenWindowsHealth}>
+              {t("insightsD3.healthOpen")}
+              <ArrowRight />
+            </Button>
+          )}
+        </Card>
+
+        <Card label={t("insightsD3.howLabel")}>
+          <ul className="flex list-disc flex-col gap-1.5 pl-4 text-sm text-fg-2">
+            <li>{t("insightsD3.how.max")}</li>
+            <li>{t("insightsD3.how.notNow")}</li>
+            <li>{t("insightsD3.how.nothingAlone")}</li>
+            <li>{t("insightsD3.how.history")}</li>
+          </ul>
+        </Card>
+
+        {silencedCount > 0 && (
+          <Button
+            variant="link"
+            className="self-start"
+            onClick={() => {
+              setDismissed({});
+              try {
+                localStorage.removeItem(DISMISS_STORAGE_KEY);
+              } catch {
+                // Non-critical preference persistence.
+              }
+            }}
+          >
+            {t("insightsD3.silenced", { count: silencedCount })}
+          </Button>
+        )}
+      </aside>
     </div>
   );
 }

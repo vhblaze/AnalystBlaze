@@ -1,0 +1,675 @@
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { ExternalLink, LogOut, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Segmented } from "@/components/ui/segmented";
+import { StatusPill } from "@/components/ui/status-pill";
+import { SummaryRow } from "@/components/ui/summary-row";
+import { Switch } from "@/components/ui/switch";
+import { toast } from "@/hooks/use-toast";
+import { useTelemetry } from "@/hooks/useTelemetry";
+import { useTheme, type Theme } from "@/hooks/useTheme";
+import { useUpdater } from "@/hooks/useUpdater";
+import type { User } from "@/hooks/useAuth";
+import { localeLabels, type Locale, useI18n } from "@/i18n";
+import { formatAgo, formatMinutes } from "@/lib/format";
+import type { AgentStatus, LocalAiPolicy, UpdateStatus } from "@/services/tauri/agent";
+import { getTelemetryQueueSize, isTelemetryEnabled, setTelemetryEnabled } from "@/services/telemetry";
+import {
+  automationPolicy,
+  saveAutomationPolicy,
+  useAutomationPolicy,
+  useWeeklyAutomationUsage,
+} from "@/features/automations/useAutomationPolicy";
+import { errorText } from "@/features/shared/agentResource";
+
+const ONBOARDING_KEY = "analystblaze.onboarding.done";
+const HIGH_CONTRAST_KEY = "analystblaze.accessibility.highContrast";
+const REDUCE_MOTION_KEY = "analystblaze.accessibility.reduceMotion";
+
+type SettingsProps = {
+  user: User | null;
+  status: AgentStatus | null;
+  syncingPlan: boolean;
+  onLogin: () => Promise<void>;
+  onLogout: () => Promise<void>;
+  onOpenAccountSettings: () => Promise<void>;
+  onOpenBilling: () => Promise<void>;
+  onSyncPlan: () => Promise<unknown>;
+  onOpenHistory?: () => void;
+  /** Automações e componente de sistema agora ficam em Controles. */
+  onOpenControls?: () => void;
+};
+
+function readFlag(key: string): boolean {
+  try {
+    return localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeFlag(key: string, value: boolean) {
+  try {
+    localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    // Preferência local: melhor esforço.
+  }
+}
+
+/**
+ * Configurações D3 (board Tela-Configuracoes): só preferências do app.
+ * O componente de sistema e as automações moram em Controles (doc 13 / 15 §6);
+ * aqui fica só a linha que leva até lá.
+ */
+export function Settings({
+  user,
+  status,
+  syncingPlan,
+  onLogin,
+  onLogout,
+  onOpenAccountSettings,
+  onOpenBilling,
+  onSyncPlan,
+  onOpenHistory,
+  onOpenControls,
+}: SettingsProps) {
+  const { t } = useI18n();
+  const track = useTelemetry("settings");
+  const [onboardingDone, setOnboardingDone] = useState(() => readFlag(ONBOARDING_KEY));
+
+  const finishOnboarding = () => {
+    setOnboardingDone(true);
+    writeFlag(ONBOARDING_KEY, true);
+    track("onboarding_dismissed");
+  };
+
+  return (
+    <div className="flex flex-col gap-5">
+      <h2 className="sr-only">{t("settingsD3.title")}</h2>
+
+      {!onboardingDone && (
+        <Card label={t("settingsD3.onboarding.label")} role="region" aria-label={t("settingsD3.onboarding.label")}>
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <div className="text-[15px] font-semibold text-fg">{t("settingsD3.onboarding.title")}</div>
+              <p className="mt-0.5 max-w-3xl text-[13px] leading-snug text-fg-3">{t("settingsD3.onboarding.body")}</p>
+            </div>
+            <Button size="sm" variant="outline" onClick={finishOnboarding}>
+              {t("settingsD3.onboarding.done")}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
+        <div className="flex flex-col gap-5">
+          <AppearanceCard track={track} />
+          <PrivacyCard track={track} onOpenAccountSettings={onOpenAccountSettings} />
+          <MovedCard onOpenControls={onOpenControls} />
+        </div>
+        <div className="flex flex-col gap-5">
+          <NotificationsCard onOpenHistory={onOpenHistory} />
+          <AccountCard
+            user={user}
+            status={status}
+            syncingPlan={syncingPlan}
+            onLogin={onLogin}
+            onLogout={onLogout}
+            onOpenAccountSettings={onOpenAccountSettings}
+            onOpenBilling={onOpenBilling}
+            onSyncPlan={onSyncPlan}
+          />
+          <UpdatesCard track={track} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type Track = ReturnType<typeof useTelemetry>;
+
+function Foot({ children }: { children: ReactNode }) {
+  return <p className="mt-3 text-xs leading-relaxed text-fg-3">{children}</p>;
+}
+
+/* ------------------------------------------------------------------ */
+/* Aparência                                                           */
+/* ------------------------------------------------------------------ */
+
+function AppearanceCard({ track }: { track: Track }) {
+  const { t, locale, setLocale } = useI18n();
+  const { theme, setTheme } = useTheme();
+  const [highContrast, setHighContrast] = useState(() => readFlag(HIGH_CONTRAST_KEY));
+  const [reduceMotion, setReduceMotion] = useState(() => readFlag(REDUCE_MOTION_KEY));
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("ab-high-contrast", highContrast);
+    writeFlag(HIGH_CONTRAST_KEY, highContrast);
+  }, [highContrast]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("ab-reduce-motion", reduceMotion);
+    writeFlag(REDUCE_MOTION_KEY, reduceMotion);
+  }, [reduceMotion]);
+
+  return (
+    <Card label={t("settingsD3.appearance.label")}>
+      <SummaryRow
+        title={t("settingsD3.appearance.theme")}
+        summary={t("settingsD3.appearance.themeHint")}
+        action={
+          <Segmented<Theme>
+            aria-label={t("settingsD3.appearance.theme")}
+            value={theme}
+            onChange={(next) => {
+              setTheme(next);
+              track("theme_changed", { theme: next });
+            }}
+            options={[
+              { value: "dark", label: t("settingsD3.appearance.dark") },
+              { value: "light", label: t("settingsD3.appearance.light") },
+            ]}
+          />
+        }
+      />
+      <SummaryRow
+        title={t("settingsD3.appearance.language")}
+        action={
+          <Segmented<Locale>
+            aria-label={t("settingsD3.appearance.language")}
+            value={locale}
+            onChange={(next) => {
+              setLocale(next);
+              track("locale_changed", { locale: next });
+            }}
+            options={(Object.entries(localeLabels) as [Locale, string][]).map(([value, label]) => ({ value, label }))}
+          />
+        }
+      />
+      <SummaryRow
+        title={t("settingsD3.appearance.reduceMotion")}
+        summary={t("settingsD3.appearance.reduceMotionHint")}
+        action={
+          <Switch
+            aria-label={t("settingsD3.appearance.reduceMotion")}
+            checked={reduceMotion}
+            onCheckedChange={setReduceMotion}
+          />
+        }
+      />
+      <SummaryRow
+        title={t("settingsD3.appearance.highContrast")}
+        summary={t("settingsD3.appearance.highContrastHint")}
+        action={
+          <Switch
+            aria-label={t("settingsD3.appearance.highContrast")}
+            checked={highContrast}
+            onCheckedChange={setHighContrast}
+          />
+        }
+      />
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Notificações                                                        */
+/* ------------------------------------------------------------------ */
+
+type PermissionState = "granted" | "denied" | "default" | "unsupported";
+
+function readNotificationPermission(): PermissionState {
+  if (typeof Notification === "undefined") return "unsupported";
+  return Notification.permission;
+}
+
+function NotificationsCard({ onOpenHistory }: { onOpenHistory?: () => void }) {
+  const { t } = useI18n();
+  const [permission, setPermission] = useState<PermissionState>(readNotificationPermission);
+
+  // A permissão muda fora do app (o Windows pergunta na primeira vez).
+  useEffect(() => {
+    const id = window.setInterval(() => setPermission(readNotificationPermission()), 10_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  return (
+    <Card label={t("settingsD3.notifications.label")}>
+      <SummaryRow
+        title={t("settingsD3.notifications.critical")}
+        summary={t("settingsD3.notifications.criticalHint")}
+        state={
+          <StatusPill tone={permission === "granted" ? "ok" : permission === "denied" ? "warn" : "muted"}>
+            {t(`settingsD3.notifications.permission.${permission}`)}
+          </StatusPill>
+        }
+      />
+      <SummaryRow title={t("settingsD3.notifications.bell")} summary={t("settingsD3.notifications.bellHint")} />
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
+        <p className="text-xs leading-relaxed text-fg-3">{t("settingsD3.notifications.rule")}</p>
+        {onOpenHistory && (
+          <Button size="sm" variant="link" onClick={onOpenHistory}>
+            {t("settingsD3.notifications.openHistory")}
+          </Button>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Privacidade                                                         */
+/* ------------------------------------------------------------------ */
+
+const PRIVACY_DETAILS = ["sample", "actions", "programs", "local"] as const;
+
+function PrivacyCard({
+  track,
+  onOpenAccountSettings,
+}: {
+  track: Track;
+  onOpenAccountSettings: () => Promise<void>;
+}) {
+  const { t } = useI18n();
+  const [showAll, setShowAll] = useState(false);
+  const [uiTelemetry, setUiTelemetry] = useState(isTelemetryEnabled);
+  const [queueSize, setQueueSize] = useState(getTelemetryQueueSize);
+  const didMount = useRef(false);
+
+  useEffect(() => {
+    setTelemetryEnabled(uiTelemetry);
+    if (didMount.current) {
+      track("ui_telemetry_preference_changed", { enabled: uiTelemetry });
+      setQueueSize(getTelemetryQueueSize());
+    }
+    didMount.current = true;
+  }, [uiTelemetry, track]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => setQueueSize(getTelemetryQueueSize()), 10_000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  return (
+    <Card label={t("settingsD3.privacy.label")}>
+      <div className="border-b border-line-soft py-3.5">
+        <div className="flex items-start gap-4">
+          <div className="min-w-0 flex-1">
+            <div className="text-[15px] font-semibold leading-snug text-fg">{t("settingsD3.privacy.leaves")}</div>
+            <div className="mt-0.5 text-[13px] leading-snug text-fg-3">{t("settingsD3.privacy.leavesHint")}</div>
+          </div>
+          <Button size="sm" variant="link" aria-expanded={showAll} onClick={() => setShowAll((value) => !value)}>
+            {showAll ? t("settingsD3.privacy.hide") : t("settingsD3.privacy.seeAll")}
+          </Button>
+        </div>
+        {showAll && (
+          <ul className="mt-3 flex list-disc flex-col gap-1.5 pl-5 text-[13px] leading-snug text-fg-2">
+            {PRIVACY_DETAILS.map((key) => (
+              <li key={key}>{t(`settingsD3.privacy.details.${key}`)}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+      <SummaryRow
+        title={t("settingsD3.privacy.detailed")}
+        summary={t("settingsD3.privacy.detailedHint")}
+        state={<StatusPill>{t("settingsD3.privacy.alwaysOn")}</StatusPill>}
+      />
+      <SummaryRow
+        title={t("settingsD3.privacy.uiUsage")}
+        summary={
+          <>
+            {t("settingsD3.privacy.uiUsageHint")}
+            <span className="num mt-0.5 block text-xs text-fg-4">
+              {queueSize > 0
+                ? t("settingsD3.privacy.queue", { count: queueSize })
+                : t("settingsD3.privacy.queueEmpty")}
+            </span>
+          </>
+        }
+        action={
+          <Switch aria-label={t("settingsD3.privacy.uiUsage")} checked={uiTelemetry} onCheckedChange={setUiTelemetry} />
+        }
+      />
+      <SummaryRow
+        title={t("settingsD3.privacy.exportDelete")}
+        summary={t("settingsD3.privacy.exportDeleteHint")}
+        action={
+          <Button size="sm" variant="outline" onClick={() => void onOpenAccountSettings().catch(() => undefined)}>
+            <ExternalLink aria-hidden />
+            {t("settingsD3.privacy.openSite")}
+          </Button>
+        }
+      />
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Conta e PCs                                                         */
+/* ------------------------------------------------------------------ */
+
+function planLabel(plan: string) {
+  const normalized = plan.trim().toLowerCase();
+  if (!normalized || normalized === "free") return "Starter";
+  return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
+}
+
+function shortSession(id: string) {
+  return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
+}
+
+function AccountCard({
+  user,
+  status,
+  syncingPlan,
+  onLogin,
+  onLogout,
+  onOpenAccountSettings,
+  onOpenBilling,
+  onSyncPlan,
+}: Omit<SettingsProps, "onOpenHistory" | "onOpenControls">) {
+  const { t } = useI18n();
+  const weekly = useWeeklyAutomationUsage();
+
+  if (!user) {
+    return (
+      <Card label={t("settingsD3.account.label")}>
+        <EmptyState
+          title={t("settingsD3.account.loggedOutTitle")}
+          reason={t("settingsD3.account.loggedOutReason")}
+          action={
+            <Button variant="primary" onClick={() => void onLogin().catch(() => undefined)}>
+              {t("settingsD3.account.login")}
+              <ExternalLink aria-hidden />
+            </Button>
+          }
+        />
+        <Foot>{t("settingsD3.account.foot")}</Foot>
+      </Card>
+    );
+  }
+
+  const isReady = Boolean(status?.authenticated && status.registered);
+  const syncLine = status?.plan_sync_error
+    ? t("settingsD3.account.planSyncFailed", { category: status.plan_sync_error })
+    : status?.plan_synced_at
+      ? t("settingsD3.account.planSyncOk", { time: formatAgo(status.plan_synced_at) })
+      : t("settingsD3.account.planSyncNever");
+  const hasWeeklyLimit = weekly != null && weekly.limitSeconds != null;
+
+  return (
+    <Card label={t("settingsD3.account.label")}>
+      <SummaryRow
+        title={user.email || user.name}
+        summary={
+          <>
+            {user.email ? user.name : t("settingsD3.account.noEmail")}
+            <span className="num ml-2 text-xs text-fg-4">
+              {t("settingsD3.account.session", { id: shortSession(user.sessionId) })}
+            </span>
+          </>
+        }
+        state={
+          <StatusPill tone={isReady ? "ok" : "muted"}>
+            {isReady ? t("settingsD3.account.online") : t("settingsD3.account.pending")}
+          </StatusPill>
+        }
+      />
+      <SummaryRow
+        title={t("settingsD3.account.plan", { plan: planLabel(user.plan) })}
+        summary={
+          <>
+            <span className={status?.plan_sync_error ? "text-warn" : undefined}>{syncLine}</span>
+            {hasWeeklyLimit && (
+              <span className="num mt-0.5 block">
+                {weekly.limitReached
+                  ? t("settingsD3.account.weeklyUsedUp")
+                  : t("settingsD3.account.weeklyUsage", {
+                      used: formatMinutes(weekly.usedSeconds),
+                      limit: formatMinutes(weekly.limitSeconds),
+                    })}
+              </span>
+            )}
+          </>
+        }
+        action={
+          <Button size="sm" variant="outline" disabled={syncingPlan} onClick={() => void onSyncPlan().catch(() => undefined)}>
+            <RefreshCw className={syncingPlan ? "animate-spin" : undefined} aria-hidden />
+            {syncingPlan ? t("settingsD3.account.syncingPlan") : t("settingsD3.account.syncPlan")}
+          </Button>
+        }
+      />
+      <div className="flex flex-wrap items-center gap-2 pt-3.5">
+        <Button size="sm" variant="outline" onClick={() => void onOpenAccountSettings().catch(() => undefined)}>
+          <ExternalLink aria-hidden />
+          {t("settingsD3.account.manage")}
+        </Button>
+        {!user.hasPaidPlan && (
+          <Button size="sm" variant="outline" onClick={() => void onOpenBilling().catch(() => undefined)}>
+            <ExternalLink aria-hidden />
+            {t("settingsD3.account.becomePro")}
+          </Button>
+        )}
+        <Button size="sm" variant="outline" className="ml-auto" onClick={() => void onLogout().catch(() => undefined)}>
+          <LogOut aria-hidden />
+          {t("settingsD3.account.logout")}
+        </Button>
+      </div>
+      <Foot>{t("settingsD3.account.foot")}</Foot>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Atualizações (+ abrir com o Windows)                                */
+/* ------------------------------------------------------------------ */
+
+function updateSummary(status: UpdateStatus | null, t: ReturnType<typeof useI18n>["t"]) {
+  if (!status) return t("settingsD3.updates.neverChecked");
+  if (status.available) return t("settingsD3.updates.available", { version: status.version ?? "" });
+  if (status.lastCheckedAt) return t("settingsD3.updates.checkedAgo", { time: formatAgo(status.lastCheckedAt) });
+  return t("settingsD3.updates.upToDate");
+}
+
+function UpdatesCard({ track }: { track: Track }) {
+  const { t } = useI18n();
+  const updater = useUpdater();
+  const { policy } = useAutomationPolicy();
+  const [checking, setChecking] = useState(false);
+  const [popup, setPopup] = useState<"available" | "up_to_date" | null>(null);
+  const status = updater.status;
+  const version = status?.currentVersion?.trim();
+
+  const checkNow = () => {
+    setChecking(true);
+    updater
+      .check()
+      .then((next) => {
+        track("update_check_requested", { available: next.available });
+        setPopup(next.available ? "available" : "up_to_date");
+      })
+      .catch(() => undefined)
+      .finally(() => setChecking(false));
+  };
+
+  const savePolicy = (patch: Partial<LocalAiPolicy>) => {
+    if (!policy) return;
+    const previous = policy;
+    const next = { ...policy, ...patch };
+    automationPolicy.set(next);
+    saveAutomationPolicy(next)
+      .then((saved) => track("local_ai_policy_saved", { enabled: saved.enabled, maxRisk: saved.max_risk }))
+      .catch((error) => {
+        automationPolicy.set(previous);
+        toast({ title: t("settingsD3.updates.saveFailed"), description: errorText(error), variant: "destructive" });
+      });
+  };
+
+  const loadingReason = policy ? null : t("settingsD3.updates.policyLoading");
+
+  return (
+    <Card
+      label={t("settingsD3.updates.label")}
+      aside={status?.available ? <StatusPill tone="ok">{t("settingsD3.updates.availablePill")}</StatusPill> : null}
+    >
+      <SummaryRow
+        title={
+          version ? (
+            <span className="num">{t("settingsD3.updates.version", { version })}</span>
+          ) : (
+            <EmptyState
+              variant="inline"
+              title={t("settingsD3.updates.versionUnknownTitle")}
+              reason={t("settingsD3.updates.versionUnknownReason")}
+            />
+          )
+        }
+        summary={
+          <>
+            {updateSummary(status, t)}
+            {status?.lastError && (
+              <span className="mt-0.5 block text-warn">{t("settingsD3.updates.lastError", { error: status.lastError })}</span>
+            )}
+          </>
+        }
+        action={
+          <Button size="sm" variant="outline" disabled={checking} onClick={checkNow}>
+            <RefreshCw className={checking ? "animate-spin" : undefined} aria-hidden />
+            {checking ? t("settingsD3.updates.checking") : t("settingsD3.updates.check")}
+          </Button>
+        }
+      />
+      <SummaryRow
+        title={t("settingsD3.updates.autostart")}
+        summary={t("settingsD3.updates.autostartHint")}
+        action={
+          <Switch
+            aria-label={t("settingsD3.updates.autostart")}
+            title={loadingReason ?? undefined}
+            disabled={!policy}
+            checked={policy?.autostart_enabled ?? false}
+            onCheckedChange={(autostart_enabled) => savePolicy({ autostart_enabled })}
+          />
+        }
+      />
+      <SummaryRow
+        title={t("settingsD3.updates.startMinimized")}
+        summary={t("settingsD3.updates.startMinimizedHint")}
+        action={
+          <Switch
+            aria-label={t("settingsD3.updates.startMinimized")}
+            title={loadingReason ?? undefined}
+            disabled={!policy}
+            checked={policy?.start_minimized ?? false}
+            onCheckedChange={(start_minimized) => savePolicy({ start_minimized })}
+          />
+        }
+      />
+
+      {popup && (
+        <UpdateCheckPopup
+          result={popup}
+          status={status}
+          busy={Boolean(status?.installing)}
+          onUpdateNow={() => {
+            void updater.apply().catch(() => undefined);
+            setPopup(null);
+          }}
+          onClose={() => setPopup(null)}
+        />
+      )}
+    </Card>
+  );
+}
+
+/** O mesmo resultado de "Verificar" da tela antiga, com as peças D3. */
+function UpdateCheckPopup({
+  result,
+  status,
+  busy,
+  onUpdateNow,
+  onClose,
+}: {
+  result: "available" | "up_to_date";
+  status: UpdateStatus | null;
+  busy: boolean;
+  onUpdateNow: () => void;
+  onClose: () => void;
+}) {
+  const { t } = useI18n();
+  const mandatory = Boolean(status?.mandatory);
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-bg/75 px-4">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("update.title")}
+        className="w-full max-w-md rounded-card border border-line bg-surface p-6"
+      >
+        <div className="label-mono">{t("settingsD3.popup.eyebrow")}</div>
+        {result === "available" ? (
+          <>
+            <h2 className="mt-2 text-xl font-semibold text-fg">
+              {mandatory
+                ? t("update.availableTitleMandatory", { version: status?.version ?? "" })
+                : t("update.availableTitle", { version: status?.version ?? "" })}
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-fg-3">{status?.notes?.trim() || t("update.notesFallback")}</p>
+            {mandatory && <p className="mt-2 text-xs font-medium text-danger">{t("update.mandatoryNotice")}</p>}
+            <div className="mt-6 flex justify-end gap-2">
+              {!mandatory && (
+                <Button size="sm" variant="outline" onClick={onClose}>
+                  {t("update.later")}
+                </Button>
+              )}
+              <Button size="sm" variant="outline" disabled={busy} onClick={onUpdateNow}>
+                {busy ? t("update.installing") : t("update.updateNow")}
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2 className="mt-2 text-xl font-semibold text-fg">{t("update.upToDate")}</h2>
+            <p className="num mt-2 text-sm leading-relaxed text-fg-3">
+              {t("settingsD3.popup.upToDateBody", {
+                version: status?.currentVersion?.trim() || t("settingsD3.popup.versionUnknown"),
+              })}
+            </p>
+            <div className="mt-6 flex justify-end">
+              <Button size="sm" variant="outline" onClick={onClose}>
+                {t("common.close")}
+              </Button>
+            </div>
+          </>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Linha que leva a Controles                                          */
+/* ------------------------------------------------------------------ */
+
+function MovedCard({ onOpenControls }: { onOpenControls?: () => void }) {
+  const { t } = useI18n();
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-[15px] font-semibold leading-snug text-fg">{t("settingsD3.moved.title")}</div>
+          <div className="mt-0.5 text-[13px] leading-snug text-fg-3">{t("settingsD3.moved.body")}</div>
+        </div>
+        {onOpenControls && (
+          <Button size="sm" variant="link" onClick={onOpenControls}>
+            {t("settingsD3.moved.action")}
+          </Button>
+        )}
+      </div>
+    </Card>
+  );
+}

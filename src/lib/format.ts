@@ -160,6 +160,7 @@ export function shortCpuName(raw: string | null | undefined, empty = MISSING) {
   if (!raw || !raw.trim()) return MISSING;
   return raw
     .trim()
+    .replace(/^\d+(st|nd|rd|th)\s+Gen\s+/i, "")
     .replace(/^AMD\s+/i, "")
     .replace(/^Intel\(R\)\s*Core\(TM\)\s*/i, "")
     .replace(/^(Genuine\s+)?Intel\(R\)\s*/i, "")
@@ -179,6 +180,8 @@ export function shortGpuName(raw: string | null | undefined, empty = MISSING) {
     .replace(/^NVIDIA\s+/i, "")
     .replace(/^AMD\s+Radeon\s+/i, "")
     .replace(/^Radeon\s+/i, "")
+    .replace(/\s+(Laptop|Notebook)\s+GPU$/i, "")
+    .replace(/\s+GPU$/i, "")
     .replace(/\s{2,}/g, " ")
     .trim() || raw.trim();
 }

@@ -16,12 +16,12 @@ import type { RequestConfirmation, RunConfirmed } from "./useConfirmation";
 import type { ControlsActions } from "@/components/screens/controls/actions";
 
 const Dashboard = lazy(() => import("@/components/screens/dashboard/Dashboard").then((module) => ({ default: module.Dashboard })));
-const Telemetry = lazy(() => import("@/components/analystblaze/views/Telemetry").then((module) => ({ default: module.Telemetry })));
+const Telemetry = lazy(() => import("@/components/screens/mypc/Performance").then((module) => ({ default: module.Performance })));
 const Insights = lazy(() => import("@/components/analystblaze/views/Insights").then((module) => ({ default: module.Insights })));
 const Controls = lazy(() => import("@/components/screens/controls/Controls").then((module) => ({ default: module.Controls })));
-const DiskExplorer = lazy(() => import("@/components/analystblaze/views/DiskExplorer").then((module) => ({ default: module.DiskExplorer })));
-const Network = lazy(() => import("@/components/analystblaze/views/Network").then((module) => ({ default: module.Network })));
-const Settings = lazy(() => import("@/components/analystblaze/views/Settings").then((module) => ({ default: module.Settings })));
+const DiskExplorer = lazy(() => import("@/components/screens/mypc/Disk").then((module) => ({ default: module.Disk })));
+const Network = lazy(() => import("@/components/screens/mypc/Network").then((module) => ({ default: module.Network })));
+const Settings = lazy(() => import("@/components/screens/settings/Settings").then((module) => ({ default: module.Settings })));
 
 function ViewFallback() {
   return <div className="h-44 animate-pulse rounded-card border border-line bg-surface" />;
@@ -543,6 +543,7 @@ export function ScreenOutlet({
             onRequestAgentApplyInsight={auth.requestAgentApplyInsight}
             shadowConsentNeeded={shadowConsentNeeded}
             onResolveShadowConsent={resolveShadowConsent}
+            onOpenWindowsHealth={() => navigate(route("mypc", "health"))}
           />
         </Suspense>
       );
@@ -596,6 +597,7 @@ export function ScreenOutlet({
                 autoScan={focusDiskUsage}
                 onAutoScanHandled={() => setFocusDiskUsage(false)}
                 onDiskNearFullDetected={setDiskNearFullInfo}
+                onOpenCleanup={() => navigate(route("controls", "cleanup"))}
               />
             ) : tab === "network" ? (
               <Network
@@ -684,6 +686,21 @@ export function ScreenOutlet({
               />
             ) : (
               <WindowsHealth
+                telemetry={telemetry}
+                shadowConsentNeeded={shadowConsentNeeded}
+                onResolveShadowConsent={resolveShadowConsent}
+                onRestartWindows={() =>
+                  runConfirmed(
+                    {
+                      title: t("confirm.restartWindows.title"),
+                      description: t("confirm.restartWindows.body"),
+                      risk: "sensivel",
+                      snapshot: false,
+                    },
+                    auth.restartWindowsNow,
+                  )
+                }
+                onRestartDevice={(deviceId) => applyInsightActionLocally("RESTART_PNP_DEVICE", { deviceId })}
                 onStartSfc={controlsActions.onStartSystemFileCheck}
                 onStartDism={controlsActions.onStartDismRestoreHealth}
                 onOpenInsights={() => handleViewChange("insights")}
