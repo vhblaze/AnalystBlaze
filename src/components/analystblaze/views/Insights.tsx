@@ -5,7 +5,6 @@ import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
   checkDiskOptimizationInsight,
-  getNetworkDiagnostics,
   isTauriRuntime,
   openAgentInsights,
   openWindowsSecurity,
@@ -13,6 +12,8 @@ import {
   type DiskOptimizationInsight,
   type NetworkDiagnostics,
 } from "@/services/tauri/agent";
+import { formatBytes } from "@/lib/format";
+import { networkDiagnostics as networkDiagnosticsResource, useNetwork } from "@/features/network/useNetwork";
 
 const DISK_USAGE_WARNING_THRESHOLD_PERCENT = 80;
 const NETWORK_LAG_FLAGS = ["packet_loss_detected", "jitter_high", "latency_high"] as const;
@@ -30,17 +31,6 @@ const GAME_SERVER_LATENCY_RATIO = 2;
  * gate. */
 const DISK_NEAR_FULL_BASE_PERCENT = 90;
 
-function formatBytesShort(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value >= 100 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
-}
 const DISMISS_STORAGE_KEY = "analystblaze.dismissedInsights";
 const DISMISS_TTL_MS = 24 * 60 * 60 * 1000;
 /** The server only ever pairs a card with an actionName from its own small
@@ -301,7 +291,8 @@ export function Insights({
   // Only fetched here, on demand, for the local VPN+latency insight below -
   // the passive telemetry sample doesn't probe the adapter/VPN detection
   // (kept out of the 2s telemetry loop deliberately, see collect_network_sample).
-  const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(null);
+  // Mesma leitura que Meu PC › Rede usa (features/network).
+  const networkDiagnostics = useNetwork({ auto: false }).diagnostics;
   // Same independent-fetch pattern as networkDiagnostics above, not shared
   // state with DiskExplorer (which fetches this too, for its own card) -
   // cheap enough (a couple of unelevated PowerShell calls) that duplicating
@@ -531,7 +522,7 @@ export function Insights({
     if (confidence < INSIGHT_CONFIDENCE_THRESHOLD) return null;
 
     const offendersText = info.topOffenders.length > 0
-      ? info.topOffenders.map((item) => `${item.label} (${formatBytesShort(item.sizeBytes)})`).join(", ")
+      ? info.topOffenders.map((item) => `${item.label} (${formatBytes(item.sizeBytes)})`).join(", ")
       : "não foi possível identificar os maiores itens agora";
 
     return {
@@ -977,9 +968,7 @@ export function Insights({
       // Best-effort, independent of the server fetch below - a failure here
       // just means the local VPN+latency insight stays silent, not that the
       // whole insights screen errors out.
-      getNetworkDiagnostics()
-        .then(setNetworkDiagnostics)
-        .catch(() => undefined);
+      networkDiagnosticsResource.refresh().catch(() => undefined);
       checkDiskOptimizationInsight()
         .then(setDiskOptimizationInsightData)
         .catch(() => undefined);

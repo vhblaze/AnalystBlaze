@@ -6,23 +6,12 @@ import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
   addProtectedApp,
-  getLocalAiPolicy,
-  getAuditLog,
   getActiveFocusSession,
-  getEnergyDiagnostics,
-  getActiveGameModeSession,
   getDismRestoreHealthStatus,
-  getOptimizationSnapshots,
-  getPrivilegedHelperStatus,
   getProtectedApps,
   getSystemFileCheckStatus,
-  getWeeklyGameModeUsage,
   getWindowsInventory,
   isTauriRuntime,
-  listenToGameModeUsage,
-  runPerformanceScan,
-  scanCleanupCategories,
-  scanStartupImpact,
   removeProtectedApp,
   type AuditEvent,
   type AgentStatus,
@@ -30,7 +19,6 @@ import {
   type EnergyDiagnostics,
   type FocusSession,
   type GameModeSession,
-  type GameModeUsage,
   type LocalAiPolicy,
   type OptimizationResult,
   type OptimizationSnapshot,
@@ -41,6 +29,15 @@ import {
   type SystemFileCheckStatus,
   type WindowsInventory,
 } from "@/services/tauri/agent";
+import { useHistory, auditLog, optimizationSnapshots } from "@/features/history/useHistory";
+import { useHelper, privilegedHelperStatus } from "@/features/helper/useHelper";
+import { useGameMode, activeGameModeSession as activeGameModeSessionResource } from "@/features/gamemode/useGameMode";
+import { useAutomationPolicy, automationPolicy } from "@/features/automations/useAutomationPolicy";
+import { useEnergyDiagnostics, energyDiagnostics as energyDiagnosticsResource } from "@/features/health/useEnergyDiagnostics";
+import { usePerformanceScan, performanceReport as performanceReportResource } from "@/features/performance/usePerformanceScan";
+import { useCleanup, cleanupCategories as cleanupCategoriesResource } from "@/features/cleanup/useCleanup";
+import { useStartup, startupImpact as startupImpactResource } from "@/features/startup/useStartup";
+import { formatBytes, formatDateTime, formatMhzRange, formatMinutes, formatScore, formatSignedPercent, MISSING } from "@/lib/format";
 
 export function LocalControls({
   status,
@@ -93,19 +90,30 @@ export function LocalControls({
   const track = useTelemetry("local_controls");
   const [inventory, setInventory] = useState<WindowsInventory>({ startup_apps: [], services: [] });
   const [inventoryBusy, setInventoryBusy] = useState(false);
-  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
-  const [snapshots, setSnapshots] = useState<OptimizationSnapshot[]>([]);
+  const history = useHistory({ auto: false });
+  const auditEvents = history.audit;
+  const setAuditEvents = (value: AuditEvent[]) => auditLog.set(value);
+  const snapshots = history.snapshots;
+  const setSnapshots = (value: OptimizationSnapshot[]) => optimizationSnapshots.set(value);
   const [protectedApps, setProtectedApps] = useState<ProtectedApp[]>([]);
   const [protectedInput, setProtectedInput] = useState("");
-  const [helperStatus, setHelperStatus] = useState<PrivilegedHelperStatus | null>(null);
-  const [activeGameModeSession, setActiveGameModeSession] = useState<GameModeSession | null>(null);
-  const [gameModeUsage, setGameModeUsage] = useState<GameModeUsage | null>(null);
+  const helperStatus = useHelper({ auto: false }).status;
+  const setHelperStatus = (value: PrivilegedHelperStatus | null) => privilegedHelperStatus.set(value ?? undefined);
+  const gameMode = useGameMode({ trackUsage: !canUsePaidGameMode(status) });
+  const activeGameModeSession = gameMode.session;
+  const setActiveGameModeSession = (value: GameModeSession | null) => activeGameModeSessionResource.set(value);
+  const gameModeUsage = gameMode.usage;
   const [activeFocusSession, setActiveFocusSession] = useState<FocusSession | null>(status?.focus_session ?? null);
-  const [localAiPolicy, setLocalAiPolicy] = useState<LocalAiPolicy | null>(null);
-  const [energyDiagnostics, setEnergyDiagnostics] = useState<EnergyDiagnostics | null>(null);
-  const [performanceReport, setPerformanceReport] = useState<PerformanceReport | null>(null);
-  const [cleanupCategories, setCleanupCategories] = useState<CleanupCategory[]>([]);
-  const [startupImpact, setStartupImpact] = useState<StartupImpact[]>([]);
+  const localAiPolicy = useAutomationPolicy({ auto: false }).policy;
+  const setLocalAiPolicy = (value: LocalAiPolicy | null) => automationPolicy.set(value ?? undefined);
+  const energyDiagnostics = useEnergyDiagnostics({ auto: false }).energy;
+  const setEnergyDiagnostics = (value: EnergyDiagnostics | null) => energyDiagnosticsResource.set(value ?? undefined);
+  const performanceReport = usePerformanceScan({ auto: false }).report;
+  const setPerformanceReport = (value: PerformanceReport | null) => performanceReportResource.set(value ?? undefined);
+  const cleanupCategories = useCleanup({ auto: false }).categories;
+  const setCleanupCategories = (value: CleanupCategory[]) => cleanupCategoriesResource.set(value);
+  const startupImpact = useStartup({ auto: false }).apps;
+  const setStartupImpact = (value: StartupImpact[]) => startupImpactResource.set(value);
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [performanceBusy, setPerformanceBusy] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
@@ -158,19 +166,6 @@ export function LocalControls({
     setActiveFocusSession(status?.focus_session ?? null);
   }, [status?.focus_session]);
 
-  useEffect(() => {
-    if (paidGameModeAllowed) {
-      setGameModeUsage(null);
-      return;
-    }
-    getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
-    let dispose: (() => void) | undefined;
-    listenToGameModeUsage(setGameModeUsage).then((unlisten) => {
-      dispose = unlisten;
-    });
-    return () => dispose?.();
-  }, [paidGameModeAllowed]);
-
   const refreshWindowsInventory = async () => {
     setInventoryBusy(true);
     setInventoryError(null);
@@ -189,14 +184,14 @@ export function LocalControls({
     setHistoryError(null);
     try {
       const [nextAudit, nextSnapshots, nextProtected, nextHelper, nextGameModeSession, nextFocusSession] = await Promise.all([
-        getAuditLog(120),
-        getOptimizationSnapshots(120),
+        auditLog.refresh(),
+        optimizationSnapshots.refresh(),
         getProtectedApps(),
-        getPrivilegedHelperStatus(),
-        getActiveGameModeSession(),
+        privilegedHelperStatus.refresh(),
+        activeGameModeSessionResource.refresh(),
         getActiveFocusSession(),
       ]);
-      const nextPolicy = await getLocalAiPolicy();
+      const nextPolicy = await automationPolicy.refresh();
       setAuditEvents(nextAudit);
       setSnapshots(nextSnapshots);
       setProtectedApps(nextProtected);
@@ -221,7 +216,7 @@ export function LocalControls({
     setDiagnosticsBusy(true);
     setDiagnosticsError(null);
     try {
-      setEnergyDiagnostics(await getEnergyDiagnostics());
+      setEnergyDiagnostics(await energyDiagnosticsResource.refresh());
       track("energy_refreshed");
     } catch (error) {
       setEnergyDiagnostics(null);
@@ -236,9 +231,9 @@ export function LocalControls({
     setPerformanceError(null);
     try {
       const [report, categories, startup] = await Promise.all([
-        runPerformanceScan(mode),
-        scanCleanupCategories(),
-        scanStartupImpact(),
+        performanceReportResource.refresh(mode),
+        cleanupCategoriesResource.refresh(),
+        startupImpactResource.refresh(),
       ]);
       setPerformanceReport(report);
       setCleanupCategories(categories);
@@ -441,7 +436,7 @@ export function LocalControls({
   const activateGameMode = async () => {
     await runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.");
     if (!paidGameModeAllowed) {
-      getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
+      await gameMode.refreshUsage().catch(() => undefined);
     }
   };
 
@@ -514,7 +509,7 @@ export function LocalControls({
                 <span className={`text-xs ${gameModeUsage.limitReached ? "text-warn" : "text-fg-4"}`}>
                   {gameModeUsage.limitReached
                     ? "Limite semanal atingido. Volta na próxima semana."
-                    : `${formatMinutesLabel(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
+                    : `${formatMinutes(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
                 </span>
               )}
             </div>
@@ -556,7 +551,7 @@ export function LocalControls({
 
         {performanceError && <Notice tone="danger" message={performanceError} />}
         <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <SummaryTile label="Score atual" value={performanceReport ? `${Math.round(performanceReport.overallScore)}/100` : "--"} detail={performanceReport?.bottlenecks[0]?.label ?? "Sem scan recente"} />
+          <SummaryTile label="Score atual" value={performanceReport ? `${Math.round(performanceReport.overallScore)}/100` : MISSING} detail={performanceReport?.bottlenecks[0]?.label ?? "Sem scan recente"} />
           <SummaryTile label="Resultado medido" value={formatMeasuredChange(performanceReport)} detail="Comparado ao baseline" />
           <SummaryTile label="Perfil" value={activeProfileLabel} detail={gameModeTargetLabel} />
           <SummaryTile label="Automacao" value={autoGameModeLabel} detail={autoGameModePlanAllowed ? "Pro/Family" : "Starter manual"} />
@@ -624,9 +619,9 @@ export function LocalControls({
             icon={<Gauge className="h-4 w-4 text-accent" />}
             title="Score medido"
             rows={[
-              ["Atual", performanceReport ? `${Math.round(performanceReport.overallScore)}/100` : "--"],
+              ["Atual", performanceReport ? `${Math.round(performanceReport.overallScore)}/100` : MISSING],
               ["Mudanca", formatMeasuredChange(performanceReport)],
-              ["Modo", performanceReport?.mode ?? "--"],
+              ["Modo", performanceReport?.mode ?? MISSING],
               ["Jogo", performanceReport?.metrics.gameDetected ? performanceReport.metrics.gameProcess ?? "detectado" : "não detectado"],
             ]}
             footer={performanceReport?.bottlenecks[0]?.label ?? "Rode um baseline para medir responsividade local."}
@@ -746,9 +741,9 @@ export function LocalControls({
           rows={[
             ["Plano ativo", energyPlanLabel(energyDiagnostics?.active_scheme_alias, energyDiagnostics?.active_scheme_name)],
             ["Fonte", powerSourceLabel(energyDiagnostics?.power_source)],
-            ["Bateria", energyDiagnostics?.battery_percent != null ? `${Math.round(energyDiagnostics.battery_percent)}% ${energyDiagnostics.battery_status ?? ""}` : "--"],
-            ["Economia", energyDiagnostics?.battery_saver_on == null ? "--" : energyDiagnostics.battery_saver_on ? "ativa" : "inativa"],
-            ["Clock CPU", formatClock(energyDiagnostics?.cpu_current_clock_mhz, energyDiagnostics?.cpu_max_clock_mhz)],
+            ["Bateria", energyDiagnostics?.battery_percent != null ? `${Math.round(energyDiagnostics.battery_percent)}% ${energyDiagnostics.battery_status ?? ""}` : MISSING],
+            ["Economia", energyDiagnostics?.battery_saver_on == null ? MISSING : energyDiagnostics.battery_saver_on ? "ativa" : "inativa"],
+            ["Clock CPU", formatMhzRange(energyDiagnostics?.cpu_current_clock_mhz, energyDiagnostics?.cpu_max_clock_mhz)],
             ["Recomendado", energyPlanLabel(energyDiagnostics?.recommended_plan, null)],
           ]}
           footer={energyDiagnostics?.recommendations?.join(" / ") ?? "Aguardando leitura real do Windows."}
@@ -1242,52 +1237,33 @@ function errorMessage(error: unknown) {
   return String(error);
 }
 
-function formatMinutesLabel(seconds: number) {
-  const minutes = Math.max(0, Math.round(seconds / 60));
-  return `${minutes} min`;
-}
 
-function formatClock(current?: number | null, max?: number | null) {
-  if (current == null && max == null) return "--";
-  if (current != null && max != null) return `${Math.round(current)} / ${Math.round(max)} MHz`;
-  return `${Math.round(current ?? max ?? 0)} MHz`;
-}
 
-function formatScore(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return "--";
-  return `${Math.round(value)}/100`;
-}
 
 function formatMeasuredChange(report?: PerformanceReport | null) {
   if (!report || report.previousScore == null || report.scoreDeltaPercent == null || !Number.isFinite(report.scoreDeltaPercent)) {
-    return "--";
+    return MISSING;
   }
   const change = report.performanceChange;
   if (change === "stable") return "estavel";
-  if (change === "regressed") return `${report.scoreDeltaPercent.toFixed(1)}% queda`;
+  if (change === "regressed") return `${formatSignedPercent(report.scoreDeltaPercent)} queda`;
   const gain = report.measuredGainPercent ?? Math.max(report.scoreDeltaPercent, 0);
-  if (!Number.isFinite(gain) || gain <= 0) return "0.0%";
-  return `+${gain.toFixed(1)}%`;
+  if (!Number.isFinite(gain) || gain <= 0) return formatSignedPercent(0);
+  return formatSignedPercent(gain);
 }
 
-function formatBytes(bytes?: number | null) {
-  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return "0 MB";
-  const mb = bytes / 1024 / 1024;
-  if (mb < 1024) return `${Math.round(mb)} MB`;
-  return `${(mb / 1024).toFixed(1)} GB`;
-}
 
 function powerSourceLabel(value?: string | null) {
   if (value === "ac") return "tomada";
   if (value === "battery") return "bateria";
-  return value ?? "--";
+  return value ?? MISSING;
 }
 
 function energyPlanLabel(alias?: string | null, fallback?: string | null) {
   if (alias === "high_performance") return "alto desempenho";
   if (alias === "balanced") return "equilibrado";
   if (alias === "power_saver") return "economia";
-  return fallback ?? "--";
+  return fallback ?? MISSING;
 }
 
 function ActionList({
@@ -1435,7 +1411,7 @@ function HistoryPanel({
                   <div className="truncate text-sm font-medium text-fg">{row.title}</div>
                   <div className="mt-0.5 line-clamp-2 text-xs text-fg-4">{row.detail}</div>
                 </div>
-                <time className="shrink-0 font-mono text-[10px] text-fg-4">{formatEventTime(row.time)}</time>
+                <time className="shrink-0 font-mono text-[10px] text-fg-4">{formatDateTime(row.time)}</time>
               </div>
             </article>
           ))}
@@ -1445,7 +1421,3 @@ function HistoryPanel({
   );
 }
 
-function formatEventTime(timestamp: number) {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return "--";
-  return new Date(timestamp * 1000).toLocaleString();
-}

@@ -9,8 +9,6 @@ import {
   cancelDeviceTransfer,
   confirmDeviceTransfer,
   getActiveAnnouncements,
-  getPrivilegedHelperStatus,
-  getTodaysAutomaticActions,
   installPrivilegedHelper,
   isTauriRuntime,
   listenToAnnouncements,
@@ -21,8 +19,11 @@ import {
   restartPrivilegedHelper,
   setShadowStorageConsent,
   type Announcement,
+  type PrivilegedHelperStatus,
   type RemoteCommandConfirmationRequest,
 } from "@/services/tauri/agent";
+import { privilegedHelperStatus } from "@/features/helper/useHelper";
+import { todaysAutomaticActions } from "@/features/history/useHistory";
 import type { RequestConfirmation } from "./useConfirmation";
 
 type Auth = ReturnType<typeof useAuth>;
@@ -239,7 +240,8 @@ export function useAgentPrompts({
       // storage unavailable - fall through and just show it
     }
     let cancelled = false;
-    getTodaysAutomaticActions()
+    todaysAutomaticActions
+      .refresh()
       .then((actions) => {
         if (cancelled || actions.length === 0) return;
         toast({
@@ -292,7 +294,7 @@ export function useAgentPrompts({
 
     type Kind = "ok" | "not_installed" | "stopped" | "outdated" | "broken" | "blocked";
 
-    const classify = (s: Awaited<ReturnType<typeof getPrivilegedHelperStatus>>): Kind => {
+    const classify = (s: PrivilegedHelperStatus): Kind => {
       if (s.available && !s.requiresUpdate) return "ok";
       if (!s.installed) return s.canRequestUac ? "not_installed" : "blocked";
       if (!s.running) return "stopped";
@@ -359,7 +361,7 @@ export function useAgentPrompts({
       if (disposed || helperCheckRef.current.running) return;
       helperCheckRef.current.running = true;
       try {
-        const status = await getPrivilegedHelperStatus();
+        const status = await privilegedHelperStatus.refresh();
         if (disposed) return;
         const kind = classify(status);
         if (kind === "ok") {
@@ -387,16 +389,17 @@ export function useAgentPrompts({
         toast({ title: t("helperHealth.workingTitle"), description: t("helperHealth.workingBody") });
         try {
           let next = await copy.fix();
+          if (next && typeof next === "object" && "installed" in next) privilegedHelperStatus.set(next as PrivilegedHelperStatus);
           if (disposed) return;
           // sc.exe start returns while the service is still START_PENDING,
           // so a status() taken right after can still read "not running" -
           // give it a moment and re-probe once before deciding it failed.
-          if (classify(next as Awaited<ReturnType<typeof getPrivilegedHelperStatus>>) !== "ok") {
+          if (classify(next as PrivilegedHelperStatus) !== "ok") {
             await new Promise((r) => setTimeout(r, 2500));
             if (disposed) return;
-            next = await getPrivilegedHelperStatus();
+            next = await privilegedHelperStatus.refresh();
           }
-          if (classify(next as Awaited<ReturnType<typeof getPrivilegedHelperStatus>>) === "ok") {
+          if (classify(next as PrivilegedHelperStatus) === "ok") {
             clearSnooze();
             toast({ title: t("helperHealth.doneTitle"), description: t("helperHealth.doneBody") });
           } else {

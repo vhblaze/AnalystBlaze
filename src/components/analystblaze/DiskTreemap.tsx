@@ -1,5 +1,6 @@
 import { Folder, Lock, Shield } from "lucide-react";
 import type { DiskTreeNodeSummary } from "@/services/tauri/agent";
+import { formatBytes } from "@/lib/format";
 
 /** Squarified treemap layout (Bruls, Huizing & van Wijk, 1999) - lays out
  * rectangles proportional to `value` while keeping aspect ratios close to
@@ -102,17 +103,6 @@ const DIR_FILL = "bg-accent-strong/80 hover:bg-accent-strong/90 border-accent/30
 const FILE_FILL = "bg-violet-strong/70 hover:bg-violet-strong/80 border-violet/30";
 const LOCKED_FILL = "bg-warn-strong/40 hover:bg-warn-strong/50 border-warn/30";
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value >= 100 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
-}
 
 export function DiskTreemap({
   items,

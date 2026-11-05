@@ -24,9 +24,7 @@ import {
   detectLiveModeStreamingApp,
   generateLiveModeIncidentReport,
   getLiveModeStatus,
-  getNetworkDiagnostics,
   getPendingNetworkTune,
-  getPrivilegedHelperStatus,
   isTauriRuntime,
   listAllNetworkAdapters,
   listNetworkAdapters,
@@ -52,6 +50,9 @@ import {
   type TracerouteHop,
   type TracerouteResult,
 } from "@/services/tauri/agent";
+import { networkDiagnostics as networkDiagnosticsResource, useNetwork } from "@/features/network/useNetwork";
+import { privilegedHelperStatus, useHelper } from "@/features/helper/useHelper";
+import { MISSING } from "@/lib/format";
 
 const LIVE_MODE_SAMPLE_HISTORY = 60;
 const STREAMING_APP_POLL_MS = 15_000;
@@ -122,9 +123,9 @@ export function Network({
   const track = useTelemetry("network");
   const runtimeAvailable = isTauriRuntime();
 
-  const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(
-    () => networkDiagnosticsCache?.diagnostics ?? null,
-  );
+  // Mesma leitura que Insights usa (features/network).
+  const networkDiagnostics = useNetwork({ auto: false }).diagnostics;
+  const setNetworkDiagnostics = (value: NetworkDiagnostics | null) => networkDiagnosticsResource.set(value ?? undefined);
   const [networkAdapters, setNetworkAdapters] = useState<NetworkAdapterSummary[]>(
     () => networkDiagnosticsCache?.adapters ?? [],
   );
@@ -136,9 +137,8 @@ export function Network({
   const [dnsAdapterName, setDnsAdapterName] = useState("");
   const [dnsPrimary, setDnsPrimary] = useState("");
   const [dnsSecondary, setDnsSecondary] = useState("");
-  const [helperStatus, setHelperStatus] = useState<PrivilegedHelperStatus | null>(
-    () => networkDiagnosticsCache?.helperStatus ?? null,
-  );
+  // Estado do componente de sistema: a mesma leitura do app inteiro (features/helper).
+  const helperStatus = useHelper({ auto: false }).status;
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
@@ -202,15 +202,13 @@ export function Network({
     setDiagnosticsError(null);
     try {
       const [nextNetwork, nextAdapters, nextAllAdapters, nextHelper] = await Promise.all([
-        getNetworkDiagnostics(),
+        networkDiagnosticsResource.refresh(),
         listNetworkAdapters(),
         listAllNetworkAdapters(),
-        getPrivilegedHelperStatus(),
+        privilegedHelperStatus.refresh(),
       ]);
-      setNetworkDiagnostics(nextNetwork);
       setNetworkAdapters(nextAdapters);
       setAllNetworkAdapters(nextAllAdapters);
-      setHelperStatus(nextHelper);
       networkDiagnosticsCache = {
         diagnostics: nextNetwork,
         adapters: nextAdapters,
@@ -687,7 +685,7 @@ export function Network({
   // data. Without this, a slow first gather (some users' network
   // diagnostics - gateway probing, adapter enumeration - can take real
   // time) rendered the hero/tabs immediately with every value stuck on
-  // "--", which read as a frozen/broken screen rather than "still
+  // MISSING, which read as a frozen/broken screen rather than "still
   // loading" since nothing on it was animated.
   const isInitialLoad = diagnosticsBusy && !networkDiagnostics;
 
@@ -752,12 +750,12 @@ export function Network({
         </div>
 
         <div className="relative mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <HeroStat label={t("dashboard.latency")} value={networkDiagnostics?.external_latency_ms != null ? `${Math.round(networkDiagnostics.external_latency_ms)} ms` : "--"} />
-          <HeroStat label={t("network.gateway")} value={networkDiagnostics?.gateway_latency_ms != null ? `${Math.round(networkDiagnostics.gateway_latency_ms)} ms` : "--"} />
-          <HeroStat label={t("network.adapter")} value={networkDiagnostics?.adapter_name ?? "--"} />
+          <HeroStat label={t("dashboard.latency")} value={networkDiagnostics?.external_latency_ms != null ? `${Math.round(networkDiagnostics.external_latency_ms)} ms` : MISSING} />
+          <HeroStat label={t("network.gateway")} value={networkDiagnostics?.gateway_latency_ms != null ? `${Math.round(networkDiagnostics.gateway_latency_ms)} ms` : MISSING} />
+          <HeroStat label={t("network.adapter")} value={networkDiagnostics?.adapter_name ?? MISSING} />
           <HeroStat
             label="Wi-Fi"
-            value={networkDiagnostics?.wifi_ssid ? `${Math.round(networkDiagnostics.wifi_signal_percent ?? 0)}%` : "--"}
+            value={networkDiagnostics?.wifi_ssid ? `${Math.round(networkDiagnostics.wifi_signal_percent ?? 0)}%` : MISSING}
           />
         </div>
       </div>
@@ -781,7 +779,7 @@ export function Network({
               </div>
               <p className="mt-0.5 text-xs text-fg-4">
                 {t("network.dnsSuggestionDesc", {
-                  previous: dnsSuggestion.previousLatencyMs != null ? `${Math.round(dnsSuggestion.previousLatencyMs)} ms` : "--",
+                  previous: dnsSuggestion.previousLatencyMs != null ? `${Math.round(dnsSuggestion.previousLatencyMs)} ms` : MISSING,
                   candidate: `${Math.round(dnsSuggestion.candidateLatencyMs)} ms`,
                 })}
               </p>
@@ -830,16 +828,16 @@ export function Network({
             <div className="flex flex-col gap-4">
               <div className="grid gap-2 sm:grid-cols-2">
                 {([
-                  ["Status", networkDiagnostics ? (networkDiagnostics.connected ? "online" : "offline") : "--"],
-                  ["Adaptador", networkDiagnostics?.adapter_name ?? "--"],
-                  ["Tipo", networkDiagnostics?.adapter_type ?? networkDiagnostics?.adapter_description ?? "--"],
-                  ["Link", networkDiagnostics?.link_speed ?? "--"],
-                  ["Wi-Fi", networkDiagnostics?.wifi_ssid ? `${networkDiagnostics.wifi_ssid}${networkDiagnostics.wifi_signal_percent != null ? ` - ${Math.round(networkDiagnostics.wifi_signal_percent)}%` : ""}` : "--"],
+                  ["Status", networkDiagnostics ? (networkDiagnostics.connected ? "online" : "offline") : MISSING],
+                  ["Adaptador", networkDiagnostics?.adapter_name ?? MISSING],
+                  ["Tipo", networkDiagnostics?.adapter_type ?? networkDiagnostics?.adapter_description ?? MISSING],
+                  ["Link", networkDiagnostics?.link_speed ?? MISSING],
+                  ["Wi-Fi", networkDiagnostics?.wifi_ssid ? `${networkDiagnostics.wifi_ssid}${networkDiagnostics.wifi_signal_percent != null ? ` - ${Math.round(networkDiagnostics.wifi_signal_percent)}%` : ""}` : MISSING],
                   [
                     t("network.gateway"),
                     networkDiagnostics?.gateway
                       ? `${networkDiagnostics.gateway}${networkDiagnostics.gateway_latency_ms != null ? ` - ${Math.round(networkDiagnostics.gateway_latency_ms)} ms` : ""}`
-                      : "--",
+                      : MISSING,
                   ],
                 ] as Array<[string, string]>).map(([label, value]) => (
                   <div key={label} className="rounded-lg border border-line bg-bg/50 p-3">
@@ -1028,7 +1026,7 @@ export function Network({
                           )}
                         </span>
                         <span className="w-16 shrink-0 text-right font-mono text-xs text-fg-3">
-                          {result.latencyMs == null ? "--" : `${Math.round(result.latencyMs)} ms`}
+                          {result.latencyMs == null ? MISSING : `${Math.round(result.latencyMs)} ms`}
                         </span>
                         {!result.isCurrent && (
                           <button
@@ -1666,7 +1664,7 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 }
 
 function formatLiveMetric(value: number | null | undefined, unit: "ms" | "%") {
-  if (value == null || !Number.isFinite(value)) return "--";
+  if (value == null || !Number.isFinite(value)) return MISSING;
   return `${Math.round(value)} ${unit}`;
 }
 

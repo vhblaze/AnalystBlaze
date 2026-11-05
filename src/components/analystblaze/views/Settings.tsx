@@ -14,14 +14,11 @@ import { useTheme } from "@/hooks/useTheme";
 import { canUseAutomaticGameMode, type User } from "@/hooks/useAuth";
 import { localeLabels, type Locale, useI18n } from "@/i18n";
 import {
-  getLocalAiPolicy,
-  getPrivilegedHelperStatus,
   getWeeklyAiUsage,
   installPrivilegedHelper,
   isTauriRuntime,
   listenToWeeklyAiUsage,
   restartPrivilegedHelper,
-  saveLocalAiPolicy,
   startPrivilegedHelper,
   stopPrivilegedHelper,
   testPrivilegedHelper,
@@ -33,6 +30,9 @@ import {
   type WeeklyAiUsage,
 } from "@/services/tauri/agent";
 import { getTelemetryQueueSize, isTelemetryEnabled, setTelemetryEnabled } from "@/services/telemetry";
+import { formatAgo, formatMinutes, MISSING } from "@/lib/format";
+import { privilegedHelperStatus, useHelper } from "@/features/helper/useHelper";
+import { automationPolicy, saveAutomationPolicy } from "@/features/automations/useAutomationPolicy";
 
 export function Settings({
   user,
@@ -73,15 +73,12 @@ export function Settings({
       .finally(() => setCheckingUpdate(false));
   };
   const runtimeAvailable = isTauriRuntime();
-  const [helperStatus, setHelperStatus] = useState<PrivilegedHelperStatus | null>(null);
+  // Estado do componente de sistema: a mesma leitura do app inteiro (features/helper).
+  const helperStatus = useHelper({ auto: runtimeAvailable }).status;
+  const setHelperStatus = (value: PrivilegedHelperStatus | null) => privilegedHelperStatus.set(value ?? undefined);
   const [helperBusy, setHelperBusy] = useState(false);
   const [helperMessage, setHelperMessage] = useState<string | null>(null);
   const [helperError, setHelperError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!runtimeAvailable) return;
-    getPrivilegedHelperStatus().then(setHelperStatus).catch(() => undefined);
-  }, [runtimeAvailable]);
 
   const helperStateLabel = !helperStatus
     ? t("settings.helperStateUnknown")
@@ -121,7 +118,7 @@ export function Settings({
     setHelperError(null);
     try {
       const handshake = await testPrivilegedHelper();
-      setHelperStatus(await getPrivilegedHelperStatus());
+      setHelperStatus(await privilegedHelperStatus.refresh());
       if (handshake.ok) {
         setHelperMessage(handshake.message);
       } else {
@@ -163,7 +160,8 @@ export function Settings({
   }, []);
 
   useEffect(() => {
-    getLocalAiPolicy()
+    automationPolicy
+      .refresh()
       .then((policy) => {
         setAiPolicy(policy);
         setAdaptive(policy.enabled);
@@ -208,7 +206,7 @@ export function Settings({
     const nextPolicy = { ...aiPolicy, ...patch };
     setAiPolicy(nextPolicy);
     setAdaptive(nextPolicy.enabled);
-    saveLocalAiPolicy(nextPolicy)
+    saveAutomationPolicy(nextPolicy)
       .then((saved) => {
         setAiPolicy(saved);
         setAdaptive(saved.enabled);
@@ -377,7 +375,7 @@ export function Settings({
             <Zap className="h-3 w-3" />
             {weeklyAiUsage.limitReached
               ? "Limite semanal de automacao atingido. Volta na próxima semana, ou assine um plano pago para automacao continua."
-              : `Automacao: ${formatMinutesLabel(weeklyAiUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito).`}
+              : `Automacao: ${formatMinutes(weeklyAiUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito).`}
           </div>
         )}
 
@@ -582,7 +580,7 @@ export function Settings({
               {t("settings.helperRunning")}: {helperStatus?.running ? t("common.yes") : t("common.no")}
             </span>
             <span className="rounded-lg border border-line bg-bg/50 px-3 py-2">
-              {t("settings.helperVersion")}: {helperStatus?.version ?? "--"}
+              {t("settings.helperVersion")}: {helperStatus?.version ?? MISSING}
             </span>
           </div>
 
@@ -681,7 +679,7 @@ export function Settings({
                   {status?.plan_sync_error
                     ? t("settings.planSyncFailed", { category: status.plan_sync_error })
                     : status?.plan_synced_at
-                      ? t("settings.planSyncOk", { time: formatSyncedAgo(status.plan_synced_at) })
+                      ? t("settings.planSyncOk", { time: formatAgo(status.plan_synced_at) })
                       : t("settings.planSyncNever")}
                 </span>
                 <button
@@ -759,21 +757,7 @@ function planLabel(plan: string) {
   return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
 }
 
-function formatMinutesLabel(seconds: number): string {
-  const minutes = Math.max(0, Math.round(seconds / 60));
-  return `${minutes} min`;
-}
 
-function formatSyncedAgo(unixSeconds: number): string {
-  const deltaSeconds = Math.max(0, Math.floor(Date.now() / 1000) - unixSeconds);
-  if (deltaSeconds < 60) return "poucos segundos";
-  const minutes = Math.floor(deltaSeconds / 60);
-  if (minutes < 60) return `${minutes} min`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} h`;
-  const days = Math.floor(hours / 24);
-  return `${days} d`;
-}
 
 function Row({
   label,
