@@ -6,23 +6,12 @@ import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
   addProtectedApp,
-  getLocalAiPolicy,
-  getAuditLog,
   getActiveFocusSession,
-  getEnergyDiagnostics,
-  getActiveGameModeSession,
   getDismRestoreHealthStatus,
-  getOptimizationSnapshots,
-  getPrivilegedHelperStatus,
   getProtectedApps,
   getSystemFileCheckStatus,
-  getWeeklyGameModeUsage,
   getWindowsInventory,
   isTauriRuntime,
-  listenToGameModeUsage,
-  runPerformanceScan,
-  scanCleanupCategories,
-  scanStartupImpact,
   removeProtectedApp,
   type AuditEvent,
   type AgentStatus,
@@ -30,7 +19,6 @@ import {
   type EnergyDiagnostics,
   type FocusSession,
   type GameModeSession,
-  type GameModeUsage,
   type LocalAiPolicy,
   type OptimizationResult,
   type OptimizationSnapshot,
@@ -41,6 +29,15 @@ import {
   type SystemFileCheckStatus,
   type WindowsInventory,
 } from "@/services/tauri/agent";
+import { useHistory, auditLog, optimizationSnapshots } from "@/features/history/useHistory";
+import { useHelper, privilegedHelperStatus } from "@/features/helper/useHelper";
+import { useGameMode, activeGameModeSession as activeGameModeSessionResource } from "@/features/gamemode/useGameMode";
+import { useAutomationPolicy, automationPolicy } from "@/features/automations/useAutomationPolicy";
+import { useEnergyDiagnostics, energyDiagnostics as energyDiagnosticsResource } from "@/features/health/useEnergyDiagnostics";
+import { usePerformanceScan, performanceReport as performanceReportResource } from "@/features/performance/usePerformanceScan";
+import { useCleanup, cleanupCategories as cleanupCategoriesResource } from "@/features/cleanup/useCleanup";
+import { useStartup, startupImpact as startupImpactResource } from "@/features/startup/useStartup";
+import { formatBytes, formatDateTime, formatMhzRange, formatMinutes, formatScore, formatSignedPercent, MISSING } from "@/lib/format";
 
 export function LocalControls({
   status,
@@ -93,19 +90,30 @@ export function LocalControls({
   const track = useTelemetry("local_controls");
   const [inventory, setInventory] = useState<WindowsInventory>({ startup_apps: [], services: [] });
   const [inventoryBusy, setInventoryBusy] = useState(false);
-  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
-  const [snapshots, setSnapshots] = useState<OptimizationSnapshot[]>([]);
+  const history = useHistory({ auto: false });
+  const auditEvents = history.audit;
+  const setAuditEvents = (value: AuditEvent[]) => auditLog.set(value);
+  const snapshots = history.snapshots;
+  const setSnapshots = (value: OptimizationSnapshot[]) => optimizationSnapshots.set(value);
   const [protectedApps, setProtectedApps] = useState<ProtectedApp[]>([]);
   const [protectedInput, setProtectedInput] = useState("");
-  const [helperStatus, setHelperStatus] = useState<PrivilegedHelperStatus | null>(null);
-  const [activeGameModeSession, setActiveGameModeSession] = useState<GameModeSession | null>(null);
-  const [gameModeUsage, setGameModeUsage] = useState<GameModeUsage | null>(null);
+  const helperStatus = useHelper({ auto: false }).status;
+  const setHelperStatus = (value: PrivilegedHelperStatus | null) => privilegedHelperStatus.set(value ?? undefined);
+  const gameMode = useGameMode({ trackUsage: !canUsePaidGameMode(status) });
+  const activeGameModeSession = gameMode.session;
+  const setActiveGameModeSession = (value: GameModeSession | null) => activeGameModeSessionResource.set(value);
+  const gameModeUsage = gameMode.usage;
   const [activeFocusSession, setActiveFocusSession] = useState<FocusSession | null>(status?.focus_session ?? null);
-  const [localAiPolicy, setLocalAiPolicy] = useState<LocalAiPolicy | null>(null);
-  const [energyDiagnostics, setEnergyDiagnostics] = useState<EnergyDiagnostics | null>(null);
-  const [performanceReport, setPerformanceReport] = useState<PerformanceReport | null>(null);
-  const [cleanupCategories, setCleanupCategories] = useState<CleanupCategory[]>([]);
-  const [startupImpact, setStartupImpact] = useState<StartupImpact[]>([]);
+  const localAiPolicy = useAutomationPolicy({ auto: false }).policy;
+  const setLocalAiPolicy = (value: LocalAiPolicy | null) => automationPolicy.set(value ?? undefined);
+  const energyDiagnostics = useEnergyDiagnostics({ auto: false }).energy;
+  const setEnergyDiagnostics = (value: EnergyDiagnostics | null) => energyDiagnosticsResource.set(value ?? undefined);
+  const performanceReport = usePerformanceScan({ auto: false }).report;
+  const setPerformanceReport = (value: PerformanceReport | null) => performanceReportResource.set(value ?? undefined);
+  const cleanupCategories = useCleanup({ auto: false }).categories;
+  const setCleanupCategories = (value: CleanupCategory[]) => cleanupCategoriesResource.set(value);
+  const startupImpact = useStartup({ auto: false }).apps;
+  const setStartupImpact = (value: StartupImpact[]) => startupImpactResource.set(value);
   const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
   const [performanceBusy, setPerformanceBusy] = useState(false);
   const [diagnosticsError, setDiagnosticsError] = useState<string | null>(null);
@@ -158,19 +166,6 @@ export function LocalControls({
     setActiveFocusSession(status?.focus_session ?? null);
   }, [status?.focus_session]);
 
-  useEffect(() => {
-    if (paidGameModeAllowed) {
-      setGameModeUsage(null);
-      return;
-    }
-    getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
-    let dispose: (() => void) | undefined;
-    listenToGameModeUsage(setGameModeUsage).then((unlisten) => {
-      dispose = unlisten;
-    });
-    return () => dispose?.();
-  }, [paidGameModeAllowed]);
-
   const refreshWindowsInventory = async () => {
     setInventoryBusy(true);
     setInventoryError(null);
@@ -189,14 +184,14 @@ export function LocalControls({
     setHistoryError(null);
     try {
       const [nextAudit, nextSnapshots, nextProtected, nextHelper, nextGameModeSession, nextFocusSession] = await Promise.all([
-        getAuditLog(120),
-        getOptimizationSnapshots(120),
+        auditLog.refresh(),
+        optimizationSnapshots.refresh(),
         getProtectedApps(),
-        getPrivilegedHelperStatus(),
-        getActiveGameModeSession(),
+        privilegedHelperStatus.refresh(),
+        activeGameModeSessionResource.refresh(),
         getActiveFocusSession(),
       ]);
-      const nextPolicy = await getLocalAiPolicy();
+      const nextPolicy = await automationPolicy.refresh();
       setAuditEvents(nextAudit);
       setSnapshots(nextSnapshots);
       setProtectedApps(nextProtected);
@@ -221,7 +216,7 @@ export function LocalControls({
     setDiagnosticsBusy(true);
     setDiagnosticsError(null);
     try {
-      setEnergyDiagnostics(await getEnergyDiagnostics());
+      setEnergyDiagnostics(await energyDiagnosticsResource.refresh());
       track("energy_refreshed");
     } catch (error) {
       setEnergyDiagnostics(null);
@@ -236,9 +231,9 @@ export function LocalControls({
     setPerformanceError(null);
     try {
       const [report, categories, startup] = await Promise.all([
-        runPerformanceScan(mode),
-        scanCleanupCategories(),
-        scanStartupImpact(),
+        performanceReportResource.refresh(mode),
+        cleanupCategoriesResource.refresh(),
+        startupImpactResource.refresh(),
       ]);
       setPerformanceReport(report);
       setCleanupCategories(categories);
@@ -441,7 +436,7 @@ export function LocalControls({
   const activateGameMode = async () => {
     await runPerformanceAction(onActivateGameMode, "Modo Gamer completo aplicado.");
     if (!paidGameModeAllowed) {
-      getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
+      await gameMode.refreshUsage().catch(() => undefined);
     }
   };
 
@@ -462,13 +457,13 @@ export function LocalControls({
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <div className="font-mono text-[11px] uppercase tracking-[0.3em] text-cyan-400/70">
+        <div className="font-mono text-[11px] uppercase tracking-[0.3em] text-accent/70">
           {t("controls.eyebrow")}
         </div>
-        <h1 className="text-[36px] font-semibold tracking-tight text-slate-50">
+        <h1 className="text-[36px] font-semibold tracking-tight text-fg">
           {t("controls.title")}
         </h1>
-        <p className="max-w-3xl text-sm text-slate-400">{t("controls.description")}</p>
+        <p className="max-w-3xl text-sm text-fg-3">{t("controls.description")}</p>
       </header>
 
       {!runtimeAvailable && (
@@ -476,17 +471,17 @@ export function LocalControls({
       )}
       {actionMessage && <Notice tone="info" message={actionMessage} />}
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
           <div className="max-w-2xl">
-            <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">
-              <Gamepad2 className="h-3.5 w-3.5 text-cyan-300" />
+            <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">
+              <Gamepad2 className="h-3.5 w-3.5 text-accent" />
               Perfil principal
             </div>
-            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-slate-50">
+            <h2 className="mt-3 text-2xl font-semibold tracking-tight text-fg">
               Modo Gamer completo
             </h2>
-            <p className="mt-2 text-sm leading-relaxed text-slate-400">
+            <p className="mt-2 text-sm leading-relaxed text-fg-3">
               Um clique prioriza o jogo ou app ativo, reduz interferencia de fundo, aplica limpeza segura, ajusta energia/visual e deixa a restauracao pronta.
             </p>
           </div>
@@ -503,25 +498,25 @@ export function LocalControls({
                 }}
                 className={`inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-sm font-semibold transition-all disabled:opacity-70 ${
                   gameModeActive
-                    ? "border-emerald-300/55 bg-emerald-400/15 text-emerald-50 hover:border-amber-300/60 hover:bg-amber-400/15"
-                    : "border-cyan-300/50 bg-cyan-400/15 text-cyan-50 hover:bg-cyan-400/20"
+                    ? "border-ok/55 bg-ok/15 text-ok-soft hover:border-warn/60 hover:bg-warn/15"
+                    : "border-accent/50 bg-accent/15 text-accent-soft hover:bg-accent/20"
                 }`}
               >
                 {gameModeActive ? <ShieldCheck className="h-4 w-4" /> : <Gamepad2 className="h-4 w-4" />}
                 {gameModeActive ? "Desativar Modo Gamer" : "Ativar Modo Gamer"}
               </button>
               {!paidGameModeAllowed && gameModeUsage && (
-                <span className={`text-xs ${gameModeUsage.limitReached ? "text-amber-300" : "text-slate-500"}`}>
+                <span className={`text-xs ${gameModeUsage.limitReached ? "text-warn" : "text-fg-4"}`}>
                   {gameModeUsage.limitReached
                     ? "Limite semanal atingido. Volta na próxima semana."
-                    : `${formatMinutesLabel(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
+                    : `${formatMinutes(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
                 </span>
               )}
             </div>
             <button
               disabled={busy || performanceBusy || !runtimeAvailable}
               onClick={() => void runPerformanceAction(onApplyPcCleanFast, "Perfil PC limpo/rápido aplicado.")}
-              className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all hover:bg-emerald-400/15 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-ok/40 bg-ok/10 px-4 py-2.5 text-sm font-semibold text-ok-soft transition-all hover:bg-ok/15 disabled:opacity-50"
             >
               <Sparkles className="h-4 w-4" />
               PC limpo/rapido
@@ -538,7 +533,7 @@ export function LocalControls({
                 },
                 t("controls.restoreCompleted"),
               )}
-              className="inline-flex items-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-2.5 text-sm font-semibold text-amber-100 transition-all hover:bg-amber-400/15 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-warn/40 bg-warn/10 px-4 py-2.5 text-sm font-semibold text-warn-soft transition-all hover:bg-warn/15 disabled:opacity-50"
             >
               <ShieldCheck className="h-4 w-4" />
               Restaurar alteracoes
@@ -546,7 +541,7 @@ export function LocalControls({
             <button
               disabled={performanceBusy}
               onClick={() => void refreshPerformanceSuite("quick")}
-              className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/35 bg-cyan-400/10 px-4 py-2.5 text-sm font-medium text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-accent/35 bg-accent/10 px-4 py-2.5 text-sm font-medium text-accent-soft transition-all hover:bg-accent/15 disabled:opacity-50"
             >
               <RefreshCw className={`h-4 w-4 ${performanceBusy ? "animate-spin" : ""}`} />
               Recalcular score
@@ -556,7 +551,7 @@ export function LocalControls({
 
         {performanceError && <Notice tone="danger" message={performanceError} />}
         <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-          <SummaryTile label="Score atual" value={performanceReport ? `${Math.round(performanceReport.overallScore)}/100` : "--"} detail={performanceReport?.bottlenecks[0]?.label ?? "Sem scan recente"} />
+          <SummaryTile label="Score atual" value={performanceReport ? `${Math.round(performanceReport.overallScore)}/100` : MISSING} detail={performanceReport?.bottlenecks[0]?.label ?? "Sem scan recente"} />
           <SummaryTile label="Resultado medido" value={formatMeasuredChange(performanceReport)} detail="Comparado ao baseline" />
           <SummaryTile label="Perfil" value={activeProfileLabel} detail={gameModeTargetLabel} />
           <SummaryTile label="Automacao" value={autoGameModeLabel} detail={autoGameModePlanAllowed ? "Pro/Family" : "Starter manual"} />
@@ -575,21 +570,21 @@ export function LocalControls({
       </section>
 
       <AdvancedSection
-        icon={<Wrench className="h-4 w-4 text-cyan-300" />}
+        icon={<Wrench className="h-4 w-4 text-accent" />}
         title="Avançado: comandos e diagnósticos"
         description="Controles tecnicos, categorias detalhadas, helper admin, apps protegidos e histórico ficam recolhidos para não poluir o fluxo principal."
       >
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
-            <Gauge className="h-3.5 w-3.5 text-cyan-300" />
-            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Performance Suite</h2>
+            <Gauge className="h-3.5 w-3.5 text-accent" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">Performance Suite</h2>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
               disabled={performanceBusy}
               onClick={() => void refreshPerformanceSuite("baseline")}
-              className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:border-accent/60 disabled:opacity-50"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${performanceBusy ? "animate-spin" : ""}`} />
               Baseline
@@ -597,14 +592,14 @@ export function LocalControls({
             <button
               disabled={performanceBusy}
               onClick={() => void refreshPerformanceSuite("after")}
-              className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:border-accent/60 disabled:opacity-50"
             >
               Depois
             </button>
             <button
               disabled={busy || performanceBusy || !runtimeAvailable}
               onClick={() => void runPerformanceAction(onApplyPcCleanFast, "Perfil PC limpo/rápido aplicado.")}
-              className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100 transition-all hover:border-emerald-300/60 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-ok/40 bg-ok/10 px-3 py-2 text-xs font-semibold text-ok-soft transition-all hover:border-ok/60 disabled:opacity-50"
             >
               <Sparkles className="h-3.5 w-3.5" />
               Aplicar PC limpo/rapido
@@ -612,7 +607,7 @@ export function LocalControls({
             <button
               disabled={busy || performanceBusy || !runtimeAvailable}
               onClick={() => void runPerformanceAction(() => onRestorePerformanceSession(performanceReport?.restoreSession?.id), "Sessão de performance restaurada.")}
-              className="inline-flex items-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition-all hover:border-amber-300/60 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-warn/40 bg-warn/10 px-3 py-2 text-xs font-medium text-warn-soft transition-all hover:border-warn/60 disabled:opacity-50"
             >
               Restaurar suite
             </button>
@@ -621,18 +616,18 @@ export function LocalControls({
         {performanceError && <Notice tone="danger" message={performanceError} />}
         <div className="grid gap-4 lg:grid-cols-4">
           <DiagnosticsPanel
-            icon={<Gauge className="h-4 w-4 text-cyan-300" />}
+            icon={<Gauge className="h-4 w-4 text-accent" />}
             title="Score medido"
             rows={[
-              ["Atual", performanceReport ? `${Math.round(performanceReport.overallScore)}/100` : "--"],
+              ["Atual", performanceReport ? `${Math.round(performanceReport.overallScore)}/100` : MISSING],
               ["Mudanca", formatMeasuredChange(performanceReport)],
-              ["Modo", performanceReport?.mode ?? "--"],
+              ["Modo", performanceReport?.mode ?? MISSING],
               ["Jogo", performanceReport?.metrics.gameDetected ? performanceReport.metrics.gameProcess ?? "detectado" : "não detectado"],
             ]}
             footer={performanceReport?.bottlenecks[0]?.label ?? "Rode um baseline para medir responsividade local."}
           />
           <DiagnosticsPanel
-            icon={<Sparkles className="h-4 w-4 text-cyan-300" />}
+            icon={<Sparkles className="h-4 w-4 text-accent" />}
             title="Gargalos"
             rows={[
               ["Startup", formatScore(performanceReport?.scoreBreakdown.bootStartup)],
@@ -654,7 +649,7 @@ export function LocalControls({
             }
           />
           <DiagnosticsPanel
-            icon={<ListChecks className="h-4 w-4 text-cyan-300" />}
+            icon={<ListChecks className="h-4 w-4 text-accent" />}
             title="Limpeza elegivel"
             rows={cleanupCategories.slice(0, 6).map((category) => [
               category.label,
@@ -663,7 +658,7 @@ export function LocalControls({
             footer="Categorias usam quarentena reversível; purge libera espaço real depois."
           />
           <DiagnosticsPanel
-            icon={<History className="h-4 w-4 text-cyan-300" />}
+            icon={<History className="h-4 w-4 text-accent" />}
             title="Inicializacao"
             rows={startupImpact.slice(0, 6).map((app) => [
               app.name,
@@ -720,16 +715,16 @@ export function LocalControls({
           screen. disk_usage.rs's categorized scan/commands are untouched on
           the backend in case this curated view is wanted back later. */}
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
-            <BatteryCharging className="h-3.5 w-3.5 text-cyan-300" />
-            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Energia</h2>
+            <BatteryCharging className="h-3.5 w-3.5 text-accent" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">Energia</h2>
           </div>
           <button
             disabled={diagnosticsBusy}
             onClick={() => void refreshEnergy()}
-            className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:border-accent/60 disabled:opacity-50"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${diagnosticsBusy ? "animate-spin" : ""}`} />
             {t("common.refresh")}
@@ -741,14 +736,14 @@ export function LocalControls({
             Dashboard and Telemetria's Modo Live. Energy stays here since it's
             not a network concern. */}
         <DiagnosticsPanel
-          icon={<BatteryCharging className="h-4 w-4 text-cyan-300" />}
+          icon={<BatteryCharging className="h-4 w-4 text-accent" />}
           title="Energia"
           rows={[
             ["Plano ativo", energyPlanLabel(energyDiagnostics?.active_scheme_alias, energyDiagnostics?.active_scheme_name)],
             ["Fonte", powerSourceLabel(energyDiagnostics?.power_source)],
-            ["Bateria", energyDiagnostics?.battery_percent != null ? `${Math.round(energyDiagnostics.battery_percent)}% ${energyDiagnostics.battery_status ?? ""}` : "--"],
-            ["Economia", energyDiagnostics?.battery_saver_on == null ? "--" : energyDiagnostics.battery_saver_on ? "ativa" : "inativa"],
-            ["Clock CPU", formatClock(energyDiagnostics?.cpu_current_clock_mhz, energyDiagnostics?.cpu_max_clock_mhz)],
+            ["Bateria", energyDiagnostics?.battery_percent != null ? `${Math.round(energyDiagnostics.battery_percent)}% ${energyDiagnostics.battery_status ?? ""}` : MISSING],
+            ["Economia", energyDiagnostics?.battery_saver_on == null ? MISSING : energyDiagnostics.battery_saver_on ? "ativa" : "inativa"],
+            ["Clock CPU", formatMhzRange(energyDiagnostics?.cpu_current_clock_mhz, energyDiagnostics?.cpu_max_clock_mhz)],
             ["Recomendado", energyPlanLabel(energyDiagnostics?.recommended_plan, null)],
           ]}
           footer={energyDiagnostics?.recommendations?.join(" / ") ?? "Aguardando leitura real do Windows."}
@@ -772,15 +767,15 @@ export function LocalControls({
         />
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
-            <Wrench className="h-3.5 w-3.5 text-cyan-300" />
-            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">Saude do Windows</h2>
+            <Wrench className="h-3.5 w-3.5 text-accent" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">Saude do Windows</h2>
           </div>
         </div>
         {actionMessage && <div className="mb-3"><Notice tone="info" message={actionMessage} /></div>}
-        <p className="mb-4 text-xs text-slate-500">
+        <p className="mb-4 text-xs text-fg-4">
           Verifica arquivos de sistema corrompidos com as ferramentas oficiais do Windows (sfc/DISM). Pode levar varios minutos - o app continua utilizavel enquanto roda em segundo plano.
         </p>
         <div className="grid gap-4 lg:grid-cols-2">
@@ -805,16 +800,16 @@ export function LocalControls({
         </div>
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
-            <ListChecks className="h-3.5 w-3.5 text-cyan-300" />
-            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.windowsControls")}</h2>
+            <ListChecks className="h-3.5 w-3.5 text-accent" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.windowsControls")}</h2>
           </div>
           <button
             disabled={inventoryBusy}
             onClick={() => void refreshWindowsInventory()}
-            className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:border-accent/60 disabled:opacity-50"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${inventoryBusy ? "animate-spin" : ""}`} />
             {t("common.refresh")}
@@ -895,15 +890,15 @@ export function LocalControls({
         </div>
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
-            <Shield className="h-3.5 w-3.5 text-cyan-300" />
-            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.protectedApps")}</h2>
+            <Shield className="h-3.5 w-3.5 text-accent" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.protectedApps")}</h2>
           </div>
           <button
             onClick={() => void refreshOperationalHistory()}
-            className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60"
+            className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:border-accent/60"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             {t("common.refresh")}
@@ -915,11 +910,11 @@ export function LocalControls({
             value={protectedInput}
             onChange={(event) => setProtectedInput(event.target.value)}
             placeholder={t("settings.protectedAppPlaceholder")}
-            className="min-h-11 flex-1 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60"
+            className="min-h-11 flex-1 rounded-xl border border-line bg-bg/60 px-3 text-sm text-fg outline-none transition focus:border-accent/60"
           />
           <button
             onClick={() => void addProtected()}
-            className="rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15"
+            className="rounded-xl border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm font-semibold text-accent-soft transition hover:bg-accent/15"
           >
             {t("settings.addProtectedApp")}
           </button>
@@ -929,7 +924,7 @@ export function LocalControls({
             <button
               key={`${app.name}:${app.created_at}`}
               onClick={() => app.created_at > 0 && void removeProtected(app.name)}
-              className="rounded-md border border-cyan-500/15 bg-slate-950/60 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-slate-300 transition hover:border-rose-400/40 hover:text-rose-200"
+              className="rounded-md border border-line bg-bg/60 px-2.5 py-1 font-mono text-[10px] uppercase tracking-widest text-fg-2 transition hover:border-danger/40 hover:text-danger-soft"
               title={app.created_at > 0 ? t("settings.removeProtectedApp") : t("settings.defaultProtectedApp")}
             >
               {app.name}
@@ -938,16 +933,16 @@ export function LocalControls({
         </div>
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-2">
-            <History className="h-3.5 w-3.5 text-cyan-300" />
-            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.history")}</h2>
+            <History className="h-3.5 w-3.5 text-accent" />
+            <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.history")}</h2>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => void refreshOperationalHistory()}
-              className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60"
+              className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:border-accent/60"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               {t("common.refresh")}
@@ -963,7 +958,7 @@ export function LocalControls({
                 },
                 t("controls.restoreCompleted"),
               )}
-              className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition-all hover:border-emerald-300/60 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-ok/40 bg-ok/10 px-3 py-2 text-xs font-medium text-ok-soft transition-all hover:border-ok/60 disabled:opacity-50"
             >
               <ShieldCheck className="h-3.5 w-3.5" />
               {t("settings.restoreSnapshots")}
@@ -980,7 +975,7 @@ export function LocalControls({
                 },
                 "Modo Gamer restaurado.",
               )}
-              className="inline-flex items-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition-all hover:border-amber-300/60 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-xl border border-warn/40 bg-warn/10 px-3 py-2 text-xs font-medium text-warn-soft transition-all hover:border-warn/60 disabled:opacity-50"
             >
               <ShieldCheck className="h-3.5 w-3.5" />
               Restaurar modo gamer agora
@@ -1013,14 +1008,14 @@ export function LocalControls({
           <button
             disabled={busy || !runtimeAvailable}
             onClick={() => void runTempAction(onDeepCleanTemp, "Limpeza profunda TEMP concluída.")}
-            className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
+            className="rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-xs font-medium text-warn-soft transition hover:bg-warn/15 disabled:opacity-50"
           >
             Limpeza profunda TEMP
           </button>
           <button
             disabled={busy || !runtimeAvailable}
             onClick={() => void runTempAction(onPurgeCleanup, "Quarentena de limpeza apagada.")}
-            className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
+            className="rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-xs font-medium text-warn-soft transition hover:bg-warn/15 disabled:opacity-50"
           >
             Purgar quarentena
           </button>
@@ -1045,22 +1040,22 @@ function DiagnosticsPanel({
   actions?: ReactNode;
 }) {
   return (
-    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-      <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-slate-100">
+    <div className="rounded-xl border border-line bg-bg/40 p-4">
+      <div className="mb-4 flex items-center gap-2 text-sm font-semibold text-fg">
         {icon}
         {title}
       </div>
       <div className="grid gap-2 sm:grid-cols-2">
         {rows.map(([label, value]) => (
-          <div key={label} className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
-            <div className="font-mono text-[9px] uppercase tracking-widest text-slate-500">{label}</div>
-            <div className="mt-1 truncate text-sm font-semibold text-slate-100" title={value}>
+          <div key={label} className="rounded-lg border border-line bg-bg/50 p-3">
+            <div className="font-mono text-[9px] uppercase tracking-widest text-fg-4">{label}</div>
+            <div className="mt-1 truncate text-sm font-semibold text-fg" title={value}>
               {value}
             </div>
           </div>
         ))}
       </div>
-      <p className="mt-3 line-clamp-2 text-xs text-slate-500">{footer}</p>
+      <p className="mt-3 line-clamp-2 text-xs text-fg-4">{footer}</p>
       {actions && <div className="mt-4">{actions}</div>}
     </div>
   );
@@ -1079,7 +1074,7 @@ function PowerButton({
     <button
       disabled={disabled}
       onClick={onClick}
-      className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
+      className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:bg-accent/15 disabled:opacity-50"
     >
       {label}
     </button>
@@ -1089,10 +1084,10 @@ function PowerButton({
 function Notice({ message, tone }: { message: string; tone: "danger" | "info" | "warning" }) {
   const toneClass =
     tone === "danger"
-      ? "border-rose-400/25 bg-rose-400/10 text-rose-100"
+      ? "border-danger/25 bg-danger/10 text-danger-soft"
       : tone === "warning"
-        ? "border-amber-400/25 bg-amber-400/10 text-amber-100"
-        : "border-cyan-400/25 bg-cyan-400/10 text-cyan-100";
+        ? "border-warn/25 bg-warn/10 text-warn-soft"
+        : "border-line bg-accent/10 text-accent-soft";
   return (
     <div className={`rounded-xl border px-4 py-3 text-sm ${toneClass}`}>
       {message}
@@ -1144,16 +1139,16 @@ function SystemRepairPanel({
 }) {
   const running = Boolean(status && !status.done) || starting;
   return (
-    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
+    <div className="rounded-xl border border-line bg-bg/40 p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
-          <p className="mt-1 text-xs text-slate-500">{description}</p>
+          <h3 className="text-sm font-semibold text-fg">{title}</h3>
+          <p className="mt-1 text-xs text-fg-4">{description}</p>
         </div>
         <PowerButton disabled={startDisabled} onClick={onStart} label={startLabel} />
       </div>
       {running && (
-        <div className="mt-3 flex items-center gap-2 text-xs text-cyan-200">
+        <div className="mt-3 flex items-center gap-2 text-xs text-accent-soft">
           <RefreshCw className="h-3.5 w-3.5 animate-spin" />
           {starting
             ? "Iniciando..."
@@ -1164,7 +1159,7 @@ function SystemRepairPanel({
         <div className="mt-3 space-y-2">
           <Notice tone={systemRepairOutcomeTone(status)} message={systemRepairOutcomeLabel(status)} />
           {status.result.outcome === "unknown" && status.result.rawTail && (
-            <pre className="max-h-32 overflow-auto rounded-lg border border-cyan-500/10 bg-black/40 p-2 text-[11px] text-slate-400">
+            <pre className="max-h-32 overflow-auto rounded-lg border border-line bg-black/40 p-2 text-[11px] text-fg-3">
               {status.result.rawTail}
             </pre>
           )}
@@ -1176,12 +1171,12 @@ function SystemRepairPanel({
 
 function SummaryTile({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <div className="min-w-0 rounded-xl border border-cyan-500/10 bg-slate-950/45 p-4">
-      <div className="font-mono text-[9px] uppercase tracking-widest text-slate-500">{label}</div>
-      <div className="mt-2 truncate text-lg font-semibold text-slate-50" title={value}>
+    <div className="min-w-0 rounded-xl border border-line bg-bg/45 p-4">
+      <div className="font-mono text-[9px] uppercase tracking-widest text-fg-4">{label}</div>
+      <div className="mt-2 truncate text-lg font-semibold text-fg" title={value}>
         {value}
       </div>
-      <div className="mt-1 truncate text-xs text-slate-500" title={detail}>
+      <div className="mt-1 truncate text-xs text-fg-4" title={detail}>
         {detail}
       </div>
     </div>
@@ -1200,25 +1195,25 @@ function AdvancedSection({
   children: ReactNode;
 }) {
   return (
-    <details className="group rounded-2xl border border-cyan-500/15 bg-slate-950/30">
-      <summary className="flex cursor-pointer list-none flex-col gap-3 rounded-2xl px-5 py-4 transition hover:bg-cyan-400/5 md:flex-row md:items-center md:justify-between">
+    <details className="group rounded-2xl border border-line bg-bg/30">
+      <summary className="flex cursor-pointer list-none flex-col gap-3 rounded-2xl px-5 py-4 transition hover:bg-accent/5 md:flex-row md:items-center md:justify-between">
         <span className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-cyan-500/20 bg-cyan-400/10">
+          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-accent/10">
             {icon}
           </span>
           <span className="min-w-0">
-            <span className="block text-sm font-semibold text-slate-100">{title}</span>
-            <span className="mt-1 block text-xs leading-relaxed text-slate-500">{description}</span>
+            <span className="block text-sm font-semibold text-fg">{title}</span>
+            <span className="mt-1 block text-xs leading-relaxed text-fg-4">{description}</span>
           </span>
         </span>
-        <span className="font-mono text-[10px] uppercase tracking-widest text-cyan-300 group-open:hidden">
+        <span className="font-mono text-[10px] uppercase tracking-widest text-accent group-open:hidden">
           abrir
         </span>
-        <span className="hidden font-mono text-[10px] uppercase tracking-widest text-cyan-300 group-open:block">
+        <span className="hidden font-mono text-[10px] uppercase tracking-widest text-accent group-open:block">
           recolher
         </span>
       </summary>
-      <div className="flex flex-col gap-6 border-t border-cyan-500/10 p-4 md:p-6">
+      <div className="flex flex-col gap-6 border-t border-line p-4 md:p-6">
         {children}
       </div>
     </details>
@@ -1242,52 +1237,33 @@ function errorMessage(error: unknown) {
   return String(error);
 }
 
-function formatMinutesLabel(seconds: number) {
-  const minutes = Math.max(0, Math.round(seconds / 60));
-  return `${minutes} min`;
-}
 
-function formatClock(current?: number | null, max?: number | null) {
-  if (current == null && max == null) return "--";
-  if (current != null && max != null) return `${Math.round(current)} / ${Math.round(max)} MHz`;
-  return `${Math.round(current ?? max ?? 0)} MHz`;
-}
 
-function formatScore(value?: number | null) {
-  if (value == null || !Number.isFinite(value)) return "--";
-  return `${Math.round(value)}/100`;
-}
 
 function formatMeasuredChange(report?: PerformanceReport | null) {
   if (!report || report.previousScore == null || report.scoreDeltaPercent == null || !Number.isFinite(report.scoreDeltaPercent)) {
-    return "--";
+    return MISSING;
   }
   const change = report.performanceChange;
   if (change === "stable") return "estavel";
-  if (change === "regressed") return `${report.scoreDeltaPercent.toFixed(1)}% queda`;
+  if (change === "regressed") return `${formatSignedPercent(report.scoreDeltaPercent)} queda`;
   const gain = report.measuredGainPercent ?? Math.max(report.scoreDeltaPercent, 0);
-  if (!Number.isFinite(gain) || gain <= 0) return "0.0%";
-  return `+${gain.toFixed(1)}%`;
+  if (!Number.isFinite(gain) || gain <= 0) return formatSignedPercent(0);
+  return formatSignedPercent(gain);
 }
 
-function formatBytes(bytes?: number | null) {
-  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return "0 MB";
-  const mb = bytes / 1024 / 1024;
-  if (mb < 1024) return `${Math.round(mb)} MB`;
-  return `${(mb / 1024).toFixed(1)} GB`;
-}
 
 function powerSourceLabel(value?: string | null) {
   if (value === "ac") return "tomada";
   if (value === "battery") return "bateria";
-  return value ?? "--";
+  return value ?? MISSING;
 }
 
 function energyPlanLabel(alias?: string | null, fallback?: string | null) {
   if (alias === "high_performance") return "alto desempenho";
   if (alias === "balanced") return "equilibrado";
   if (alias === "power_saver") return "economia";
-  return fallback ?? "--";
+  return fallback ?? MISSING;
 }
 
 function ActionList({
@@ -1310,24 +1286,24 @@ function ActionList({
   disabled: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-      <div className="mb-3 text-sm font-semibold text-slate-100">{title}</div>
+    <div className="rounded-xl border border-line bg-bg/40 p-4">
+      <div className="mb-3 text-sm font-semibold text-fg">{title}</div>
       {items.length === 0 ? (
-        <p className="text-xs text-slate-500">{empty}</p>
+        <p className="text-xs text-fg-4">{empty}</p>
       ) : (
         <div className="flex flex-col gap-2">
           {items.map((item) => (
-            <div key={item.key} className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
+            <div key={item.key} className="rounded-lg border border-line bg-bg/50 p-3">
               <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-slate-100">{item.title}</div>
-                  <div className="mt-0.5 truncate text-xs text-slate-500">{item.detail}</div>
+                  <div className="truncate text-sm font-medium text-fg">{item.title}</div>
+                  <div className="mt-0.5 truncate text-xs text-fg-4">{item.detail}</div>
                 </div>
                 <div className="flex shrink-0 gap-2">
                   <button
                     disabled={disabled}
                     onClick={() => void item.onAction()}
-                    className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition-all hover:bg-emerald-400/15 disabled:opacity-50"
+                    className="rounded-lg border border-ok/30 bg-ok/10 px-3 py-2 text-xs font-medium text-ok-soft transition-all hover:bg-ok/15 disabled:opacity-50"
                   >
                     {item.action}
                   </button>
@@ -1335,7 +1311,7 @@ function ActionList({
                     <button
                       disabled={disabled}
                       onClick={() => void item.onSecondaryAction?.()}
-                      className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
+                      className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:bg-accent/15 disabled:opacity-50"
                     >
                       {item.secondaryAction}
                     </button>
@@ -1371,19 +1347,19 @@ function InventoryPanel({
   disabled: boolean;
 }) {
   return (
-    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-      <div className="mb-3 text-sm font-semibold text-slate-100">{title}</div>
+    <div className="rounded-xl border border-line bg-bg/40 p-4">
+      <div className="mb-3 text-sm font-semibold text-fg">{title}</div>
       {items.length === 0 ? (
-        <p className="text-xs text-slate-500">{empty}</p>
+        <p className="text-xs text-fg-4">{empty}</p>
       ) : (
         <div className="flex flex-col gap-2">
           {items.map((item) => (
-            <div key={item.key} className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
+            <div key={item.key} className="rounded-lg border border-line bg-bg/50 p-3">
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-slate-100">{item.title}</div>
-                  <div className="mt-0.5 truncate font-mono text-[10px] text-slate-500">{item.subtitle}</div>
-                  <span className="mt-2 inline-flex rounded-md border border-cyan-500/15 bg-cyan-500/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-cyan-200">
+                  <div className="truncate text-sm font-medium text-fg">{item.title}</div>
+                  <div className="mt-0.5 truncate font-mono text-[10px] text-fg-4">{item.subtitle}</div>
+                  <span className="mt-2 inline-flex rounded-md border border-line bg-accent-strong/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-accent-soft">
                     {item.badge}
                   </span>
                 </div>
@@ -1391,14 +1367,14 @@ function InventoryPanel({
                   <button
                     disabled={disabled}
                     onClick={() => void item.onAction()}
-                    className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition-all hover:bg-amber-400/15 disabled:opacity-50"
+                    className="rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-xs font-medium text-warn-soft transition-all hover:bg-warn/15 disabled:opacity-50"
                   >
                     {item.action}
                   </button>
                   <button
                     disabled={disabled}
                     onClick={() => void item.onRestore()}
-                    className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
+                    className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:bg-accent/15 disabled:opacity-50"
                   >
                     {item.restore}
                   </button>
@@ -1422,20 +1398,20 @@ function HistoryPanel({
   rows: Array<{ key: string; title: string; detail: string; time: number }>;
 }) {
   return (
-    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-      <div className="mb-3 text-sm font-semibold text-slate-100">{title}</div>
+    <div className="rounded-xl border border-line bg-bg/40 p-4">
+      <div className="mb-3 text-sm font-semibold text-fg">{title}</div>
       {rows.length === 0 ? (
-        <p className="text-xs text-slate-500">{empty}</p>
+        <p className="text-xs text-fg-4">{empty}</p>
       ) : (
         <div className="flex flex-col gap-2">
           {rows.map((row) => (
-            <article key={row.key} className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
+            <article key={row.key} className="rounded-lg border border-line bg-bg/50 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="truncate text-sm font-medium text-slate-100">{row.title}</div>
-                  <div className="mt-0.5 line-clamp-2 text-xs text-slate-500">{row.detail}</div>
+                  <div className="truncate text-sm font-medium text-fg">{row.title}</div>
+                  <div className="mt-0.5 line-clamp-2 text-xs text-fg-4">{row.detail}</div>
                 </div>
-                <time className="shrink-0 font-mono text-[10px] text-slate-500">{formatEventTime(row.time)}</time>
+                <time className="shrink-0 font-mono text-[10px] text-fg-4">{formatDateTime(row.time)}</time>
               </div>
             </article>
           ))}
@@ -1445,7 +1421,3 @@ function HistoryPanel({
   );
 }
 
-function formatEventTime(timestamp: number) {
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return "--";
-  return new Date(timestamp * 1000).toLocaleString();
-}

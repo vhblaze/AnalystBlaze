@@ -5,7 +5,6 @@ import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
   checkDiskOptimizationInsight,
-  getNetworkDiagnostics,
   isTauriRuntime,
   openAgentInsights,
   openWindowsSecurity,
@@ -13,6 +12,8 @@ import {
   type DiskOptimizationInsight,
   type NetworkDiagnostics,
 } from "@/services/tauri/agent";
+import { formatBytes } from "@/lib/format";
+import { networkDiagnostics as networkDiagnosticsResource, useNetwork } from "@/features/network/useNetwork";
 
 const DISK_USAGE_WARNING_THRESHOLD_PERCENT = 80;
 const NETWORK_LAG_FLAGS = ["packet_loss_detected", "jitter_high", "latency_high"] as const;
@@ -30,17 +31,6 @@ const GAME_SERVER_LATENCY_RATIO = 2;
  * gate. */
 const DISK_NEAR_FULL_BASE_PERCENT = 90;
 
-function formatBytesShort(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value >= 100 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
-}
 const DISMISS_STORAGE_KEY = "analystblaze.dismissedInsights";
 const DISMISS_TTL_MS = 24 * 60 * 60 * 1000;
 /** The server only ever pairs a card with an actionName from its own small
@@ -231,27 +221,27 @@ type Category = "performance" | "energia" | "rede" | "limpeza";
 const meta: Record<Category, { icon: React.ComponentType<{ className?: string }>; tone: string; ring: string; chip: string }> = {
   performance: {
     icon: Zap,
-    tone: "from-cyan-500/15 to-cyan-500/0",
-    ring: "border-cyan-400/25",
-    chip: "border-cyan-400/30 bg-cyan-500/10 text-cyan-200",
+    tone: "from-accent-strong/15 to-accent-strong/0",
+    ring: "border-line",
+    chip: "border-accent/30 bg-accent-strong/10 text-accent-soft",
   },
   energia: {
     icon: Cpu,
-    tone: "from-amber-500/15 to-amber-500/0",
-    ring: "border-amber-400/25",
-    chip: "border-amber-400/30 bg-amber-500/10 text-amber-200",
+    tone: "from-warn-strong/15 to-warn-strong/0",
+    ring: "border-warn/25",
+    chip: "border-warn/30 bg-warn-strong/10 text-warn-soft",
   },
   rede: {
     icon: Wind,
-    tone: "from-violet-500/15 to-violet-500/0",
-    ring: "border-violet-400/25",
-    chip: "border-violet-400/30 bg-violet-500/10 text-violet-200",
+    tone: "from-violet-strong/15 to-violet-strong/0",
+    ring: "border-violet/25",
+    chip: "border-violet/30 bg-violet-strong/10 text-violet-soft",
   },
   limpeza: {
     icon: Droplets,
-    tone: "from-emerald-500/15 to-emerald-500/0",
-    ring: "border-emerald-400/25",
-    chip: "border-emerald-400/30 bg-emerald-500/10 text-emerald-200",
+    tone: "from-ok-strong/15 to-ok-strong/0",
+    ring: "border-ok/25",
+    chip: "border-ok/30 bg-ok-strong/10 text-ok-soft",
   },
 };
 
@@ -301,7 +291,8 @@ export function Insights({
   // Only fetched here, on demand, for the local VPN+latency insight below -
   // the passive telemetry sample doesn't probe the adapter/VPN detection
   // (kept out of the 2s telemetry loop deliberately, see collect_network_sample).
-  const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnostics | null>(null);
+  // Mesma leitura que Meu PC › Rede usa (features/network).
+  const networkDiagnostics = useNetwork({ auto: false }).diagnostics;
   // Same independent-fetch pattern as networkDiagnostics above, not shared
   // state with DiskExplorer (which fetches this too, for its own card) -
   // cheap enough (a couple of unelevated PowerShell calls) that duplicating
@@ -531,7 +522,7 @@ export function Insights({
     if (confidence < INSIGHT_CONFIDENCE_THRESHOLD) return null;
 
     const offendersText = info.topOffenders.length > 0
-      ? info.topOffenders.map((item) => `${item.label} (${formatBytesShort(item.sizeBytes)})`).join(", ")
+      ? info.topOffenders.map((item) => `${item.label} (${formatBytes(item.sizeBytes)})`).join(", ")
       : "não foi possível identificar os maiores itens agora";
 
     return {
@@ -977,9 +968,7 @@ export function Insights({
       // Best-effort, independent of the server fetch below - a failure here
       // just means the local VPN+latency insight stays silent, not that the
       // whole insights screen errors out.
-      getNetworkDiagnostics()
-        .then(setNetworkDiagnostics)
-        .catch(() => undefined);
+      networkDiagnosticsResource.refresh().catch(() => undefined);
       checkDiskOptimizationInsight()
         .then(setDiskOptimizationInsightData)
         .catch(() => undefined);
@@ -1017,21 +1006,21 @@ export function Insights({
     <div className="flex flex-col gap-8">
       <header className="flex items-end justify-between gap-4">
         <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-cyan-400/70">
+          <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-accent/70">
             <Sparkles className="h-3 w-3" />
             {t("insights.eyebrow")}
           </div>
-          <h1 className="text-[36px] font-semibold tracking-tight text-slate-50">
+          <h1 className="text-[36px] font-semibold tracking-tight text-fg">
             {t("insights.title")}
           </h1>
-          <p className="max-w-xl text-sm text-slate-400">
+          <p className="max-w-xl text-sm text-fg-3">
             {t("insights.description")}
           </p>
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           <button
             onClick={openOnWeb}
-            className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/30 bg-slate-950/50 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:border-cyan-300/60 hover:bg-cyan-400/10"
+            className="inline-flex items-center gap-2 rounded-xl border border-accent/30 bg-bg/50 px-4 py-2.5 text-sm font-semibold text-accent-soft transition-all hover:border-accent/60 hover:bg-accent/10"
           >
             <ExternalLink className="h-4 w-4" />
             {t("insights.openInWeb")}
@@ -1039,7 +1028,7 @@ export function Insights({
           <button
             onClick={generate}
             disabled={loading}
-            className="group inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:border-cyan-300/60 hover:shadow-[0_0_25px_-5px_hsl(187_100%_55%/0.7)] disabled:opacity-50"
+            className="group inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-gradient-to-r from-accent-strong/20 to-violet-strong/10 px-4 py-2.5 text-sm font-semibold text-accent-soft transition-all hover:border-accent/60 disabled:opacity-50"
           >
             <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : "transition-transform group-hover:rotate-180"}`} />
             {loading ? t("common.refreshing") : t("common.refresh")}
@@ -1048,13 +1037,13 @@ export function Insights({
       </header>
 
       {error && visibleInsights.length > 0 && (
-        <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200">
+        <div className="rounded-xl border border-danger-strong/30 bg-danger-strong/10 p-4 text-sm text-danger-soft">
           {error}
         </div>
       )}
 
       {actionMessage && (
-        <div className="rounded-xl border border-cyan-500/30 bg-cyan-500/10 p-4 text-sm text-cyan-100">
+        <div className="rounded-xl border border-accent-strong/30 bg-accent-strong/10 p-4 text-sm text-accent-soft">
           {actionMessage}
         </div>
       )}
@@ -1063,31 +1052,31 @@ export function Insights({
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
           {[0, 1, 2, 3].map((i) => (
             <div key={i} className="glass-panel h-44 animate-pulse p-6">
-              <div className="h-3 w-24 rounded bg-slate-800/60" />
-              <div className="mt-4 h-5 w-2/3 rounded bg-slate-800/60" />
-              <div className="mt-3 h-3 w-full rounded bg-slate-800/40" />
-              <div className="mt-2 h-3 w-5/6 rounded bg-slate-800/40" />
+              <div className="h-3 w-24 rounded bg-surface-2/60" />
+              <div className="mt-4 h-5 w-2/3 rounded bg-surface-2/60" />
+              <div className="mt-3 h-3 w-full rounded bg-surface-2/40" />
+              <div className="mt-2 h-3 w-5/6 rounded bg-surface-2/40" />
             </div>
           ))}
         </div>
       ) : error && visibleInsights.length === 0 ? (
-        <div className="glass-panel flex flex-col items-center gap-3 rounded-2xl border border-rose-500/20 p-10 text-center">
-          <AlertCircle className="h-8 w-8 text-rose-300" />
-          <h3 className="text-lg font-semibold text-slate-100">{t("insights.errorTitle")}</h3>
-          <p className="max-w-sm text-sm text-slate-400">{error}</p>
+        <div className="glass-panel flex flex-col items-center gap-3 rounded-2xl border border-danger-strong/20 p-10 text-center">
+          <AlertCircle className="h-8 w-8 text-danger" />
+          <h3 className="text-lg font-semibold text-fg">{t("insights.errorTitle")}</h3>
+          <p className="max-w-sm text-sm text-fg-3">{error}</p>
           <button
             onClick={generate}
-            className="mt-1 inline-flex items-center gap-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-4 py-2 text-sm font-semibold text-rose-100 transition-all hover:border-rose-300/50 hover:bg-rose-400/15"
+            className="mt-1 inline-flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/10 px-4 py-2 text-sm font-semibold text-danger-soft transition-all hover:border-danger/50 hover:bg-danger/15"
           >
             <RefreshCw className="h-4 w-4" />
             {t("insights.errorRetry")}
           </button>
         </div>
       ) : visibleInsights.length === 0 ? (
-        <div className="glass-panel flex flex-col items-center gap-2 rounded-2xl border border-cyan-500/10 p-10 text-center">
-          <Sparkles className="h-8 w-8 text-cyan-300/60" />
-          <h3 className="text-lg font-semibold text-slate-100">{t("insights.emptyTitle")}</h3>
-          <p className="max-w-sm text-sm text-slate-400">{t("insights.emptyDescription")}</p>
+        <div className="glass-panel flex flex-col items-center gap-2 rounded-2xl border border-line p-10 text-center">
+          <Sparkles className="h-8 w-8 text-accent/60" />
+          <h3 className="text-lg font-semibold text-fg">{t("insights.emptyTitle")}</h3>
+          <p className="max-w-sm text-sm text-fg-3">{t("insights.emptyDescription")}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
@@ -1110,12 +1099,11 @@ export function Insights({
             return (
               <article
                 key={key}
-                className={`group relative overflow-hidden rounded-2xl border ${m.ring} bg-gradient-to-br ${m.tone} p-6 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:shadow-[0_20px_40px_-20px_hsl(187_100%_55%/0.4)]`}
+                className={`group relative overflow-hidden rounded-2xl border ${m.ring} bg-gradient-to-br ${m.tone} p-6 transition-all hover:-translate-y-0.5`}
               >
-                <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-gradient-to-br from-white/5 to-transparent blur-2xl" />
                 <div className="flex items-start justify-between">
-                  <div className="grid h-10 w-10 place-items-center rounded-xl border border-white/10 bg-slate-950/60">
-                    <Icon className="h-5 w-5 text-cyan-200" />
+                  <div className="grid h-10 w-10 place-items-center rounded-xl border border-white/10 bg-bg/60">
+                    <Icon className="h-5 w-5 text-accent-soft" />
                   </div>
                   <div className="flex items-center gap-2">
                     <span className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${m.chip}`}>
@@ -1124,22 +1112,22 @@ export function Insights({
                     <button
                       onClick={() => dismissInsight(ins)}
                       title="Dispensar"
-                      className="grid h-6 w-6 shrink-0 place-items-center rounded-md border border-white/10 bg-slate-950/60 text-slate-500 transition hover:border-rose-400/40 hover:text-rose-200"
+                      className="grid h-6 w-6 shrink-0 place-items-center rounded-md border border-white/10 bg-bg/60 text-fg-4 transition hover:border-danger/40 hover:text-danger-soft"
                     >
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 </div>
-                <h3 className="mt-4 text-lg font-semibold tracking-tight text-slate-50">
+                <h3 className="mt-4 text-lg font-semibold tracking-tight text-fg">
                   {ins.title}
                 </h3>
-                <p className="mt-2 text-sm leading-relaxed text-slate-400">{ins.explanation}</p>
+                <p className="mt-2 text-sm leading-relaxed text-fg-3">{ins.explanation}</p>
                 <div className="mt-4 flex items-center gap-2 border-t border-white/5 pt-3">
-                  <Brain className="h-3.5 w-3.5 text-cyan-300" />
-                  <span className="font-mono text-[11px] uppercase tracking-widest text-slate-500">
+                  <Brain className="h-3.5 w-3.5 text-accent" />
+                  <span className="font-mono text-[11px] uppercase tracking-widest text-fg-4">
                     {t("insights.impact")}
                   </span>
-                  <span className="ml-auto font-mono text-sm font-semibold text-gradient-cyber">
+                  <span className="ml-auto font-mono text-sm font-semibold text-gradient-brand">
                     {ins.impact}
                   </span>
                 </div>
@@ -1147,7 +1135,7 @@ export function Insights({
                   <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
                     <button
                       onClick={ins.action.onClick}
-                      className="group/action inline-flex items-center gap-1.5 text-xs font-semibold text-cyan-200 transition hover:text-cyan-100"
+                      className="group/action inline-flex items-center gap-1.5 text-xs font-semibold text-accent-soft transition hover:text-accent-soft"
                     >
                       {ins.action.label}
                       <ArrowRight className="h-3.5 w-3.5 transition-transform group-hover/action:translate-x-0.5" />
@@ -1155,7 +1143,7 @@ export function Insights({
                     {ins.secondaryAction && (
                       <button
                         onClick={ins.secondaryAction.onClick}
-                        className="text-xs font-semibold text-slate-400 transition hover:text-slate-200"
+                        className="text-xs font-semibold text-fg-3 transition hover:text-fg"
                       >
                         {ins.secondaryAction.label}
                       </button>
@@ -1168,7 +1156,7 @@ export function Insights({
                       <button
                         disabled={busy}
                         onClick={() => void requestAgentApply(ins)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-1.5 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs font-semibold text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
                       >
                         <Bot className="h-3.5 w-3.5" />
                         Deixar o agente fazer
@@ -1178,7 +1166,7 @@ export function Insights({
                       <button
                         disabled={busy}
                         onClick={() => void applyLocally(ins)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-3 py-1.5 text-xs font-semibold text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-ok/40 bg-ok/10 px-3 py-1.5 text-xs font-semibold text-ok-soft transition hover:bg-ok/15 disabled:opacity-50"
                       >
                         <User className="h-3.5 w-3.5" />
                         {ins.actionLabel ?? "Fazer eu mesmo"}
@@ -1188,7 +1176,7 @@ export function Insights({
                       <button
                         disabled={secondaryBusy}
                         onClick={() => void applySecondaryLocally(ins)}
-                        className="inline-flex items-center gap-1.5 rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-1.5 text-xs font-semibold text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-danger/30 bg-danger/10 px-3 py-1.5 text-xs font-semibold text-danger-soft transition hover:bg-danger/15 disabled:opacity-50"
                       >
                         {ins.secondaryActionLabel ?? "Desativar"}
                       </button>

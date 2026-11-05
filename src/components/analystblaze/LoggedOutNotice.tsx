@@ -19,20 +19,20 @@ export function LoggedOutNotice({
   if (!visible) return null;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-bg/75 px-4">
       <section
         role="dialog"
         aria-modal="true"
         aria-label={t("loggedOut.title")}
-        className="w-full max-w-md rounded-2xl border border-cyan-400/20 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)]"
+        className="w-full max-w-md rounded-2xl border border-line bg-bg p-6"
       >
-        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-cyan-300/80">
+        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-accent/80">
           {t("loggedOut.eyebrow")}
         </div>
-        <h2 className="mt-2 text-xl font-semibold text-slate-50">{t("loggedOut.title")}</h2>
-        <p className="mt-2 text-sm leading-relaxed text-slate-400">{t("loggedOut.description")}</p>
+        <h2 className="mt-2 text-xl font-semibold text-fg">{t("loggedOut.title")}</h2>
+        <p className="mt-2 text-sm leading-relaxed text-fg-3">{t("loggedOut.description")}</p>
         {errorMessage && (
-          <p className="mt-2 rounded-lg border border-rose-400/30 bg-rose-500/10 px-3 py-2 text-xs font-medium text-rose-200">
+          <p className="mt-2 rounded-lg border border-danger/30 bg-danger-strong/10 px-3 py-2 text-xs font-medium text-danger-soft">
             {errorMessage}
           </p>
         )}
@@ -41,7 +41,7 @@ export function LoggedOutNotice({
             <button
               disabled={busy}
               onClick={onManageDevices}
-              className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70 disabled:opacity-40"
+              className="rounded-xl border border-fg-4/60 px-4 py-2 text-sm font-medium text-fg-2 transition hover:border-fg-3/70 disabled:opacity-40"
             >
               {t("loggedOut.manageDevices")}
             </button>
@@ -49,7 +49,7 @@ export function LoggedOutNotice({
           <button
             disabled={busy}
             onClick={onLogin}
-            className="rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+            className="rounded-xl border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
           >
             {t("loggedOut.login")}
           </button>

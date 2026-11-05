@@ -1,5 +1,6 @@
 import { Folder, Lock, Shield } from "lucide-react";
 import type { DiskTreeNodeSummary } from "@/services/tauri/agent";
+import { formatBytes } from "@/lib/format";
 
 /** Squarified treemap layout (Bruls, Huizing & van Wijk, 1999) - lays out
  * rectangles proportional to `value` while keeping aspect ratios close to
@@ -98,21 +99,10 @@ export function squarify(items: TreemapInput[], w: number, h: number): TreemapRe
  * a third categorical hue - status is reserved, never part of the identity
  * pair (see dataviz skill: status colors ship with icon+label, not color
  * alone). Text never carries the fill color, only slate/amber ink tokens. */
-const DIR_FILL = "bg-cyan-600/80 hover:bg-cyan-500/90 border-cyan-400/30";
-const FILE_FILL = "bg-violet-600/70 hover:bg-violet-500/80 border-violet-400/30";
-const LOCKED_FILL = "bg-amber-600/40 hover:bg-amber-500/50 border-amber-400/30";
+const DIR_FILL = "bg-accent-strong/80 hover:bg-accent-strong/90 border-accent/30";
+const FILE_FILL = "bg-violet-strong/70 hover:bg-violet-strong/80 border-violet/30";
+const LOCKED_FILL = "bg-warn-strong/40 hover:bg-warn-strong/50 border-warn/30";
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value >= 100 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
-}
 
 export function DiskTreemap({
   items,
@@ -138,7 +128,7 @@ export function DiskTreemap({
   }
 
   return (
-    <div className="relative w-full overflow-hidden rounded-xl border border-cyan-500/10 bg-slate-950/40" style={{ aspectRatio: "1000 / 620" }}>
+    <div className="relative w-full overflow-hidden rounded-xl border border-line bg-bg/40" style={{ aspectRatio: "1000 / 620" }}>
       {rects.map((rect) => {
         const item = byId.get(rect.id);
         if (!item) return null;
@@ -168,16 +158,16 @@ export function DiskTreemap({
                 <div className="flex items-center gap-1 truncate">
                   {locked ? (
                     item.protected ? (
-                      <Shield className="h-3 w-3 shrink-0 text-amber-200" />
+                      <Shield className="h-3 w-3 shrink-0 text-warn-soft" />
                     ) : (
-                      <Lock className="h-3 w-3 shrink-0 text-amber-200" />
+                      <Lock className="h-3 w-3 shrink-0 text-warn-soft" />
                     )
                   ) : item.isDir ? (
-                    <Folder className="h-3 w-3 shrink-0 text-cyan-100" />
+                    <Folder className="h-3 w-3 shrink-0 text-accent-soft" />
                   ) : null}
-                  <span className="truncate text-[11px] font-medium text-slate-50">{item.name}</span>
+                  <span className="truncate text-[11px] font-medium text-fg">{item.name}</span>
                 </div>
-                <span className="truncate font-mono text-[10px] text-slate-200/80">{formatBytes(item.sizeBytes)}</span>
+                <span className="truncate font-mono text-[10px] text-fg/80">{formatBytes(item.sizeBytes)}</span>
               </div>
             )}
           </button>
@@ -189,17 +179,17 @@ export function DiskTreemap({
 
 export function DiskTreemapLegend({ t }: { t: (key: string) => string }) {
   return (
-    <div className="flex flex-wrap items-center gap-4 font-mono text-[10px] uppercase tracking-widest text-slate-500">
+    <div className="flex flex-wrap items-center gap-4 font-mono text-[10px] uppercase tracking-widest text-fg-4">
       <span className="flex items-center gap-1.5">
-        <span className="h-2.5 w-2.5 rounded-sm bg-cyan-600" />
+        <span className="h-2.5 w-2.5 rounded-sm bg-accent-strong" />
         {t("diskExplorer.legendFolders")}
       </span>
       <span className="flex items-center gap-1.5">
-        <span className="h-2.5 w-2.5 rounded-sm bg-violet-600" />
+        <span className="h-2.5 w-2.5 rounded-sm bg-violet-strong" />
         {t("diskExplorer.legendFiles")}
       </span>
       <span className="flex items-center gap-1.5">
-        <span className="h-2.5 w-2.5 rounded-sm bg-amber-600" />
+        <span className="h-2.5 w-2.5 rounded-sm bg-warn-strong" />
         {t("diskExplorer.legendLocked")}
       </span>
     </div>

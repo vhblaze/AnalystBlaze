@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -12,18 +12,22 @@ import {
   Sparkles,
   Wifi,
 } from "lucide-react";
-import { TiltCard } from "../TiltCard";
+import { cssVar } from "@/design/tokens";
 import type { User } from "@/hooks/useAuth";
+import type { AgentStatus, AgentTelemetrySnapshot } from "@/services/tauri/agent";
+import { useGameMode } from "@/features/gamemode/useGameMode";
+import { usePlan } from "@/features/plan/usePlan";
 import {
-  getActiveGameModeSession,
-  getWeeklyGameModeUsage,
-  isTauriRuntime,
-  listenToGameModeUsage,
-  type AgentStatus,
-  type AgentTelemetrySnapshot,
-  type GameModeSession,
-  type GameModeUsage,
-} from "@/services/tauri/agent";
+  formatDuration,
+  formatGhz,
+  formatGigabytes,
+  formatMegabytes,
+  formatMinutes,
+  formatMs,
+  formatPercent,
+  formatTemperature,
+  MISSING,
+} from "@/lib/format";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useI18n } from "@/i18n";
 
@@ -65,11 +69,12 @@ export function Dashboard({
   const { t } = useI18n();
   const track = useTelemetry("dashboard");
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
-  const [activeGameModeSession, setActiveGameModeSession] = useState<GameModeSession | null>(null);
-  const [gameModeUsage, setGameModeUsage] = useState<GameModeUsage | null>(null);
   const isAuthenticated = Boolean(status?.authenticated);
   const isReady = Boolean(status?.authenticated && status.registered);
-  const paidGameModeAllowed = Boolean(status?.authenticated && status.registered && status.has_paid_plan);
+  const { paidGameMode: paidGameModeAllowed } = usePlan(status);
+  const gameMode = useGameMode({ trackUsage: !paidGameModeAllowed });
+  const activeGameModeSession = gameMode.session;
+  const gameModeUsage = gameMode.usage;
   const gameModeActive = Boolean(activeGameModeSession);
   const isLive = Boolean(isReady && telemetry);
   const lastCheckSeconds = telemetry
@@ -88,50 +93,19 @@ export function Dashboard({
     setCpuHistory((current) => [...current.slice(-(HISTORY_LEN - 1)), telemetry.cpu_usage]);
   }, [telemetry]);
 
-  const refreshGameModeSession = useCallback(async () => {
-    if (!isTauriRuntime()) {
-      setActiveGameModeSession(null);
-      return;
-    }
-    try {
-      setActiveGameModeSession(await getActiveGameModeSession());
-    } catch {
-      setActiveGameModeSession(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshGameModeSession();
-  }, [refreshGameModeSession]);
-
-  useEffect(() => {
-    if (paidGameModeAllowed) {
-      setGameModeUsage(null);
-      return;
-    }
-    getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
-    let dispose: (() => void) | undefined;
-    listenToGameModeUsage(setGameModeUsage).then((unlisten) => {
-      dispose = unlisten;
-    });
-    return () => dispose?.();
-  }, [paidGameModeAllowed]);
-
   const handleGameModeClick = async () => {
     track("game_mode_clicked");
     if (!isReady || gameModeActive) return;
     await onActivateGameMode();
-    await refreshGameModeSession();
-    if (!paidGameModeAllowed) {
-      getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
-    }
+    await gameMode.refreshSession().catch(() => undefined);
+    if (!paidGameModeAllowed) await gameMode.refreshUsage().catch(() => undefined);
   };
 
   const handleGameModeDeactivate = async () => {
     track("game_mode_deactivate_clicked");
     await onRestoreGameMode();
-    setActiveGameModeSession(null);
-    await refreshGameModeSession();
+    gameMode.setSession(null);
+    await gameMode.refreshSession().catch(() => undefined);
   };
 
   const handlePcCleanFastClick = async () => {
@@ -145,42 +119,40 @@ export function Dashboard({
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-cyan-400/70">
+        <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-accent/70">
           <Sparkles className="h-3 w-3" />
           {t("dashboard.eyebrow")}
         </div>
-        <h1 className="text-[42px] font-semibold leading-tight tracking-tight text-slate-50">
+        <h1 className="text-[42px] font-semibold leading-tight tracking-tight text-fg">
           {t("dashboard.greetingPrefix")}{" "}
-          <span className="text-gradient-cyber">{user?.name ?? t("dashboard.fallbackPilot")}</span>
+          <span className="text-gradient-brand">{user?.name ?? t("dashboard.fallbackPilot")}</span>
         </h1>
-        <p className="max-w-xl text-sm text-slate-400">
+        <p className="max-w-xl text-sm text-fg-3">
           {telemetry ? t("dashboard.descriptionLive") : t("dashboard.description")}
         </p>
       </header>
 
-      <TiltCard className="h-[320px]" intensity={5}>
+      <div className="glass-panel relative h-[320px]">
         <div className="relative flex h-full flex-col justify-between overflow-hidden p-8">
-          <div className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-gradient-to-br from-cyan-500/30 via-violet-500/20 to-transparent blur-3xl" />
-          <div className="pointer-events-none absolute -left-10 bottom-0 h-40 w-40 rounded-full bg-fuchsia-500/10 blur-3xl" />
 
           <div className="relative flex items-start justify-between gap-6">
             <div className="min-w-0">
-              <div className="font-mono text-[11px] uppercase tracking-[0.3em] text-cyan-400/80">
+              <div className="font-mono text-[11px] uppercase tracking-[0.3em] text-accent/80">
                 {t("dashboard.statusLabel")}
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <span className="relative flex h-3 w-3">
-                  <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${isLive ? "bg-cyan-400" : "bg-amber-400"} opacity-60`} />
-                  <span className={`relative inline-flex h-3 w-3 rounded-full ${isLive ? "bg-cyan-400 shadow-[0_0_12px_hsl(187_100%_60%)]" : "bg-amber-400 shadow-[0_0_12px_hsl(40_100%_60%)]"}`} />
+                  <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${isLive ? "bg-accent" : "bg-warn"} opacity-60`} />
+                  <span className={`relative inline-flex h-3 w-3 rounded-full ${isLive ? "bg-accent ": "bg-warn"}`} />
                 </span>
-                <span className="text-3xl font-semibold tracking-tight text-slate-50">
+                <span className="text-3xl font-semibold tracking-tight text-fg">
                   {statusTitle}
                 </span>
                 <span className={`rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${healthTone(telemetry?.health_level)}`}>
                   {telemetry ? healthLabel : t("common.pending")}
                 </span>
               </div>
-              <p className="mt-2 text-sm text-slate-400">
+              <p className="mt-2 text-sm text-fg-3">
                 {lastCheckSeconds === null
                   ? t("dashboard.noTelemetryDesc")
                   : lastCheckSeconds === 1
@@ -189,10 +161,10 @@ export function Dashboard({
               </p>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-2">
-              <div className="grid h-12 w-12 place-items-center rounded-xl border border-cyan-400/30 bg-cyan-500/10">
-                <ShieldCheck className="h-6 w-6 text-cyan-300" />
+              <div className="grid h-12 w-12 place-items-center rounded-xl border border-accent/30 bg-accent-strong/10">
+                <ShieldCheck className="h-6 w-6 text-accent" />
               </div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500">
+              <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-fg-4">
                 {telemetry?.telemetry_mode ?? status?.mode ?? t("common.stopped")}
               </div>
             </div>
@@ -202,21 +174,21 @@ export function Dashboard({
             <Stat
               icon={<Gauge className="h-3.5 w-3.5" />}
               label={t("dashboard.healthScore")}
-              value={telemetry ? `${telemetry.health_score}%` : "--"}
+              value={telemetry ? `${telemetry.health_score}%` : MISSING}
               delta={telemetry ? healthLabel : t("common.unavailable")}
               tone={telemetry?.health_level}
             />
             <Stat
               icon={<Cpu className="h-3.5 w-3.5" />}
               label={t("dashboard.cpuLoad")}
-              value={telemetry ? formatPercent(telemetry.cpu_usage) : "--"}
+              value={telemetry ? formatPercent(telemetry.cpu_usage) : MISSING}
               delta={telemetry ? t("dashboard.activeProfileValue", { profile: profileLabel(telemetry.active_profile, t) }) : t("common.unavailable")}
               tone={telemetry?.cpu_usage && telemetry.cpu_usage > 80 ? "watch" : "good"}
             />
             <Stat
               icon={<Activity className="h-3.5 w-3.5" />}
               label={t("dashboard.processes")}
-              value={telemetry?.active_processes?.toString() ?? "--"}
+              value={telemetry?.active_processes?.toString() ?? MISSING}
               delta={telemetry ? formatDuration(telemetry.system_uptime_seconds) : t("common.unavailable")}
               tone="good"
             />
@@ -240,8 +212,8 @@ export function Dashboard({
                   }}
                   className={`group inline-flex items-center gap-2.5 rounded-xl border px-6 py-3 text-sm font-semibold transition-all duration-300 disabled:opacity-70 ${
                     gameModeActive
-                      ? "border-emerald-300/50 bg-emerald-400/15 text-emerald-50 hover:border-amber-300/60 hover:bg-amber-400/15"
-                      : "border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 text-cyan-100 hover:border-cyan-300/60 hover:from-cyan-500/30 hover:shadow-[0_0_30px_-5px_hsl(187_100%_55%/0.7)]"
+                      ? "border-ok/50 bg-ok/15 text-ok-soft hover:border-warn/60 hover:bg-warn/15"
+                      : "border-accent/40 bg-gradient-to-r from-accent-strong/20 to-violet-strong/10 text-accent-soft hover:border-accent/60 hover:from-accent-strong/30"
                   }`}
                 >
                   {gameModeActive ? (
@@ -255,34 +227,34 @@ export function Dashboard({
                 <button
                   disabled={busy || !isReady}
                   onClick={() => void handlePcCleanFastClick()}
-                  className="group inline-flex items-center gap-2.5 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-5 py-3 text-sm font-semibold text-emerald-100 transition-all duration-300 hover:border-emerald-300/60 hover:bg-emerald-400/15 disabled:opacity-50"
+                  className="group inline-flex items-center gap-2.5 rounded-xl border border-ok/40 bg-ok/10 px-5 py-3 text-sm font-semibold text-ok-soft transition-all duration-300 hover:border-ok/60 hover:bg-ok/15 disabled:opacity-50"
                 >
                   <Sparkles className="h-4 w-4" />
                   PC limpo/rapido
                 </button>
               </div>
               {isReady && !paidGameModeAllowed && gameModeUsage && (
-                <span className={`text-xs ${gameModeUsage.limitReached ? "text-amber-300" : "text-slate-500"}`}>
+                <span className={`text-xs ${gameModeUsage.limitReached ? "text-warn" : "text-fg-4"}`}>
                   {gameModeUsage.limitReached
                     ? "Limite semanal de Modo Gamer atingido. Volta na próxima semana."
-                    : `Modo Gamer: ${formatGameModeMinutes(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
+                    : `Modo Gamer: ${formatMinutes(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
                 </span>
               )}
             </div>
             <Sparkline data={cpuHistory} />
           </div>
         </div>
-      </TiltCard>
+      </div>
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
         <MetricCard icon={Cpu} label={t("dashboard.cpuInfo")} value={shortCpuName(telemetry?.cpu_name)} detail={telemetry ? `${formatPercent(telemetry.cpu_usage)} - ${formatGhz(telemetry.cpu_frequency_mhz)}` : t("common.unavailable")} />
-        <MetricCard icon={MemoryStick} label={t("dashboard.ramLoad")} value={telemetry ? formatPercent(telemetry.ram_usage_percent) : "--"} detail={telemetry ? `${formatMb(telemetry.ram_usage_mb)} / ${formatMb(telemetry.ram_total_mb ?? 0)}` : t("common.unavailable")} />
-        <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={shortGpuName(telemetry?.gpu_name)} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} - ${formatTemp(telemetry.gpu_temperature, telemetry.gpu_temperature_available)} - ${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")}` : t("dashboard.gpuLoadUnavailable")} />
-        <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
+        <MetricCard icon={MemoryStick} label={t("dashboard.ramLoad")} value={telemetry ? formatPercent(telemetry.ram_usage_percent) : MISSING} detail={telemetry ? `${formatMegabytes(telemetry.ram_usage_mb)} / ${formatMegabytes(telemetry.ram_total_mb ?? 0)}` : t("common.unavailable")} />
+        <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={shortGpuName(telemetry?.gpu_name)} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} - ${formatTemperature(telemetry.gpu_temperature, telemetry.gpu_temperature_available)} - ${formatGigabytes(telemetry.vram_gb)} ${t("dashboard.vramTotal")}` : t("dashboard.gpuLoadUnavailable")} />
+        <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : MISSING} detail={telemetry ? `${formatGigabytes(telemetry.disk_used_gb ?? 0)} / ${formatGigabytes(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
         <MetricCard
           icon={Wifi}
           label={t("dashboard.latency")}
-          value={networkActionPending ? "..." : telemetry ? formatLatency(telemetry.latency_ms) : "--"}
+          value={networkActionPending ? "..." : telemetry ? formatMs(telemetry.latency_ms) : MISSING}
           detail={
             networkActionPending
               ? t("dashboard.networkActionApplying")
@@ -292,7 +264,7 @@ export function Dashboard({
           }
           onClick={onOpenNetwork}
         />
-        <MetricCard icon={ShieldCheck} label={t("dashboard.optimizationStatus")} value={telemetry ? optimizationLabel(telemetry.optimization_status, t) : "--"} detail={telemetry ? profileLabel(telemetry.active_profile, t) : t("common.unavailable")} />
+        <MetricCard icon={ShieldCheck} label={t("dashboard.optimizationStatus")} value={telemetry ? optimizationLabel(telemetry.optimization_status, t) : MISSING} detail={telemetry ? profileLabel(telemetry.active_profile, t) : t("common.unavailable")} />
       </div>
     </div>
   );
@@ -312,8 +284,8 @@ function Stat({
   tone?: string;
 }) {
   return (
-    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/50 p-4 backdrop-blur-sm">
-      <div className="flex items-center justify-between gap-2 text-slate-500">
+    <div className="rounded-xl border border-line bg-bg/50 p-4">
+      <div className="flex items-center justify-between gap-2 text-fg-4">
         <div className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest">
           {icon}
           <span className="truncate">{label}</span>
@@ -322,7 +294,7 @@ function Stat({
           {delta}
         </span>
       </div>
-      <div className="mt-2 truncate text-2xl font-semibold tracking-tight text-slate-50">{value}</div>
+      <div className="mt-2 truncate text-2xl font-semibold tracking-tight text-fg">{value}</div>
     </div>
   );
 }
@@ -347,16 +319,16 @@ function MetricCard({
   return (
     <Tag
       onClick={onClick}
-      className={`rounded-2xl border border-cyan-500/10 bg-slate-950/45 p-5 text-left transition-colors ${
-        onClick ? "cursor-pointer hover:border-cyan-400/30 hover:bg-slate-950/70" : ""
+      className={`rounded-2xl border border-line bg-bg/45 p-5 text-left transition-colors ${
+        onClick ? "cursor-pointer hover:border-accent/30 hover:bg-bg/70" : ""
       }`}
     >
-      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500">
-        <Icon className="h-4 w-4 text-cyan-300" />
+      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-fg-4">
+        <Icon className="h-4 w-4 text-accent" />
         <span className="truncate">{label}</span>
       </div>
-      <div className="mt-3 truncate text-xl font-semibold text-slate-100">{value}</div>
-      <div className="mt-1 truncate text-xs text-slate-500">{detail}</div>
+      <div className="mt-3 truncate text-xl font-semibold text-fg">{value}</div>
+      <div className="mt-1 truncate text-xs text-fg-4">{detail}</div>
     </Tag>
   );
 }
@@ -379,27 +351,20 @@ function Sparkline({ data }: { data: number[] }) {
     <svg viewBox="0 0 120 36" className="h-9 w-32 opacity-90">
       <defs>
         <linearGradient id="sparkGrad" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor="hsl(187 100% 60%)" />
-          <stop offset="100%" stopColor="hsl(265 90% 70%)" />
+          <stop offset="0%" stopColor={cssVar("accent")} />
+          <stop offset="100%" stopColor={cssVar("violet")} />
         </linearGradient>
       </defs>
       {points ? (
         <polyline points={points} fill="none" stroke="url(#sparkGrad)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       ) : (
-        <line x1="0" y1="30" x2="120" y2="30" stroke="hsl(215 20% 35%)" strokeDasharray="3 5" strokeWidth="1.2" />
+        <line x1="0" y1="30" x2="120" y2="30" stroke={cssVar("text-4", 0.6)} strokeDasharray="3 5" strokeWidth="1.2" />
       )}
     </svg>
   );
 }
 
-function formatPercent(value: number) {
-  return `${Math.round(Math.max(0, Math.min(100, value)))}%`;
-}
 
-function formatLatency(value?: number | null) {
-  if (value == null || !Number.isFinite(value) || value <= 0) return "--";
-  return `${Math.round(value)} ms`;
-}
 
 function networkDetail(network: unknown) {
   if (!network || typeof network !== "object") return "rede em leitura";
@@ -415,28 +380,15 @@ function networkDetail(network: unknown) {
   return [name, loss, jitter].filter(Boolean).join(" - ");
 }
 
-function formatGb(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0 GB";
-  return `${value.toFixed(value >= 10 ? 0 : 1)} GB`;
-}
 
-function formatMb(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0 MB";
-  if (value >= 1024) return formatGb(value / 1024);
-  return `${Math.round(value)} MB`;
-}
 
-function formatGhz(value: number | null | undefined) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "--";
-  return `${(value / 1000).toFixed(2)} GHz`;
-}
 
 /** Strips vendor/marketing boilerplate off a raw CPU brand string so the
  * card shows "Ryzen 5 5600X" instead of "AMD Ryzen 5 5600X 6-Core
  * Processor" (or "i7-10700K" instead of "Intel(R) Core(TM) i7-10700K CPU
  * @ 3.80GHz") - a real user found the full string got cut off in the card. */
 function shortCpuName(raw: string | undefined) {
-  if (!raw || !raw.trim()) return "--";
+  if (!raw || !raw.trim()) return MISSING;
   return raw
     .trim()
     .replace(/^AMD\s+/i, "")
@@ -451,7 +403,7 @@ function shortCpuName(raw: string | undefined) {
 
 /** Same idea for GPU names - "RTX 3060" instead of "NVIDIA GeForce RTX 3060". */
 function shortGpuName(raw: string | undefined) {
-  if (!raw || !raw.trim()) return "--";
+  if (!raw || !raw.trim()) return MISSING;
   return raw
     .trim()
     .replace(/^NVIDIA\s+GeForce\s+/i, "")
@@ -462,35 +414,19 @@ function shortGpuName(raw: string | undefined) {
     .trim() || raw.trim();
 }
 
-function formatTemp(value: number | undefined, available: boolean | undefined) {
-  if (!available || typeof value !== "number" || !Number.isFinite(value)) return "--";
-  return `${Math.round(value)} C`;
-}
 
-function formatGameModeMinutes(seconds: number) {
-  const minutes = Math.max(0, Math.round(seconds / 60));
-  return `${minutes} min`;
-}
 
-function formatDuration(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds < 60) return `${Math.max(0, Math.round(seconds || 0))}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
 
 function healthTone(level?: string) {
-  if (level === "critical") return "border-rose-400/30 bg-rose-400/10 text-rose-300";
-  if (level === "watch") return "border-amber-400/30 bg-amber-400/10 text-amber-300";
-  return "border-emerald-400/30 bg-emerald-400/10 text-emerald-300";
+  if (level === "critical") return "border-danger/30 bg-danger/10 text-danger";
+  if (level === "watch") return "border-warn/30 bg-warn/10 text-warn";
+  return "border-ok/30 bg-ok/10 text-ok";
 }
 
 function textTone(level?: string) {
-  if (level === "critical") return "text-rose-400";
-  if (level === "watch") return "text-amber-400";
-  return "text-emerald-400";
+  if (level === "critical") return "text-danger";
+  if (level === "watch") return "text-warn";
+  return "text-ok";
 }
 
 function healthLevelLabel(level: string | undefined, t: (key: string, params?: Record<string, string | number | boolean>) => string) {
