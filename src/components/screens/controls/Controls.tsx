@@ -2,6 +2,10 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { SummaryRow } from "@/components/ui/summary-row";
 import { useI18n } from "@/i18n";
+import { formatAgo } from "@/lib/format";
+import { useHistory } from "@/features/history/useHistory";
+import { lastActionAt } from "@/features/history/timeline";
+import { useLiveTelemetry } from "@/features/telemetry/useLiveTelemetry";
 import { formatBytes, formatMinutes } from "@/lib/format";
 import { route, type ControlsSection, type Route } from "@/lib/routes";
 import type { AgentStatus } from "@/services/tauri/agent";
@@ -62,6 +66,12 @@ function ControlsHome({ status, navigate }: Props) {
   const inventory = useWindowsInventory();
   const protectedApps = useProtectedApps();
   const { energy } = useEnergyDiagnostics();
+  const history = useHistory();
+  const live = useLiveTelemetry();
+  const failingServices = ((live?.advanced as { failing_services?: Array<{ name: string }> } | null | undefined)?.failing_services ?? []).length;
+  const lastCleanupAt = lastActionAt(history.audit, ["APPLY_CLEANUP_CATEGORY", "EMPTY_TEMP", "APPLY_PC_CLEAN_FAST_PROFILE"]);
+  const lastGameModeAt = lastActionAt(history.audit, ["APPLY_GAME_MODE"]);
+  const lastRun = (at: number | null) => (at ? t("controls.d3.groups.lastRun", { when: formatAgo(at) }) : null);
 
   const open = (section: ControlsSection) => (
     <Button size="sm" variant="outline" onClick={() => navigate(route("controls", section))}>
@@ -103,7 +113,7 @@ function ControlsHome({ status, navigate }: Props) {
           <SummaryRow
             title={t("controls.d3.groups.gamemode.title")}
             summary={gameModeSummary}
-            state={gameMode.session ? t("controls.d3.groups.gamemode.on") : policy?.auto_game_mode && plan.automaticGameMode ? t("controls.d3.groups.gamemode.auto") : null}
+            state={gameMode.session ? t("controls.d3.groups.gamemode.on") : policy?.auto_game_mode && plan.automaticGameMode ? t("controls.d3.groups.gamemode.auto") : lastRun(lastGameModeAt)}
             action={open("gamemode")}
           />
           <SummaryRow
@@ -115,6 +125,7 @@ function ControlsHome({ status, navigate }: Props) {
                   ? t("controls.d3.groups.cleanup.summary", { size: formatBytes(reclaimable), count: cleanupCount })
                   : t("controls.d3.groups.cleanup.nothing")
             }
+            state={lastRun(lastCleanupAt)}
             action={open("cleanup")}
           />
           <SummaryRow
@@ -133,6 +144,8 @@ function ControlsHome({ status, navigate }: Props) {
           <SummaryRow
             title={t("controls.d3.groups.services.title")}
             summary={t("controls.d3.groups.services.summary", { count: inventory.services.length })}
+            warn={failingServices > 0}
+            state={failingServices > 0 ? t("controls.d3.groups.services.failing", { count: failingServices }) : null}
             action={open("services")}
           />
           <SummaryRow

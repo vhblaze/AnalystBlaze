@@ -43,9 +43,12 @@ export const history = {
       undone: "Desfeitos",
       gain: "Ganho médio no 1% low",
       gainPending: "ainda sem medição de FPS",
+      gainCount: "em {{count}} medições",
     },
     result: {
       freedMemory: "liberou {{size}}",
+      fpsLow: "1% low {{before}} → {{after}} fps",
+      fpsSame: "sem diferença mensurável (±{{noise}} fps)",
       quarantined: "{{size}} na quarentena",
     },
     change: {

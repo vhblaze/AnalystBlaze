@@ -1,6 +1,8 @@
 import {
   getActiveGameModeSession,
+  getForegroundGame,
   getFrameMeasurements,
+  type ForegroundGame,
   type FrameMeasurementEntry,
   getWeeklyGameModeUsage,
   listenToGameModeUsage,
@@ -41,6 +43,23 @@ export function skippedReasonKey(skipped: string | undefined): "notInFront" | "t
   if (skipped.endsWith("game_not_in_foreground")) return "notInFront";
   if (skipped.endsWith("too_few_frames")) return "tooFewFrames";
   return "capture";
+}
+
+/** Jogo aberto em primeiro plano, com ou sem Modo Jogo. Releitura a cada 15 s. */
+export const foregroundGame = createAgentResource<ForegroundGame>({
+  name: "gamemode.foregroundGame",
+  fetch: getForegroundGame,
+  staleMs: 15_000,
+});
+
+/** Ganho médio no 1% low (em %) entre as medições que deram número, ou null. */
+export function averageLowGainPercent(entries: FrameMeasurementEntry[] | undefined): { percent: number; count: number } | null {
+  const valid = (entries ?? [])
+    .map((entry) => entry.measurement)
+    .filter((m) => m.verdict && m.verdict !== "incomplete" && m.baseline?.low1PctFps && m.deltaLow1PctFps != null);
+  if (valid.length === 0) return null;
+  const sum = valid.reduce((acc, m) => acc + ((m.deltaLow1PctFps ?? 0) / (m.baseline?.low1PctFps ?? 1)) * 100, 0);
+  return { percent: sum / valid.length, count: valid.length };
 }
 
 /** Sessão do Modo Jogo ativa agora, ou null. */

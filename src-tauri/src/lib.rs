@@ -1142,6 +1142,13 @@ async fn boot_performance() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command("READ_BOOT_PERFORMANCE", None).await)
 }
 
+/// Jogo em primeiro plano agora (sem ligar nada): o Dashboard usa para o
+/// card "o que está pesando" falar do jogo mesmo sem Modo Jogo (doc 14 U2).
+#[tauri::command]
+fn foreground_game() -> optimizations::detection::GameDetection {
+    optimizations::detection::detect_game_process()
+}
+
 /// L4: medições de FPS antes/depois do Modo Jogo automático, guardadas só
 /// no PC (com o nome do jogo, que nunca vai para o servidor).
 #[tauri::command]
@@ -2324,6 +2331,7 @@ pub fn run() {
             release_memory,
             boot_performance,
             frame_measurements,
+            foreground_game,
             renew_dhcp_lease,
             apply_network_tune,
             confirm_network_tune,

@@ -442,6 +442,13 @@ export const mypc = {
         hide: "ocultar",
         noWindow: "nenhuma janela informada",
         privacy: "Nomes de processos e janelas ficam só no seu PC.",
+        thermal: "Temperatura",
+        throttling: "o processador está limitando o clock pelo calor",
+        thermalRising: "subindo",
+        fans: "Ventoinhas",
+        fansMany: "{{count}} · a mais rápida a {{max}}",
+        sessionEnergy: "Energia nesta sessão",
+        sessionEnergyValue: "~{{value}} kWh (estimado)",
       },
       contextValue: {
         focus_work: "Modo Foco: trabalho",

@@ -88,8 +88,11 @@ export function Startup({ actions }: { actions: ControlsActions }) {
     if (!last) return boot.data ? <p className="mt-2 text-[13px] text-fg-3">{t("controls.d3.startup.boot.noEvents")}</p> : null;
     const recent = boot.data?.recentBoots ?? [];
     const average = recent.length > 1 ? recent.reduce((sum, item) => sum + item.bootMs, 0) / recent.length : null;
+    // Estimativa só com o que o Windows mediu: soma do atraso dos sugeridos.
+    const suggestedDelayMs = suggested.reduce((sum, row) => sum + (bootDelayFor(row, boot.data) ?? 0), 0);
+    const estimate = suggestedDelayMs > 0 ? Math.max(0, last.bootMs - suggestedDelayMs) : null;
     return (
-      <p className="mt-2 text-[13px] text-fg-2">
+      <div className="mt-2 text-[13px] text-fg-2">
         <span className="font-medium text-fg">{t("controls.d3.startup.boot.last", { time: formatSecondsFromMs(last.bootMs) })}</span>
         <span className="text-fg-3">
           {" · "}
@@ -97,7 +100,12 @@ export function Startup({ actions }: { actions: ControlsActions }) {
             ? t("controls.d3.startup.boot.lastDetail", { count: recent.length, average: formatSecondsFromMs(average) })
             : t("controls.d3.startup.boot.lastDetailSingle")}
         </span>
-      </p>
+        {estimate !== null && (
+          <p className="mt-0.5 text-fg-3">
+            {t("controls.d3.startup.boot.estimate", { count: suggested.length, time: formatSecondsFromMs(estimate), saved: formatSecondsFromMs(suggestedDelayMs) })}
+          </p>
+        )}
+      </div>
     );
   })();
 

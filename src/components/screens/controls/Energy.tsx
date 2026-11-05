@@ -1,3 +1,4 @@
+import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Segmented } from "@/components/ui/segmented";
@@ -42,9 +43,15 @@ export function Energy({ actions }: { actions: ControlsActions }) {
 
   return (
     <div className="flex max-w-3xl flex-col gap-5">
-      <header>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
         <h2 className="text-[28px] font-semibold tracking-tight text-fg">{t("controls.d3.energy.title")}</h2>
         <p className="mt-1 text-sm text-fg-3">{t("controls.d3.energy.subtitle")}</p>
+        </div>
+        <Button size="sm" variant="outline" disabled={loading || busyKey !== null} onClick={() => void refresh().catch(() => undefined)}>
+          <RefreshCw />
+          {t("common.refresh")}
+        </Button>
       </header>
 
       <Card label={t("controls.d3.energy.planLabel")}>

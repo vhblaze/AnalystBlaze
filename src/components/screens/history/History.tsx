@@ -9,6 +9,8 @@ import { SectionLabel } from "@/components/ui/section-label";
 import { toast } from "@/hooks/use-toast";
 import { useI18n } from "@/i18n";
 import { undoSnapshot, useTimeline } from "@/features/history/useHistory";
+import { averageLowGainPercent, frameMeasurements } from "@/features/gamemode/useGameMode";
+import { formatSignedPercent } from "@/lib/format";
 import { startOfDay, type TimelineItem } from "@/features/history/timeline";
 import { HistoryItem } from "./HistoryItem";
 
@@ -31,6 +33,9 @@ function periodStart(period: Period): number {
 export function History() {
   const { t, locale } = useI18n();
   const timeline = useTimeline();
+  // L4: a mesma fonte do card "Última otimização" do Dashboard.
+  const measurements = frameMeasurements.use();
+  const gain = averageLowGainPercent(measurements.data);
   const [period, setPeriod] = useState<Period>("today");
   const [origin, setOrigin] = useState<Origin>("all");
   const [undoingId, setUndoingId] = useState<string | null>(null);
@@ -120,7 +125,12 @@ export function History() {
         <Kpi label={t("history.kpi.week")} value={t("history.kpi.adjustments", { count: week.length })} />
         <Kpi label={t("history.kpi.active")} value={activeNow} />
         <Kpi label={t("history.kpi.undone")} value={undone} />
-        <Kpi label={t("history.kpi.gain")} value={<span className="text-sm font-normal text-fg-3">{t("history.kpi.gainPending")}</span>} />
+        <Kpi
+          label={t("history.kpi.gain")}
+          value={gain ? formatSignedPercent(gain.percent) : <span className="text-sm font-normal text-fg-3">{t("history.kpi.gainPending")}</span>}
+          hint={gain ? t("history.kpi.gainCount", { count: gain.count }) : null}
+          tone={gain ? (gain.percent >= 0 ? "ok" : "warn") : "default"}
+        />
       </Card>
 
       {timeline.error && timeline.items.length === 0 ? (

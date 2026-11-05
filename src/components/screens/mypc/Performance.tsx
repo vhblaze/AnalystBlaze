@@ -693,6 +693,24 @@ function SystemPanel({
   if (context) rows.push({ label: t("mypc.performance.system.context"), value: context });
   if (energy) rows.push({ label: t("mypc.performance.system.energy"), value: energy });
   if (power) rows.push({ label: t("mypc.performance.system.power"), value: power });
+  // Dados que o agente já coleta e a tela não mostrava: limitação térmica,
+  // ventoinhas e energia da sessão (sempre com "estimado" quando for).
+  if (sample?.throttling_suspected) {
+    rows.push({ label: t("mypc.performance.system.thermal"), value: t("mypc.performance.system.throttling") });
+  } else if (sample?.thermal_trend === "rising" || sample?.thermal_trend === "subindo") {
+    rows.push({ label: t("mypc.performance.system.thermal"), value: t("mypc.performance.system.thermalRising") });
+  }
+  const fans = (sample?.fan_sensors ?? []).filter((fan) => typeof fan.value === "number" && fan.value > 0);
+  if (fans.length > 0) {
+    const fastest = fans.reduce((best, fan) => (fan.value > best.value ? fan : best), fans[0]);
+    rows.push({
+      label: t("mypc.performance.system.fans"),
+      value: fans.length === 1 ? `${formatNumber(fastest.value)} ${fastest.unit || "rpm"}` : t("mypc.performance.system.fansMany", { count: fans.length, max: `${formatNumber(fastest.value)} ${fastest.unit || "rpm"}` }),
+    });
+  }
+  if (typeof sample?.estimated_kwh === "number" && sample.estimated_kwh > 0) {
+    rows.push({ label: t("mypc.performance.system.sessionEnergy"), value: t("mypc.performance.system.sessionEnergyValue", { value: formatNumber(sample.estimated_kwh) }) });
+  }
 
   return (
     <Card label={t("mypc.performance.system.title")} className="flex flex-col">

@@ -17,6 +17,7 @@ import { formatAgo, formatMinutes } from "@/lib/format";
 import type { AgentStatus, LocalAiPolicy, UpdateStatus } from "@/services/tauri/agent";
 import { isTelemetryEnabled, setTelemetryEnabled } from "@/services/telemetry";
 import { useUiTelemetryQueue } from "@/features/telemetry/useUiTelemetryQueue";
+import { useHelper } from "@/features/helper/useHelper";
 import {
   automationPolicy,
   saveAutomationPolicy,
@@ -41,6 +42,8 @@ type SettingsProps = {
   onOpenHistory?: () => void;
   /** Automações e componente de sistema agora ficam em Controles. */
   onOpenControls?: () => void;
+  /** Controles › Avançado, onde o componente de sistema mora. */
+  onOpenSystemComponent?: () => void;
 };
 
 function readFlag(key: string): boolean {
@@ -75,6 +78,7 @@ export function Settings({
   onSyncPlan,
   onOpenHistory,
   onOpenControls,
+  onOpenSystemComponent,
 }: SettingsProps) {
   const { t } = useI18n();
   const track = useTelemetry("settings");
@@ -108,7 +112,7 @@ export function Settings({
         <div className="flex flex-col gap-5">
           <AppearanceCard track={track} />
           <PrivacyCard track={track} onOpenAccountSettings={onOpenAccountSettings} />
-          <MovedCard onOpenControls={onOpenControls} />
+          <MovedCard onOpenControls={onOpenControls} onOpenSystemComponent={onOpenSystemComponent} />
         </div>
         <div className="flex flex-col gap-5">
           <NotificationsCard onOpenHistory={onOpenHistory} />
@@ -653,8 +657,10 @@ function UpdateCheckPopup({
 /* Linha que leva a Controles                                          */
 /* ------------------------------------------------------------------ */
 
-function MovedCard({ onOpenControls }: { onOpenControls?: () => void }) {
+function MovedCard({ onOpenControls, onOpenSystemComponent }: { onOpenControls?: () => void; onOpenSystemComponent?: () => void }) {
   const { t } = useI18n();
+  const helper = useHelper();
+  const state = !helper.status ? null : helper.ready ? "ready" : helper.status.installed ? "attention" : "missing";
   return (
     <Card>
       <div className="flex items-center justify-between gap-4">
@@ -665,6 +671,19 @@ function MovedCard({ onOpenControls }: { onOpenControls?: () => void }) {
         {onOpenControls && (
           <Button size="sm" variant="link" onClick={onOpenControls}>
             {t("settingsD3.moved.action")}
+          </Button>
+        )}
+      </div>
+      <div className="mt-3 flex items-center justify-between gap-4 border-t border-line-soft pt-3">
+        <div className="min-w-0">
+          <div className="text-[15px] font-semibold leading-snug text-fg">{t("settingsD3.moved.componentTitle")}</div>
+          <div className="mt-0.5 text-[13px] leading-snug text-fg-3">
+            {state ? t(`settingsD3.moved.componentState.${state}`, { version: helper.status?.version ?? "" }) : t("settingsD3.moved.componentReading")}
+          </div>
+        </div>
+        {onOpenSystemComponent && (
+          <Button size="sm" variant="link" onClick={onOpenSystemComponent}>
+            {t("settingsD3.moved.componentAction")}
           </Button>
         )}
       </div>

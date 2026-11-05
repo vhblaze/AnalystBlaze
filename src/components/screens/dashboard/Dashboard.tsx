@@ -16,7 +16,7 @@ import { formatMegabytes, formatMinutes } from "@/lib/format";
 import { route, type Route } from "@/lib/routes";
 import type { AgentStatus, AgentTelemetrySnapshot, OptimizationResult, ReleaseMemoryDetails } from "@/services/tauri/agent";
 import { useDiskVolumes } from "@/features/disk/useDiskVolumes";
-import { useGameMode } from "@/features/gamemode/useGameMode";
+import { foregroundGame, useGameMode } from "@/features/gamemode/useGameMode";
 import { useHelper } from "@/features/helper/useHelper";
 import { performanceReport } from "@/features/performance/usePerformanceScan";
 import { usePlan } from "@/features/plan/usePlan";
@@ -69,6 +69,8 @@ export function Dashboard({
   const isReady = Boolean(status?.authenticated && status.registered);
   const plan = usePlan(status);
   const gameMode = useGameMode({ trackUsage: !plan.paidGameMode });
+  // Doc 14 U2: com jogo aberto (mesmo sem Modo Jogo), o card principal fala do jogo.
+  const foreground = foregroundGame.use({ auto: isReady });
   const helper = useHelper();
   const { volumes } = useDiskVolumes({ auto: isReady });
   const [dismissed, setDismissed] = useState<Weighing["kind"][]>(() => Array.from(dismissedThisSession));
@@ -76,8 +78,8 @@ export function Dashboard({
   const [lastResult, setLastResult] = useState<string | null>(null);
 
   const weighing = useMemo(
-    () => pickWeighingNow({ telemetry, volumes, gameSession: gameMode.session, dismissed }),
-    [telemetry, volumes, gameMode.session, dismissed],
+    () => pickWeighingNow({ telemetry, volumes, gameSession: gameMode.session, dismissed, foregroundGame: foreground.data ?? null }),
+    [telemetry, volumes, gameMode.session, dismissed, foreground.data],
   );
   const volume = useMemo(() => systemVolume(volumes), [volumes]);
 
@@ -105,6 +107,7 @@ export function Dashboard({
     if (action === "open_disk") return navigate(route("mypc", "disk"));
     if (action === "open_performance") return navigate(route("mypc", "performance"));
     if (action === "open_network") return navigate(route("mypc", "network"));
+    if (action === "game_mode_on") return toggleGameMode();
     setLastResult(null);
     const result = await onReleaseMemory();
     if (!result || typeof result !== "object") return;
@@ -154,6 +157,7 @@ export function Dashboard({
   };
 
   const helperBlocked = helper.status && !helper.ready ? t("dashboard.d3.needsHelper") : null;
+  const gameModeBlocked = !plan.paidGameMode && usage?.limitReached ? t("dashboard.d3.gameModeUsedUp") : null;
   const notReadyReason = isReady ? null : t("dashboard.d3.needsAgent");
 
   return (
@@ -230,6 +234,7 @@ export function Dashboard({
             onAction={(action) => void onWeighingAction(action)}
             onDismiss={dismiss}
             releaseMemoryBlockedReason={helperBlocked}
+            gameModeBlockedReason={gameModeBlocked}
             busy={busy}
             lastResult={lastResult}
           />

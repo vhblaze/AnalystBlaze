@@ -60,7 +60,9 @@ export const controls = {
         services: {
           title: "Serviços do Windows",
           summary: "{{count}} serviços que dá para parar com segurança",
+          failing: "{{count}} falhando nas últimas 24 h",
         },
+        lastRun: "última: {{when}}",
         protected: {
           title: "Processos protegidos",
           summary: "Apps em que o AnalystBlaze nunca mexe (Discord, OBS…)",
@@ -193,6 +195,7 @@ export const controls = {
           unavailable: "Não deu para ler o tempo de boot: {{reason}}",
           reading: "Lendo o tempo de boot…",
           retry: "Ler de novo",
+          estimate: "Tirar os {{count}} sugeridos deve deixar em ~{{time}}: juntos, o Windows mediu {{saved}} de atraso.",
         },
         footnote: "\"Não\" só impede o app de abrir sozinho: ele continua instalado e volta com 1 clique. Cada mudança entra no Histórico.",
       },

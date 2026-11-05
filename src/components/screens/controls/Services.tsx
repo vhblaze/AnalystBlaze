@@ -1,3 +1,4 @@
+import { RefreshCw } from "lucide-react";
 import { useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -36,9 +37,15 @@ export function Services({ actions }: { actions: ControlsActions }) {
 
   return (
     <div className="flex max-w-3xl flex-col gap-5">
-      <header>
-        <h2 className="text-[28px] font-semibold tracking-tight text-fg">{t("controls.d3.services.title")}</h2>
-        <p className="mt-1 text-sm text-fg-3">{t("controls.d3.services.subtitle")}</p>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-[28px] font-semibold tracking-tight text-fg">{t("controls.d3.services.title")}</h2>
+          <p className="mt-1 text-sm text-fg-3">{t("controls.d3.services.subtitle")}</p>
+        </div>
+        <Button size="sm" variant="outline" disabled={inventory.loading || busyKey !== null} onClick={() => void inventory.refresh().catch(() => undefined)}>
+          <RefreshCw />
+          {t("common.refresh")}
+        </Button>
       </header>
       {inventory.services.length === 0 ? (
         <EmptyState
