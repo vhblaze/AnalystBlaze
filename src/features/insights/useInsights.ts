@@ -12,7 +12,7 @@ export const serverInsights = createAgentResource<Insight[], [Locale]>({
   staleMs: 30 * 60_000,
 });
 
-const SEEN_KEY = "analystblaze.insights.seen.v1";
+const SEEN_STORAGE = "analystblaze.insights.seen.v1";
 
 /** Chave estável de uma sugestão (o servidor não manda id). */
 export function insightKey(insight: Insight): string {
@@ -21,7 +21,7 @@ export function insightKey(insight: Insight): string {
 
 export function readSeenInsights(): Set<string> {
   try {
-    const raw = JSON.parse(localStorage.getItem(SEEN_KEY) ?? "[]");
+    const raw = JSON.parse(localStorage.getItem(SEEN_STORAGE) ?? "[]");
     return new Set(Array.isArray(raw) ? raw.filter((v) => typeof v === "string") : []);
   } catch {
     return new Set();
@@ -32,7 +32,7 @@ export function markInsightsSeen(insights: Insight[]) {
   try {
     const seen = readSeenInsights();
     insights.forEach((insight) => seen.add(insightKey(insight)));
-    localStorage.setItem(SEEN_KEY, JSON.stringify(Array.from(seen).slice(-200)));
+    localStorage.setItem(SEEN_STORAGE, JSON.stringify(Array.from(seen).slice(-200)));
   } catch {
     // Sem localStorage: tudo conta como novo da próxima vez.
   }

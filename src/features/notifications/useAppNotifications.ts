@@ -20,8 +20,8 @@ const AUDIT_POLL_MS = 60_000;
 const INSIGHTS_POLL_MS = 30 * 60_000;
 const CLOCK_POLL_MS = 60_000;
 const FREED_MIN_MB = 512;
-const LAST_AUDIT_KEY = "analystblaze.notify.lastAudit.v1";
-const LAST_DAILY_KEY = "analystblaze.notify.lastDaily.v1";
+const LAST_AUDIT_STORAGE = "analystblaze.notify.lastAudit.v1";
+const LAST_DAILY_STORAGE = "analystblaze.notify.lastDaily.v1";
 const DAILY_HOUR = 22;
 
 type Translate = (key: string, params?: Record<string, string | number>) => string;
@@ -116,7 +116,7 @@ export function useAppNotifications({
       if (!policyRef.current?.notify_on_improvement) return;
       const events = await auditLog.refresh().catch(() => null);
       if (disposed || !events) return;
-      const since = readNumber(LAST_AUDIT_KEY) || Math.floor(Date.now() / 1000);
+      const since = readNumber(LAST_AUDIT_STORAGE) || Math.floor(Date.now() / 1000);
       let newest = since;
       for (const event of events) {
         if (event.timestamp <= since) continue;
@@ -124,7 +124,7 @@ export function useAppNotifications({
         const message = improvementMessage(event, t);
         if (message) notify(t("notify.improvedTitle"), message);
       }
-      writeValue(LAST_AUDIT_KEY, String(newest));
+      writeValue(LAST_AUDIT_STORAGE, String(newest));
     };
     void check();
     const id = window.setInterval(() => void check(), AUDIT_POLL_MS);
@@ -174,12 +174,12 @@ export function useAppNotifications({
       if (now.getHours() !== DAILY_HOUR) return;
       const today = now.toISOString().slice(0, 10);
       try {
-        if (localStorage.getItem(LAST_DAILY_KEY) === today) return;
+        if (localStorage.getItem(LAST_DAILY_STORAGE) === today) return;
       } catch {
         // Sem localStorage, avisa uma vez por sessão (o ref abaixo).
       }
       const actions = await todaysAutomaticActions.refresh().catch(() => []);
-      writeValue(LAST_DAILY_KEY, today);
+      writeValue(LAST_DAILY_STORAGE, today);
       notify(t("notify.dailyTitle"), actions.length > 0 ? t("notify.dailyBody", { count: actions.length }) : t("notify.dailyNone"));
     };
     const id = window.setInterval(() => void tick(), CLOCK_POLL_MS);
