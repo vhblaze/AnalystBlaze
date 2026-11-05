@@ -1157,6 +1157,16 @@ fn usage_profile() -> serde_json::Value {
     optimizations::usage_profile::current_json()
 }
 
+/// "Pesa sem você usar": apps de inicialização e serviços que consomem
+/// agora e não aparecem em primeiro plano há 7 dias. Só lista.
+#[tauri::command]
+async fn idle_weight_candidates() -> Vec<serde_json::Value> {
+    tokio::task::spawn_blocking(optimizations::idle_weight::candidates)
+        .await
+        .map(|items| items.into_iter().map(|item| serde_json::json!(item)).collect())
+        .unwrap_or_default()
+}
+
 /// L4: medições de FPS antes/depois do Modo Jogo automático, guardadas só
 /// no PC (com o nome do jogo, que nunca vai para o servidor).
 #[tauri::command]
@@ -2376,6 +2386,7 @@ pub fn run() {
             boot_performance,
             frame_measurements,
             usage_profile,
+            idle_weight_candidates,
             foreground_game,
             renew_dhcp_lease,
             apply_network_tune,

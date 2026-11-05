@@ -291,6 +291,31 @@ pub fn classify(store: &UsageStore, window_days: usize) -> UsageProfile {
     }
 }
 
+/// Dias com alguma amostra (ativa ou ociosa) no arquivo.
+pub fn days_tracked_in(store: &UsageStore) -> usize {
+    store.days.len()
+}
+
+/// Há quantos dias `exe` esteve em primeiro plano pela última vez, segundo o
+/// arquivo. None = nunca, dentro do que foi observado. Puro.
+pub fn last_foreground_days_ago_in(store: &UsageStore, exe: &str, today: &str) -> Option<i64> {
+    let name = detection::normalize_process_name(exe);
+    let today_date = chrono::NaiveDate::parse_from_str(today, "%Y-%m-%d").ok()?;
+    store
+        .days
+        .iter()
+        .rev()
+        .find(|(_, day)| day.apps.get(&name).is_some_and(|app| app.seconds > 0))
+        .and_then(|(date, _)| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+        .map(|date| (today_date - date).num_days())
+}
+
+/// Leitura atual (com trava) para quem cruza processos com o uso.
+pub fn snapshot_store() -> UsageStore {
+    let _guard = FILE_LOCK.lock();
+    read_store()
+}
+
 /// O perfil atual, lido do arquivo.
 pub fn current() -> UsageProfile {
     let _guard = FILE_LOCK.lock();
@@ -357,6 +382,14 @@ mod tests {
         }
         assert_eq!(store.days.len(), KEEP_DAYS);
         assert!(store.days.contains_key("2026-10-40"));
+    }
+
+    #[test]
+    fn last_foreground_days_ago_counts_from_today() {
+        let store = store_with(&[("2026-11-01", &[("chrome.exe", 60)]), ("2026-11-03", &[("code.exe", 60)])]);
+        assert_eq!(last_foreground_days_ago_in(&store, "Chrome.exe", "2026-11-05"), Some(4));
+        assert_eq!(last_foreground_days_ago_in(&store, "code.exe", "2026-11-05"), Some(2));
+        assert_eq!(last_foreground_days_ago_in(&store, "epic.exe", "2026-11-05"), None);
     }
 
     #[test]

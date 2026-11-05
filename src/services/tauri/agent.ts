@@ -974,6 +974,24 @@ export type UsageProfile = {
   reasons: string[];
 };
 
+export type IdleWeightItem = {
+  kind: "startup" | "service";
+  name: string;
+  displayName: string;
+  location: string | null;
+  memoryMb: number;
+  cpuPercent: number;
+  lastForegroundDaysAgo: number | null;
+  daysTracked: number;
+  action: "delay_startup" | "stop_service";
+};
+
+/** "Pesa sem você usar": só lista; leva ~1 s (amostra de CPU). */
+export async function getIdleWeightCandidates(): Promise<IdleWeightItem[]> {
+  requireTauriRuntime("Pesa sem você usar");
+  return invoke<IdleWeightItem[]>("idle_weight_candidates");
+}
+
 /** Perfil de uso medido deste PC (só local, só leitura). */
 export async function getUsageProfile(): Promise<UsageProfile> {
   requireTauriRuntime("Perfil de uso");

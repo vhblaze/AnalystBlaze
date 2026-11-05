@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { windowsHealthItems } from "@/features/health/windowsDiagnostics";
+import { IdleWeightCard } from "./IdleWeightCard";
 
 const DISK_USAGE_WARNING_THRESHOLD_PERCENT = 80;
 const NETWORK_LAG_FLAGS = ["packet_loss_detected", "jitter_high", "latency_high"] as const;
@@ -243,6 +244,8 @@ export function Insights({
   onRequestAgentApplyInsight,
   shadowConsentNeeded,
   onOpenWindowsHealth,
+  onDelayStartupApp,
+  onStopService,
 }: {
   telemetry?: AgentTelemetrySnapshot | null;
   /** Set by DiskExplorer, on demand, the moment it detects some individual
@@ -270,6 +273,9 @@ export function Insights({
   onResolveShadowConsent?: (choice: "auto" | "manual") => Promise<void>;
   /** Saúde do Windows mora em Meu PC; aqui fica só o resumo com o link. */
   onOpenWindowsHealth?: () => void;
+  /** "Pesa sem você usar": as mesmas ações de Controles (snapshot + Desfazer). */
+  onDelayStartupApp?: (name: string, location?: string | null) => Promise<unknown>;
+  onStopService?: (name: string) => Promise<unknown>;
 }) {
   const { t, locale } = useI18n();
   const track = useTelemetry("insights");
@@ -957,6 +963,7 @@ export function Insights({
           </div>
         </header>
 
+        {onDelayStartupApp && onStopService && <IdleWeightCard onDelayStartupApp={onDelayStartupApp} onStopService={onStopService} />}
         {actionMessage && <p className="rounded-control border border-line bg-surface-2 px-4 py-3 text-sm text-fg-2">{actionMessage}</p>}
         {error && visibleInsights.length > 0 && <p className="text-sm text-danger">{error}</p>}
 

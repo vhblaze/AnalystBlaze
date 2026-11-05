@@ -137,7 +137,7 @@ fn prune_stale(store: &mut AppUsageStore, now: i64) {
 /// anchors on the first ".exe" occurrence (quoted or not) and takes the
 /// path's file name from everything up to and including it. Only returns
 /// something for inputs that plausibly identify an executable.
-fn exe_name_from_command(value: &str) -> Option<String> {
+pub(crate) fn exe_name_from_command(value: &str) -> Option<String> {
     let lower = value.to_ascii_lowercase();
     let exe_end = lower.find(".exe")? + 4;
     let candidate = lower[..exe_end].trim_start_matches('"').trim();

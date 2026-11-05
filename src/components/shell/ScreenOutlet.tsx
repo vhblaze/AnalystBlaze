@@ -542,6 +542,8 @@ export function ScreenOutlet({
             shadowConsentNeeded={shadowConsentNeeded}
             onResolveShadowConsent={resolveShadowConsent}
             onOpenWindowsHealth={() => navigate(route("mypc", "health"))}
+            onDelayStartupApp={controlsActions.onDelayStartupApp}
+            onStopService={controlsActions.onStopService}
           />
         </Suspense>
       );

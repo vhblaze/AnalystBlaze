@@ -59,6 +59,18 @@ export const insights: Mirror<typeof pt> = {
       requiresPro: "Letting the agent apply it on its own is a paid-plan feature. You can still do it manually.",
       requestFailed: "Could not ask the agent for the action.",
     },
+    idleWeight: {
+      title: "Weighs without you using it",
+      explanation: "Running now, with a measured cost, and not in front of you for 7 days. Every action goes to History with Undo.",
+      kind: { startup: "opens with Windows", service: "Windows service" },
+      cpu: "{{percent}} CPU",
+      neverSeen: "never in the foreground in {{days}} days",
+      lastSeen: "last in the foreground {{days}} days ago",
+      serviceNever: "never used",
+      serviceDays: "unused for {{days}} days",
+      action: { delay_startup: "Delay at startup", stop_service: "Pause service" },
+      foot: "Measured on this PC: memory and CPU right now, and foreground time over the last 30 days. Only the program name is recorded, and it stays here.",
+    },
     diskUsage: {
       title: "Disk almost full",
       explanation: "Your disk is at {{percent}}% usage. See the breakdown by games, apps, videos, downloads and large files to decide what to free.",
