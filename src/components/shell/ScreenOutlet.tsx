@@ -703,6 +703,8 @@ export function ScreenOutlet({
                 onStartSfc={controlsActions.onStartSystemFileCheck}
                 onStartDism={controlsActions.onStartDismRestoreHealth}
                 onOpenInsights={() => handleViewChange("insights")}
+                onRepairService={(serviceName) => applyInsightActionLocally("REPAIR_SERVICE", { serviceName })}
+                onOpenEnergy={() => navigate(route("controls", "energy"))}
               />
             )}
           </Suspense>

@@ -7,12 +7,15 @@ export const mypc = {
       ok: "ok",
       noReading: "Ainda sem leitura do Windows. Ela chega com a próxima amostra do agente.",
       noAdvanced: "O agente ainda não mandou os diagnósticos do Windows.",
-      foot: "Os avisos ficam aqui, sem notificação. O Defender e o modem USB ainda aparecem em Insights.",
+      foot: "Os avisos ficam aqui, sem notificação. O modem USB 4G/5G ainda aparece em Insights.",
       openInsights: "Abrir Insights",
       actions: {
         restart: "Reiniciar agora",
         sfc: "Verificar arquivos do sistema",
         restartDevice: "Reiniciar dispositivo",
+        repairService: "Tentar corrigir",
+        openSecurity: "Abrir Segurança do Windows",
+        openEnergy: "Ver energia",
       },
       items: {
         reboot: {
@@ -26,14 +29,48 @@ export const mypc = {
           detail: "O espaço reservado chegou ao limite e o Windows apaga os pontos antigos. Você decide se o AnalystBlaze pode aumentar o limite.",
         },
         services: {
-          title: "Serviços do Windows falhando: {{count}}",
-          detail: "{{names}}. Pode indicar arquivos do sistema corrompidos; a verificação confirma.",
-          detailWithCrashes: "{{names}}. Mais {{crashes}} travamentos do Windows. Pode indicar arquivos do sistema corrompidos; a verificação confirma.",
           okTitle: "Serviços e eventos do Windows",
           okDetail: "Nenhum serviço falhando. {{events}} erros críticos nas últimas 24 h.",
         },
+        defender: {
+          okTitle: "Defender",
+          okDetail: "Proteção em tempo real ligada.",
+          attentionTitle: "Defender precisa de atenção",
+          attentionDetail: "O serviço ou o antivírus está parcialmente desligado, segundo o próprio Windows.",
+          offTitle: "Proteção em tempo real do Defender desligada",
+          offDetail: "Sem ela, o Windows não bloqueia arquivos perigosos na hora. Ligue em Segurança do Windows.",
+        },
+        driver: {
+          okTitle: "Driver da GPU: {{name}} {{version}}",
+          okDetail: "Publicado há {{days}} dias.",
+          okDetailNoAge: "Versão lida do Windows.",
+          oldTitle: "Driver da GPU antigo: {{name}} {{version}}",
+          oldDetail: "Publicado há {{days}} dias. Drivers novos trazem correções para jogos recentes; atualize pelo site do fabricante.",
+        },
+        temperature: {
+          okTitle: "Temperatura",
+          okBoth: "CPU a {{cpu}} °C e GPU a {{gpu}} °C agora, dentro do seu limite.",
+          okCpu: "CPU a {{cpu}} °C agora, dentro do seu limite.",
+          okGpu: "GPU a {{gpu}} °C agora, dentro do seu limite.",
+          hotCpuTitle: "CPU a {{cpu}} °C",
+          hotGpuTitle: "GPU a {{gpu}} °C",
+          hotBothTitle: "CPU a {{cpu}} °C e GPU a {{gpu}} °C",
+          hotDetail: "Acima do limite que você definiu ({{cpuLimit}} °C CPU, {{gpuLimit}} °C GPU). Com calor assim o processador baixa o clock para se proteger.",
+        },
+        energy: {
+          okTitle: "Energia",
+          okDetail: "Plano {{plan}}, o indicado para agora.",
+          mismatchTitle: "Plano de energia fora do indicado",
+          mismatchDetail: "O plano ativo não é o que o AnalystBlaze indica para a fonte de energia atual. Dá para trocar em Controles › Energia.",
+        },
+        service: {
+          title: "Serviço {{name}} falhando",
+          detail: "O Windows registrou falhas deste serviço nas últimas 24 h. Tentar corrigir para e reinicia o serviço e confere se ele continuou ativo.",
+        },
         events: {
           title: "Erros críticos nas últimas 24 h: {{count}}",
+          detail: "Muitos erros críticos no log do Windows. Pode indicar arquivos do sistema corrompidos; a verificação confirma.",
+          detailWithCrashes: "Muitos erros críticos no log do Windows, mais {{crashes}} travamentos. Pode indicar arquivos do sistema corrompidos; a verificação confirma.",
         },
         device: {
           title: "{{name}} com problema",

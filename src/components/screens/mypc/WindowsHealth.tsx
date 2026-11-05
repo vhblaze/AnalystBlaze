@@ -8,6 +8,9 @@ import type { AgentTelemetrySnapshot, SystemFileCheckStatus } from "@/services/t
 import { useHelper } from "@/features/helper/useHelper";
 import { startRepair, useSystemRepair, type RepairKind, type RepairState } from "@/features/health/useSystemRepair";
 import { windowsHealthItems, type HealthItem } from "@/features/health/windowsDiagnostics";
+import { useEnergyDiagnostics } from "@/features/health/useEnergyDiagnostics";
+import { useAutomationPolicy } from "@/features/automations/useAutomationPolicy";
+import { openWindowsSecurity } from "@/services/tauri/agent";
 
 function outcomeTone(status: SystemFileCheckStatus | null): "ok" | "warn" | "danger" {
   if (!status?.result) return "ok";
@@ -31,6 +34,8 @@ export function WindowsHealth({
   onStartSfc,
   onStartDism,
   onOpenInsights,
+  onRepairService,
+  onOpenEnergy,
 }: {
   telemetry: AgentTelemetrySnapshot | null;
   shadowConsentNeeded: boolean;
@@ -40,13 +45,24 @@ export function WindowsHealth({
   onStartSfc: () => Promise<unknown>;
   onStartDism: () => Promise<unknown>;
   onOpenInsights: () => void;
+  onRepairService: (serviceName: string) => Promise<unknown>;
+  onOpenEnergy: () => void;
 }) {
   const { t } = useI18n();
   const repair = useSystemRepair();
   const helper = useHelper();
   const [busy, setBusy] = useState<string | null>(null);
   const blocked = helper.status && !helper.ready ? t("controls.d3.needsHelper") : null;
-  const items = useMemo(() => windowsHealthItems({ telemetry, shadowConsentNeeded }), [telemetry, shadowConsentNeeded]);
+  const { energy } = useEnergyDiagnostics();
+  const { policy } = useAutomationPolicy();
+  const thermalLimits = useMemo(
+    () => (policy ? { cpu: policy.thermal_cpu_limit_c, gpu: policy.thermal_gpu_limit_c } : null),
+    [policy],
+  );
+  const items = useMemo(
+    () => windowsHealthItems({ telemetry, shadowConsentNeeded, energy, thermalLimits }),
+    [telemetry, shadowConsentNeeded, energy, thermalLimits],
+  );
   const firstDanger = items.find((item) => item.severity === "danger")?.id ?? null;
 
   const run = async (key: string, action: () => Promise<unknown>) => {
@@ -60,7 +76,8 @@ export function WindowsHealth({
 
   const actionFor = (item: HealthItem) => {
     const action = item.action;
-    if (!action) return <span className="text-xs text-ok">{t("mypc.health.ok")}</span>;
+    // "ok" só em item ok; um aviso sem ação (temperatura, driver antigo) não ganha rótulo.
+    if (!action) return item.severity === "ok" ? <span className="text-xs text-ok">{t("mypc.health.ok")}</span> : null;
     const variant = item.id === firstDanger ? "primary" : "outline";
     switch (action.kind) {
       case "restart_windows":
@@ -85,6 +102,24 @@ export function WindowsHealth({
         return (
           <Button size="sm" variant={variant} disabled={busy !== null} onClick={() => void run(item.id, () => onRestartDevice(action.deviceId))}>
             {t("mypc.health.actions.restartDevice")}
+          </Button>
+        );
+      case "repair_service":
+        return (
+          <Button size="sm" variant={variant} disabled={busy !== null} disabledReason={blocked} onClick={() => void run(item.id, () => onRepairService(action.serviceName))}>
+            {t("mypc.health.actions.repairService")}
+          </Button>
+        );
+      case "open_security":
+        return (
+          <Button size="sm" variant={variant} onClick={() => void openWindowsSecurity("threatsettings").catch(() => undefined)}>
+            {t("mypc.health.actions.openSecurity")}
+          </Button>
+        );
+      case "open_energy":
+        return (
+          <Button size="sm" variant={variant} onClick={onOpenEnergy}>
+            {t("mypc.health.actions.openEnergy")}
           </Button>
         );
       case "shadow_consent":
