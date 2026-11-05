@@ -1,0 +1,75 @@
+import type { AgentTelemetrySnapshot, DiskVolumeInfo, GameModeSession } from "@/services/tauri/agent";
+
+/**
+ * "O que está pesando agora" (doc 13 §4, doc 11 §0): o maior problema da
+ * última leitura, em uma frase, com uma ação. Regras fixas e explícitas:
+ * nada estimado, e nada que o agente não mediu (sem "o Chrome usa 9,6 GB"
+ * até existir memória por processo, lacuna L1).
+ */
+
+export const THRESHOLDS = {
+  memoryPercent: 85,
+  cpuPercent: 90,
+  diskFreePercent: 10,
+  diskFreeBytes: 15 * 1024 ** 3,
+  latencyMs: 120,
+} as const;
+
+export type WeighingNow =
+  | { kind: "game_mode"; game: string | null }
+  | { kind: "memory"; percent: number }
+  | { kind: "disk"; mountPoint: string; freeBytes: number }
+  | { kind: "cpu"; percent: number }
+  | { kind: "network"; latencyMs: number }
+  | { kind: "ok" };
+
+/** Unidade do Windows (C:\) ou, sem ela, a maior. */
+export function systemVolume(volumes: DiskVolumeInfo[]): DiskVolumeInfo | null {
+  const system = volumes.find((volume) => /^c:/i.test(volume.mountPoint));
+  if (system) return system;
+  return [...volumes].filter((volume) => !volume.isRemovable).sort((a, b) => b.totalBytes - a.totalBytes)[0] ?? null;
+}
+
+export function pickWeighingNow({
+  telemetry,
+  volumes,
+  gameSession,
+  dismissed = [],
+}: {
+  telemetry: AgentTelemetrySnapshot | null;
+  volumes: DiskVolumeInfo[];
+  gameSession: GameModeSession | null;
+  /** Tipos que o usuário dispensou nesta sessão ("Agora não"). */
+  dismissed?: WeighingNow["kind"][];
+}): WeighingNow {
+  const allowed = (kind: WeighingNow["kind"]) => !dismissed.includes(kind);
+
+  // Doc 14 U2: com o Modo Jogo ligado, o card fala do jogo.
+  if (gameSession && allowed("game_mode")) {
+    return { kind: "game_mode", game: gameSession.targetProcessName ?? null };
+  }
+  if (!telemetry) return { kind: "ok" };
+
+  const memory = telemetry.ram_usage_percent;
+  if (typeof memory === "number" && memory >= THRESHOLDS.memoryPercent && allowed("memory")) {
+    return { kind: "memory", percent: memory };
+  }
+
+  const volume = systemVolume(volumes);
+  if (volume && volume.totalBytes > 0 && allowed("disk")) {
+    const freePercent = (volume.availableBytes / volume.totalBytes) * 100;
+    if (freePercent < THRESHOLDS.diskFreePercent || volume.availableBytes < THRESHOLDS.diskFreeBytes) {
+      return { kind: "disk", mountPoint: volume.mountPoint, freeBytes: volume.availableBytes };
+    }
+  }
+
+  if (telemetry.cpu_usage >= THRESHOLDS.cpuPercent && allowed("cpu")) {
+    return { kind: "cpu", percent: telemetry.cpu_usage };
+  }
+
+  if (telemetry.latency_ms >= THRESHOLDS.latencyMs && allowed("network")) {
+    return { kind: "network", latencyMs: telemetry.latency_ms };
+  }
+
+  return { kind: "ok" };
+}

@@ -860,6 +860,25 @@ export async function restorePendingOptimizations(): Promise<RestoreReport> {
   return invoke<RestoreReport>("restore_pending_optimizations");
 }
 
+/** Desfaz uma alteração só (o "Desfazer" de uma linha do Histórico). */
+export async function restoreSnapshot(snapshotId: string): Promise<RestoreReport> {
+  requireTauriRuntime("Desfazer alteração");
+  return invoke<RestoreReport>("restore_snapshot", { snapshotId });
+}
+
+/** Detalhes do "Liberar memória": memória livre medida antes e depois. */
+export type ReleaseMemoryDetails = {
+  before_available_mb?: number | null;
+  after_available_mb?: number | null;
+  freed_mb?: number | null;
+};
+
+/** Esvazia working sets e a standby list pelo componente de sistema. Não fecha programas. */
+export async function releaseMemory(): Promise<OptimizationResult> {
+  requireTauriRuntime("Liberar memória");
+  return invoke<OptimizationResult>("release_memory");
+}
+
 export async function getOptimizationSnapshots(limit = 80): Promise<OptimizationSnapshot[]> {
   requireTauriRuntime("Histórico de snapshots");
   return invoke<OptimizationSnapshot[]>("optimization_snapshots", { limit });

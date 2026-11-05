@@ -165,6 +165,31 @@ async fn restore_pending_optimizations() -> Result<optimizations::snapshot::Rest
         .map_err(|error| error.to_string())?
 }
 
+/// Redesign D3 (Histórico): "Desfazer" de uma linha só. Usa o mesmo
+/// restore_snapshots_by_ids do Modo Jogo, Foco e rede; restaurar tudo
+/// continua em restore_pending_optimizations.
+fn validate_snapshot_id(snapshot_id: &str) -> Result<String, String> {
+    let trimmed = snapshot_id.trim();
+    let valid = !trimmed.is_empty()
+        && trimmed.len() <= 128
+        && trimmed.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    if valid {
+        Ok(trimmed.to_string())
+    } else {
+        Err("Identificador de alteração inválido.".to_string())
+    }
+}
+
+#[tauri::command]
+async fn restore_snapshot(
+    snapshot_id: String,
+) -> Result<optimizations::snapshot::RestoreReport, String> {
+    let id = validate_snapshot_id(&snapshot_id)?;
+    tokio::task::spawn_blocking(move || optimizations::snapshot::restore_snapshots_by_ids(&[id]))
+        .await
+        .map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 async fn optimization_snapshots(
     limit: Option<usize>,
@@ -1080,6 +1105,19 @@ async fn restore_windows_service(
 #[tauri::command]
 async fn flush_dns_cache() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command("FLUSH_DNS_CACHE", None).await)
+}
+
+/// Redesign D3 (Dashboard): "Liberar memória". Esvazia os working sets e a
+/// standby list pelo componente de sistema, como o RAMMap. Não fecha nenhum
+/// programa. O resultado traz `freed_mb` medido antes/depois, que a tela
+/// mostra em vez de prometer um número.
+fn release_memory_payload() -> serde_json::Value {
+    serde_json::json!({ "emptyWorkingSets": true })
+}
+
+#[tauri::command]
+async fn release_memory() -> Result<optimizations::ExecutionResult, String> {
+    Ok(optimizations::execute_command("CLEAR_STANDBY_LIST", Some(release_memory_payload())).await)
 }
 
 #[tauri::command]
@@ -2245,6 +2283,7 @@ pub fn run() {
             start_agent,
             activate_game_mode,
             restore_pending_optimizations,
+            restore_snapshot,
             optimization_snapshots,
             audit_log,
             optimization_preview,
@@ -2253,6 +2292,7 @@ pub fn run() {
             network_diagnostics,
             energy_diagnostics,
             flush_dns_cache,
+            release_memory,
             renew_dhcp_lease,
             apply_network_tune,
             confirm_network_tune,
@@ -2718,5 +2758,36 @@ mod plan_sync_tests {
         let credentials =
             credentials_from_registration(tokens, registration, StoredCredentials::default());
         assert_eq!(credentials.plan_synced_at, None);
+    }
+}
+
+#[cfg(test)]
+mod release_memory_tests {
+    use super::*;
+
+    #[test]
+    fn release_memory_empties_working_sets_and_standby() {
+        let payload = release_memory_payload();
+        assert_eq!(payload.get("emptyWorkingSets").and_then(|v| v.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn release_memory_goes_through_the_helper_and_is_sensitive() {
+        let profile = optimizations::safety::command_profile("CLEAR_STANDBY_LIST")
+            .expect("CLEAR_STANDBY_LIST needs a safety profile");
+        assert!(profile.requires_privileged_helper);
+        assert!(optimizations::safety::supported_actions().contains(&"CLEAR_STANDBY_LIST"));
+    }
+
+    #[test]
+    fn snapshot_id_validation_accepts_uuids_and_rejects_paths() {
+        assert_eq!(
+            validate_snapshot_id(" 3f2b1c9e-1d2a-4f00-9a7b-0c1d2e3f4a5b ").as_deref(),
+            Ok("3f2b1c9e-1d2a-4f00-9a7b-0c1d2e3f4a5b")
+        );
+        assert!(validate_snapshot_id("").is_err());
+        assert!(validate_snapshot_id("../snapshots.json").is_err());
+        assert!(validate_snapshot_id(r"..\snapshots.json").is_err());
+        assert!(validate_snapshot_id(&"a".repeat(129)).is_err());
     }
 }

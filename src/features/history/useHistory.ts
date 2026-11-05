@@ -1,4 +1,8 @@
+import { useMemo } from "react";
+import { useI18n } from "@/i18n";
 import {
+  restoreSnapshot,
+  type RestoreReport,
   getAuditLog,
   getOptimizationSnapshots,
   getTodaysAutomaticActions,
@@ -7,6 +11,7 @@ import {
   type OptimizationSnapshot,
 } from "@/services/tauri/agent";
 import { createAgentResource } from "@/features/shared/agentResource";
+import { buildTimeline, type TimelineItem } from "./timeline";
 
 const HISTORY_LIMIT = 120;
 
@@ -43,4 +48,27 @@ export function useHistory(options?: { auto?: boolean }) {
 export function useTodaysAutomaticActions(options?: { auto?: boolean }) {
   const resource = todaysAutomaticActions.use(options);
   return { actions: resource.data ?? [], loading: resource.loading, error: resource.error, refresh: resource.refresh };
+}
+
+/** Desfaz uma alteração e relê o histórico (as telas que o mostram atualizam juntas). */
+export async function undoSnapshot(snapshotId: string): Promise<RestoreReport> {
+  const report = await restoreSnapshot(snapshotId);
+  await Promise.allSettled([auditLog.refresh(), optimizationSnapshots.refresh()]);
+  return report;
+}
+
+/** Linha do tempo pronta para a tela: snapshots + auditoria, do mais novo para o mais velho. */
+export function useTimeline(options?: { auto?: boolean }): {
+  items: TimelineItem[];
+  loading: boolean;
+  error: string | null;
+  refresh: () => Promise<unknown>;
+} {
+  const { t } = useI18n();
+  const history = useHistory(options);
+  const items = useMemo(
+    () => buildTimeline(history.snapshots, history.audit, (key, params) => t(key, params)),
+    [history.snapshots, history.audit, t],
+  );
+  return { items, loading: history.loading, error: history.error, refresh: history.refresh };
 }

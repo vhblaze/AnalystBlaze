@@ -8,10 +8,12 @@ import type { DiskNearFullInfo } from "@/services/insights";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import { History } from "@/components/screens/history/History";
+import { auditLog, optimizationSnapshots } from "@/features/history/useHistory";
+import { releaseMemory } from "@/services/tauri/agent";
 import { MyPC } from "@/components/screens/mypc/MyPC";
 import type { RequestConfirmation, RunConfirmed } from "./useConfirmation";
 
-const Dashboard = lazy(() => import("@/components/analystblaze/views/Dashboard").then((module) => ({ default: module.Dashboard })));
+const Dashboard = lazy(() => import("@/components/screens/dashboard/Dashboard").then((module) => ({ default: module.Dashboard })));
 const Telemetry = lazy(() => import("@/components/analystblaze/views/Telemetry").then((module) => ({ default: module.Telemetry })));
 const Insights = lazy(() => import("@/components/analystblaze/views/Insights").then((module) => ({ default: module.Insights })));
 const LocalControls = lazy(() => import("@/components/analystblaze/views/LocalControls").then((module) => ({ default: module.LocalControls })));
@@ -249,49 +251,78 @@ export function ScreenOutlet({
             user={auth.user}
             status={auth.status}
             telemetry={telemetry}
-            networkActionPending={auth.networkActionPending}
+            busy={auth.busy}
+            navigate={navigate}
             onStartAgent={auth.start}
-            onActivateGameMode={async () => {
-              await runConfirmed(
+            onCollectSample={auth.collectSample}
+            onActivateGameMode={() =>
+              runConfirmed(
                 {
-                  title: "Ativar Modo Gamer",
-                  description: "O agente aplica jogo em alta prioridade, reduz fundo, ajusta energia/visual, faz limpeza segura reversível e mede rede. A restauração fica pronta para quando você sair do jogo.",
+                  title: t("confirm.gameMode.title"),
+                  description: t("confirm.gameMode.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
                 activateGameModeWithUpsell,
-              );
-            }}
-            onRestoreGameMode={async () => {
-              await runConfirmed(
+              )
+            }
+            onRestoreGameMode={() =>
+              runConfirmed(
                 {
-                  title: "Desativar Modo Gamer",
-                  description: "Restaura snapshots da sessão ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponíveis.",
+                  title: t("confirm.gameModeOff.title"),
+                  description: t("confirm.gameModeOff.body"),
                   risk: "seguro",
                   snapshot: false,
                 },
                 auth.restoreGameMode,
-              );
-            }}
-            onApplyPcCleanFast={async () => {
-              await runConfirmed(
+              )
+            }
+            onApplyPcCleanFast={() =>
+              runConfirmed(
                 {
-                  title: "Aplicar PC limpo/rapido",
-                  description: "Executa Performance Scan, limpeza segura, ajuste visual, priorizacao de apps de fundo e Modo Gamer se houver jogo detectado.",
+                  title: t("confirm.pcCleanFast.title"),
+                  description: t("confirm.pcCleanFast.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
                 auth.pcCleanFast,
-              );
-            }}
-            onOpenDiskUsage={openDiskUsageDetails}
-            onOpenNetwork={openNetworkDetails}
-            busy={auth.busy}
+              )
+            }
+            onRestoreAll={() =>
+              runConfirmed(
+                {
+                  title: t("confirm.restoreAll.title"),
+                  description: t("confirm.restoreAll.body"),
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                async () => {
+                  const result = await auth.restoreOptimizations();
+                  await Promise.allSettled([auditLog.refresh(), optimizationSnapshots.refresh()]);
+                  return result;
+                },
+              )
+            }
+            onReleaseMemory={() =>
+              runConfirmed(
+                {
+                  title: t("confirm.releaseMemory.title"),
+                  description: t("confirm.releaseMemory.body"),
+                  risk: "seguro",
+                  snapshot: false,
+                },
+                async () => {
+                  const result = await releaseMemory();
+                  await Promise.allSettled([auditLog.refresh()]);
+                  return result;
+                },
+              )
+            }
           />
         </Suspense>
       );
     case "history":
-      return <History onOpenControls={() => handleViewChange("controls")} />;
+      return <History />;
     case "insights":
       return (
         <Suspense fallback={<ViewFallback />}>
@@ -540,7 +571,7 @@ export function ScreenOutlet({
             onOpenAccountSettings={auth.openAccountSettings}
             onOpenBilling={auth.openBilling}
             onSyncPlan={auth.syncPlan}
-            onOpenHistory={() => handleViewChange("controls")}
+            onOpenHistory={() => navigate(route("history"))}
           />
         </Suspense>
       );

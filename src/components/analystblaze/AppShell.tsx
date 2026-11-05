@@ -19,6 +19,7 @@ import { ConfirmationDialog } from "@/components/shell/dialogs/ConfirmationDialo
 import { DeviceLimitDialog } from "@/components/shell/dialogs/DeviceLimitDialog";
 import { EmailVerificationNotice } from "@/components/shell/dialogs/EmailVerificationNotice";
 import { RemoteConfirmationNotice } from "@/components/shell/dialogs/RemoteConfirmationNotice";
+import { RestoreToDateButton } from "@/components/screens/history/History";
 
 // Mantido para quem ainda importa daqui.
 export { splitBackendErrorCode };
@@ -89,6 +90,7 @@ export function AppShell() {
           title={routeTitleKeys(current).map((key) => t(key))}
           right={
             <>
+              {current.screen === "history" && <RestoreToDateButton />}
               <CommandPalette items={commandItems} />
               <Notifications items={notificationItems} onItemClick={onNotificationClick} />
             </>
