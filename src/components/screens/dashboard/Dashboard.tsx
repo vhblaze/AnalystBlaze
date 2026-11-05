@@ -24,6 +24,7 @@ import { pickWeighingNow, systemVolume, type WeighingNow as Weighing } from "@/f
 import { DoneToday } from "./DoneToday";
 import { HealthRing } from "./HealthRing";
 import { LastOptimization } from "./LastOptimization";
+import { UsageProfileCard } from "./UsageProfileCard";
 import { PcStrip } from "./PcStrip";
 import { WeighingNow, type WeighingAction } from "./WeighingNow";
 
@@ -247,6 +248,8 @@ export function Dashboard({
         <LastOptimization disabledReason={notReadyReason} />
         <DoneToday onOpenHistory={() => navigate(route("history"))} />
       </div>
+
+      <UsageProfileCard />
     </div>
   );
 }

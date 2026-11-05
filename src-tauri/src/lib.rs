@@ -1150,6 +1150,13 @@ fn foreground_game() -> optimizations::detection::GameDetection {
     optimizations::detection::detect_game_process()
 }
 
+/// Perfil de uso medido deste PC (só leitura, só local): categorias, apps
+/// que mais ficam em primeiro plano, horas de pico e ociosas.
+#[tauri::command]
+fn usage_profile() -> serde_json::Value {
+    optimizations::usage_profile::current_json()
+}
+
 /// L4: medições de FPS antes/depois do Modo Jogo automático, guardadas só
 /// no PC (com o nome do jogo, que nunca vai para o servidor).
 #[tauri::command]
@@ -2297,6 +2304,7 @@ pub fn run() {
             }
             spawn_plan_sync_loop(app.handle().clone());
             spawn_quarantine_prune_loop();
+            spawn_usage_profile_loop();
 
             // The window starts hidden (see tauri.conf.json) regardless of how
             // it was launched, so this is the single place that decides
@@ -2367,6 +2375,7 @@ pub fn run() {
             release_memory,
             boot_performance,
             frame_measurements,
+            usage_profile,
             foreground_game,
             renew_dhcp_lease,
             apply_network_tune,
@@ -2647,6 +2656,17 @@ const PLAN_SYNC_PERIODIC_INTERVAL: std::time::Duration = std::time::Duration::fr
 /// Quarentena: até 5 GB e 7 dias (optimizations::quarantine_limits). Roda
 /// pouco depois de abrir e depois a cada 6 h; só apaga pastas da própria
 /// quarentena e registra no Histórico. Nunca abre janela.
+/// Perfil de uso: uma amostra por minuto do que está em primeiro plano
+/// (só o nome do .exe) e se o PC está ocioso. Fica só no PC.
+fn spawn_usage_profile_loop() {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(optimizations::usage_profile::SAMPLE_SECS)).await;
+            let _ = tokio::task::spawn_blocking(optimizations::usage_profile::sample_once).await;
+        }
+    });
+}
+
 fn spawn_quarantine_prune_loop() {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(std::time::Duration::from_secs(2 * 60)).await;
