@@ -498,6 +498,8 @@ export type LocalAiPolicy = {
   adaptive_idle_eco_threshold_seconds: number;
   autostart_enabled: boolean;
   start_minimized: boolean;
+  /** Instala a atualização baixada sozinho, só com o PC parado, sem jogo e sem Modo Jogo. */
+  auto_install_updates: boolean;
   telemetry_diagnostics_enabled: boolean;
 };
 
@@ -1570,6 +1572,7 @@ export async function getLocalAiPolicy(): Promise<LocalAiPolicy> {
       adaptive_idle_eco_threshold_seconds: 600,
       autostart_enabled: true,
       start_minimized: true,
+      auto_install_updates: false,
       telemetry_diagnostics_enabled: false,
     };
   }

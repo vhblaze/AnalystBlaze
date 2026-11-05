@@ -429,8 +429,9 @@ fn is_elevated() -> bool {
     false
 }
 
+/// Segundos desde a última tecla ou movimento do mouse (GetLastInputInfo).
 #[cfg(windows)]
-fn idle_seconds() -> u64 {
+pub(crate) fn idle_seconds() -> u64 {
     use windows::Win32::System::SystemInformation::GetTickCount64;
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 
@@ -446,7 +447,7 @@ fn idle_seconds() -> u64 {
 }
 
 #[cfg(not(windows))]
-fn idle_seconds() -> u64 {
+pub(crate) fn idle_seconds() -> u64 {
     0
 }
 

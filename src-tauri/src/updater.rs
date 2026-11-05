@@ -17,6 +17,11 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const STARTUP_CHECK_DELAY: Duration = Duration::from_secs(10);
 const PERIODIC_CHECK_INTERVAL: Duration = Duration::from_secs(8 * 60 * 60);
 const DISMISS_COOLDOWN_SECONDS: i64 = 24 * 60 * 60;
+/// "Instalar sozinho": o PC tem que estar sem entrada há pelo menos isto.
+const AUTO_INSTALL_MIN_IDLE_SECONDS: u64 = 10 * 60;
+/// Com uma atualização baixada e "instalar sozinho" ligado, de quanto em
+/// quanto tempo as condições são conferidas de novo.
+const AUTO_INSTALL_POLL: Duration = Duration::from_secs(5 * 60);
 const MANIFEST_PATH_AND_QUERY: &str =
     "/api/v1/updates/manifest?target={{target}}&arch={{arch}}&current_version={{current_version}}";
 
@@ -547,16 +552,94 @@ pub fn spawn_background_checks(app: AppHandle, api_base_url: String) {
     let _handle = tauri::async_runtime::spawn(async move {
         tokio::time::sleep(STARTUP_CHECK_DELAY).await;
         loop {
-            check_and_maybe_download(app.clone(), api_base_url.clone()).await;
-            tokio::time::sleep(PERIODIC_CHECK_INTERVAL).await;
+            let status = check_and_maybe_download(app.clone(), api_base_url.clone()).await;
+            if status.available && status.downloaded {
+                wait_for_quiet_and_install(app.clone()).await;
+            } else {
+                tokio::time::sleep(PERIODIC_CHECK_INTERVAL).await;
+            }
         }
     });
+}
+
+/// O que impede "instalar sozinho" agora, ou None quando pode instalar.
+/// Puro, para ser testável: recebe as leituras em vez de medi-las.
+pub(crate) fn auto_install_blocker(
+    enabled: bool,
+    idle_seconds: u64,
+    game_open: bool,
+    game_mode_active: bool,
+) -> Option<&'static str> {
+    if !enabled {
+        return Some("disabled");
+    }
+    if game_mode_active {
+        return Some("game_mode_active");
+    }
+    if game_open {
+        return Some("game_open");
+    }
+    if idle_seconds < AUTO_INSTALL_MIN_IDLE_SECONDS {
+        return Some("pc_in_use");
+    }
+    None
+}
+
+/// Com a atualização baixada, espera o PC ficar parado (sem jogo, sem Modo
+/// Jogo, sem entrada há 10 min) e instala, se a preferência estiver
+/// ligada. Desiste e volta ao ciclo normal de checagem depois de um
+/// intervalo inteiro; se a preferência estiver desligada, só espera.
+async fn wait_for_quiet_and_install(app: AppHandle) {
+    let mut waited = Duration::ZERO;
+    while waited < PERIODIC_CHECK_INTERVAL {
+        let policy = crate::optimizations::local_ai_policy::load_local_ai_policy();
+        let game_open = crate::optimizations::detection::detect_game_process().detected;
+        let game_mode_active = crate::optimizations::read_active_game_mode_session().is_some();
+        let idle = crate::optimizations::adaptive::idle_seconds();
+        match auto_install_blocker(policy.auto_install_updates, idle, game_open, game_mode_active) {
+            None => {
+                let version = {
+                    let state = app.state::<AgentUpdaterState>();
+                    let runtime = state.0.lock().await;
+                    runtime.pending_update.as_ref().map(|update| update.version.clone())
+                };
+                let _ = audit::record_event(
+                    "info",
+                    "update.auto_install_started",
+                    "Instalando a atualizacao sozinho: PC parado, sem jogo aberto e sem Modo Jogo.",
+                    json!({ "version": version, "idleSeconds": idle }),
+                );
+                if let Err(error) = apply_update(app.clone()).await {
+                    let _ = audit::record_event(
+                        "warn",
+                        "update.auto_install_failed",
+                        "A instalacao automatica falhou; a atualizacao continua disponivel para instalar manualmente.",
+                        json!({ "error": error }),
+                    );
+                }
+                return;
+            }
+            Some(_) => {
+                tokio::time::sleep(AUTO_INSTALL_POLL).await;
+                waited += AUTO_INSTALL_POLL;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn auto_install_only_when_idle_and_no_game() {
+        assert_eq!(auto_install_blocker(false, 3600, false, false), Some("disabled"));
+        assert_eq!(auto_install_blocker(true, 3600, false, true), Some("game_mode_active"));
+        assert_eq!(auto_install_blocker(true, 3600, true, false), Some("game_open"));
+        assert_eq!(auto_install_blocker(true, 59, false, false), Some("pc_in_use"));
+        assert_eq!(auto_install_blocker(true, AUTO_INSTALL_MIN_IDLE_SECONDS, false, false), None);
+    }
 
     fn status_stub(available: bool, mandatory: bool, dismissed_until: Option<i64>) -> UpdateStatus {
         UpdateStatus {
