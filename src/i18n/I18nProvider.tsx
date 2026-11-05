@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { DEFAULT_LOCALE, LOCALE_STORAGE_KEY, type Locale, translations } from "./translations";
 import { setAgentLocale } from "@/services/tauri/agent";
+import { setFormatLocale } from "@/lib/format";
 
 type Params = Record<string, string | number | boolean | null | undefined>;
 
@@ -40,6 +41,8 @@ function interpolate(value: string, params?: Params): string {
 
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(readLocale);
+  // Antes do render dos filhos: os números já saem com o separador do idioma.
+  setFormatLocale(locale);
 
   useEffect(() => {
     document.documentElement.lang = locale;

@@ -20,6 +20,15 @@ import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { temperatureSourceLabel } from "@/lib/telemetry-labels";
 import { cssVar, type ColorToken } from "@/design/tokens";
+import {
+  formatDuration,
+  formatGigabytes,
+  formatMegabytes,
+  formatMetricNumber,
+  formatNumber,
+  formatTemperature,
+  MISSING,
+} from "@/lib/format";
 
 type HistoryValue = number | null;
 
@@ -70,7 +79,7 @@ const metrics: Metric[] = [
     max: 100,
     tone: "accent-2",
     read: (s) => s.ram_usage_percent ?? 0,
-    detail: (s) => `${formatMb(s.ram_usage_mb)} / ${formatMb(s.ram_total_mb ?? 0)}`,
+    detail: (s) => `${formatMegabytes(s.ram_usage_mb, MISSING)} / ${formatMegabytes(s.ram_total_mb ?? 0, MISSING)}`,
     status: (value) => (value == null ? "good" : value >= 92 ? "critical" : value >= 82 ? "watch" : "good"),
   },
   {
@@ -81,7 +90,7 @@ const metrics: Metric[] = [
     max: 100,
     tone: "warn",
     read: (s) => s.disk_usage_percent ?? 0,
-    detail: (s) => `${formatGb(s.disk_used_gb ?? 0)} / ${formatGb(s.disk_total_gb ?? 0)}`,
+    detail: (s) => `${formatGigabytes(s.disk_used_gb ?? 0, MISSING)} / ${formatGigabytes(s.disk_total_gb ?? 0, MISSING)}`,
     status: (value) => (value == null ? "good" : value >= 95 ? "critical" : value >= 88 ? "watch" : "good"),
   },
   {
@@ -117,7 +126,7 @@ const metrics: Metric[] = [
     tone: "violet",
     read: (s) => s.vram_usage_percent ?? 0,
     available: (s) => s.vram_usage_percent != null,
-    detail: (s) => `${formatGb(s.vram_used_gb ?? 0)} / ${formatGb(s.vram_gb ?? 0)}`,
+    detail: (s) => `${formatGigabytes(s.vram_used_gb ?? 0, MISSING)} / ${formatGigabytes(s.vram_gb ?? 0, MISSING)}`,
     status: percentStatus,
   },
 ];
@@ -262,7 +271,7 @@ export function Telemetry({
                   </div>
                   <div className="mt-1 flex flex-wrap items-baseline gap-2">
                     <span className="text-5xl font-semibold tracking-tight text-fg tabular-nums">
-                      {selectedValue == null ? "--" : formatMetricValue(selectedValue, selectedMetric.unit)}
+                      {selectedValue == null ? MISSING : formatMetricNumber(selectedValue, selectedMetric.unit)}
                     </span>
                     <span className="font-mono text-sm text-fg-4">{selectedMetric.unit}</span>
                     <StatusBadge status={selectedStatus} />
@@ -292,9 +301,9 @@ export function Telemetry({
               </div>
 
               <div className="grid grid-cols-3 gap-2 lg:w-[280px]">
-                <MiniStat label="min" value={stats.min == null ? "--" : formatMetricValue(stats.min, selectedMetric.unit)} />
-                <MiniStat label="avg" value={stats.avg == null ? "--" : formatMetricValue(stats.avg, selectedMetric.unit)} />
-                <MiniStat label="max" value={stats.max == null ? "--" : formatMetricValue(stats.max, selectedMetric.unit)} />
+                <MiniStat label="min" value={stats.min == null ? MISSING : formatMetricNumber(stats.min, selectedMetric.unit)} />
+                <MiniStat label="avg" value={stats.avg == null ? MISSING : formatMetricNumber(stats.avg, selectedMetric.unit)} />
+                <MiniStat label="max" value={stats.max == null ? MISSING : formatMetricNumber(stats.max, selectedMetric.unit)} />
               </div>
             </div>
 
@@ -318,9 +327,9 @@ export function Telemetry({
           <aside className="border-t border-line bg-bg/45 p-5 xl:border-l xl:border-t-0">
             <div className="grid grid-cols-2 gap-2">
               <FrameTile label={t("telemetry.mode")} value={realtimeActive ? t("telemetry.realtimeMode") : t("telemetry.normalMode")} active={realtimeActive} />
-              <FrameTile label={t("telemetry.rate")} value={rate ? `${rate.toFixed(1)}/s` : "--"} />
+              <FrameTile label={t("telemetry.rate")} value={rate ? `${formatNumber(rate)}/s` : MISSING} />
               <FrameTile label={t("telemetry.points")} value={timestamps.length.toString()} />
-              <FrameTile label={t("telemetry.lastFrame")} value={age == null ? "--" : `${age}s`} />
+              <FrameTile label={t("telemetry.lastFrame")} value={age == null ? MISSING : `${age}s`} />
             </div>
 
             {/* D2: "Local Only" indicator removed from the surface. It was static copy
@@ -443,7 +452,7 @@ function MetricSelector({
           <span className="truncate font-mono text-[10px] uppercase tracking-widest text-fg-4">{label}</span>
         </div>
         <span className="text-sm font-semibold text-fg tabular-nums">
-          {value == null ? "--" : formatMetricValue(value, metric.unit)}
+          {value == null ? MISSING : formatMetricNumber(value, metric.unit)}
         </span>
       </div>
       <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-surface-2">
@@ -561,25 +570,25 @@ function systemSignalsFor(sample: AgentTelemetrySample | null, t: (key: string) 
     {
       icon: Activity,
       label: t("telemetry.processes"),
-      value: sample?.active_processes?.toString() ?? "--",
+      value: sample?.active_processes?.toString() ?? MISSING,
       tone: (sample?.active_processes ?? 0) > 260 ? "watch" : "neutral",
     },
     {
       icon: Timer,
       label: t("telemetry.uptime"),
-      value: formatDuration(sample?.system_uptime_seconds ?? 0),
+      value: formatDuration(sample?.system_uptime_seconds || null),
       tone: "neutral",
     },
     {
       icon: Gauge,
       label: t("telemetry.activeWindow"),
-      value: sample?.active_window || "--",
+      value: sample?.active_window || MISSING,
       tone: "neutral",
     },
     {
       icon: Wifi,
       label: t("telemetry.latency"),
-      value: sample?.latency_ms ? `${Math.round(sample.latency_ms)} ms` : "--",
+      value: sample?.latency_ms ? `${Math.round(sample.latency_ms)} ms` : MISSING,
       tone: sample?.latency_ms && sample.latency_ms > 90 ? "watch" : "good",
     },
   ] as Array<{ icon: LucideIcon; label: string; value: string; tone: "good" | "watch" | "critical" | "neutral" }>;
@@ -612,42 +621,16 @@ function badgeTone(status: "good" | "watch" | "critical") {
   return "border-ok/30 bg-ok/10 text-ok-soft";
 }
 
-function formatMetricValue(value: number, unit: string) {
-  if (!Number.isFinite(value)) return "--";
-  if (unit === "ms") return value < 10 ? value.toFixed(1) : Math.round(value).toString();
-  return Math.round(value).toString();
-}
 
-function formatMb(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "--";
-  if (value >= 1024) return `${(value / 1024).toFixed(1)} GB`;
-  return `${Math.round(value)} MB`;
-}
 
-function formatGb(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "--";
-  return `${value.toFixed(1)} GB`;
-}
 
-function formatTemp(value?: number | null, available?: boolean) {
-  if (!available || value == null || !Number.isFinite(value) || value <= 0) return "--";
-  return `${Math.round(value)} C`;
-}
 
 function gpuTemperatureDetail(sample: AgentTelemetrySample) {
-  const temp = formatTemp(sample.gpu_temperature, sample.gpu_temperature_available);
-  if (temp === "--") return "sensor GPU indisponivel";
+  const temp = formatTemperature(sample.gpu_temperature, sample.gpu_temperature_available);
+  if (temp === MISSING) return "sensor GPU indisponivel";
   return `${temp} - ${temperatureSourceLabel(sample.gpu_temperature_source)}`;
 }
 
-function formatDuration(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "--";
-  if (value < 60) return `${Math.round(value)}s`;
-  const minutes = Math.floor(value / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-}
 
 function networkDetail(network: unknown) {
   if (!network || typeof network !== "object") return "rede local";

@@ -20,6 +20,7 @@ import {
 } from "@/services/tauri/agent";
 import type { DiskNearFullInfo } from "@/services/insights";
 import { DiskTreemap, DiskTreemapLegend } from "@/components/analystblaze/DiskTreemap";
+import { formatBytes, MISSING } from "@/lib/format";
 
 /** Mirrors disk_usage.rs's DIRECT_DELETE_THRESHOLD_BYTES - only used here
  * to warn before the click; the backend enforces the real behavior
@@ -38,17 +39,6 @@ function errorMessage(error: unknown) {
   return String(error);
 }
 
-function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
-  let value = bytes;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value >= 100 || unitIndex === 0 ? Math.round(value) : value.toFixed(1)} ${units[unitIndex]}`;
-}
 
 /** Picks the fullest volume over the threshold (if any) and, only then,
  * pays for the heavier categorized scan to find its top offenders - cheap
@@ -526,7 +516,7 @@ export function DiskExplorer({
                 >
                   <span className="flex items-center justify-between font-semibold">
                     <span className="truncate">{volume.label}</span>
-                    <span className="font-mono text-[10px] text-fg-4">{volume.fileSystem || "--"}</span>
+                    <span className="font-mono text-[10px] text-fg-4">{volume.fileSystem || MISSING}</span>
                   </span>
                   <span className="h-1.5 overflow-hidden rounded-full bg-surface-2">
                     <span

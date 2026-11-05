@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   ArrowUpRight,
@@ -14,16 +14,20 @@ import {
 } from "lucide-react";
 import { cssVar } from "@/design/tokens";
 import type { User } from "@/hooks/useAuth";
+import type { AgentStatus, AgentTelemetrySnapshot } from "@/services/tauri/agent";
+import { useGameMode } from "@/features/gamemode/useGameMode";
+import { usePlan } from "@/features/plan/usePlan";
 import {
-  getActiveGameModeSession,
-  getWeeklyGameModeUsage,
-  isTauriRuntime,
-  listenToGameModeUsage,
-  type AgentStatus,
-  type AgentTelemetrySnapshot,
-  type GameModeSession,
-  type GameModeUsage,
-} from "@/services/tauri/agent";
+  formatDuration,
+  formatGhz,
+  formatGigabytes,
+  formatMegabytes,
+  formatMinutes,
+  formatMs,
+  formatPercent,
+  formatTemperature,
+  MISSING,
+} from "@/lib/format";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useI18n } from "@/i18n";
 
@@ -65,11 +69,12 @@ export function Dashboard({
   const { t } = useI18n();
   const track = useTelemetry("dashboard");
   const [cpuHistory, setCpuHistory] = useState<number[]>([]);
-  const [activeGameModeSession, setActiveGameModeSession] = useState<GameModeSession | null>(null);
-  const [gameModeUsage, setGameModeUsage] = useState<GameModeUsage | null>(null);
   const isAuthenticated = Boolean(status?.authenticated);
   const isReady = Boolean(status?.authenticated && status.registered);
-  const paidGameModeAllowed = Boolean(status?.authenticated && status.registered && status.has_paid_plan);
+  const { paidGameMode: paidGameModeAllowed } = usePlan(status);
+  const gameMode = useGameMode({ trackUsage: !paidGameModeAllowed });
+  const activeGameModeSession = gameMode.session;
+  const gameModeUsage = gameMode.usage;
   const gameModeActive = Boolean(activeGameModeSession);
   const isLive = Boolean(isReady && telemetry);
   const lastCheckSeconds = telemetry
@@ -88,50 +93,19 @@ export function Dashboard({
     setCpuHistory((current) => [...current.slice(-(HISTORY_LEN - 1)), telemetry.cpu_usage]);
   }, [telemetry]);
 
-  const refreshGameModeSession = useCallback(async () => {
-    if (!isTauriRuntime()) {
-      setActiveGameModeSession(null);
-      return;
-    }
-    try {
-      setActiveGameModeSession(await getActiveGameModeSession());
-    } catch {
-      setActiveGameModeSession(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshGameModeSession();
-  }, [refreshGameModeSession]);
-
-  useEffect(() => {
-    if (paidGameModeAllowed) {
-      setGameModeUsage(null);
-      return;
-    }
-    getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
-    let dispose: (() => void) | undefined;
-    listenToGameModeUsage(setGameModeUsage).then((unlisten) => {
-      dispose = unlisten;
-    });
-    return () => dispose?.();
-  }, [paidGameModeAllowed]);
-
   const handleGameModeClick = async () => {
     track("game_mode_clicked");
     if (!isReady || gameModeActive) return;
     await onActivateGameMode();
-    await refreshGameModeSession();
-    if (!paidGameModeAllowed) {
-      getWeeklyGameModeUsage().then(setGameModeUsage).catch(() => undefined);
-    }
+    await gameMode.refreshSession().catch(() => undefined);
+    if (!paidGameModeAllowed) await gameMode.refreshUsage().catch(() => undefined);
   };
 
   const handleGameModeDeactivate = async () => {
     track("game_mode_deactivate_clicked");
     await onRestoreGameMode();
-    setActiveGameModeSession(null);
-    await refreshGameModeSession();
+    gameMode.setSession(null);
+    await gameMode.refreshSession().catch(() => undefined);
   };
 
   const handlePcCleanFastClick = async () => {
@@ -200,21 +174,21 @@ export function Dashboard({
             <Stat
               icon={<Gauge className="h-3.5 w-3.5" />}
               label={t("dashboard.healthScore")}
-              value={telemetry ? `${telemetry.health_score}%` : "--"}
+              value={telemetry ? `${telemetry.health_score}%` : MISSING}
               delta={telemetry ? healthLabel : t("common.unavailable")}
               tone={telemetry?.health_level}
             />
             <Stat
               icon={<Cpu className="h-3.5 w-3.5" />}
               label={t("dashboard.cpuLoad")}
-              value={telemetry ? formatPercent(telemetry.cpu_usage) : "--"}
+              value={telemetry ? formatPercent(telemetry.cpu_usage) : MISSING}
               delta={telemetry ? t("dashboard.activeProfileValue", { profile: profileLabel(telemetry.active_profile, t) }) : t("common.unavailable")}
               tone={telemetry?.cpu_usage && telemetry.cpu_usage > 80 ? "watch" : "good"}
             />
             <Stat
               icon={<Activity className="h-3.5 w-3.5" />}
               label={t("dashboard.processes")}
-              value={telemetry?.active_processes?.toString() ?? "--"}
+              value={telemetry?.active_processes?.toString() ?? MISSING}
               delta={telemetry ? formatDuration(telemetry.system_uptime_seconds) : t("common.unavailable")}
               tone="good"
             />
@@ -263,7 +237,7 @@ export function Dashboard({
                 <span className={`text-xs ${gameModeUsage.limitReached ? "text-warn" : "text-fg-4"}`}>
                   {gameModeUsage.limitReached
                     ? "Limite semanal de Modo Gamer atingido. Volta na próxima semana."
-                    : `Modo Gamer: ${formatGameModeMinutes(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
+                    : `Modo Gamer: ${formatMinutes(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
                 </span>
               )}
             </div>
@@ -274,13 +248,13 @@ export function Dashboard({
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
         <MetricCard icon={Cpu} label={t("dashboard.cpuInfo")} value={shortCpuName(telemetry?.cpu_name)} detail={telemetry ? `${formatPercent(telemetry.cpu_usage)} - ${formatGhz(telemetry.cpu_frequency_mhz)}` : t("common.unavailable")} />
-        <MetricCard icon={MemoryStick} label={t("dashboard.ramLoad")} value={telemetry ? formatPercent(telemetry.ram_usage_percent) : "--"} detail={telemetry ? `${formatMb(telemetry.ram_usage_mb)} / ${formatMb(telemetry.ram_total_mb ?? 0)}` : t("common.unavailable")} />
-        <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={shortGpuName(telemetry?.gpu_name)} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} - ${formatTemp(telemetry.gpu_temperature, telemetry.gpu_temperature_available)} - ${formatGb(telemetry.vram_gb)} ${t("dashboard.vramTotal")}` : t("dashboard.gpuLoadUnavailable")} />
-        <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : "--"} detail={telemetry ? `${formatGb(telemetry.disk_used_gb ?? 0)} / ${formatGb(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
+        <MetricCard icon={MemoryStick} label={t("dashboard.ramLoad")} value={telemetry ? formatPercent(telemetry.ram_usage_percent) : MISSING} detail={telemetry ? `${formatMegabytes(telemetry.ram_usage_mb)} / ${formatMegabytes(telemetry.ram_total_mb ?? 0)}` : t("common.unavailable")} />
+        <MetricCard icon={MonitorPlay} label={t("dashboard.gpu")} value={shortGpuName(telemetry?.gpu_name)} detail={telemetry?.gpu_usage_available ? `${formatPercent(telemetry.gpu_usage)} - ${formatTemperature(telemetry.gpu_temperature, telemetry.gpu_temperature_available)} - ${formatGigabytes(telemetry.vram_gb)} ${t("dashboard.vramTotal")}` : t("dashboard.gpuLoadUnavailable")} />
+        <MetricCard icon={HardDrive} label={t("dashboard.diskUsage")} value={telemetry ? formatPercent(telemetry.disk_usage_percent ?? 0) : MISSING} detail={telemetry ? `${formatGigabytes(telemetry.disk_used_gb ?? 0)} / ${formatGigabytes(telemetry.disk_total_gb ?? 0)} - ${t("dashboard.openDiskExplorer")}` : t("common.unavailable")} onClick={onOpenDiskUsage} />
         <MetricCard
           icon={Wifi}
           label={t("dashboard.latency")}
-          value={networkActionPending ? "..." : telemetry ? formatLatency(telemetry.latency_ms) : "--"}
+          value={networkActionPending ? "..." : telemetry ? formatMs(telemetry.latency_ms) : MISSING}
           detail={
             networkActionPending
               ? t("dashboard.networkActionApplying")
@@ -290,7 +264,7 @@ export function Dashboard({
           }
           onClick={onOpenNetwork}
         />
-        <MetricCard icon={ShieldCheck} label={t("dashboard.optimizationStatus")} value={telemetry ? optimizationLabel(telemetry.optimization_status, t) : "--"} detail={telemetry ? profileLabel(telemetry.active_profile, t) : t("common.unavailable")} />
+        <MetricCard icon={ShieldCheck} label={t("dashboard.optimizationStatus")} value={telemetry ? optimizationLabel(telemetry.optimization_status, t) : MISSING} detail={telemetry ? profileLabel(telemetry.active_profile, t) : t("common.unavailable")} />
       </div>
     </div>
   );
@@ -390,14 +364,7 @@ function Sparkline({ data }: { data: number[] }) {
   );
 }
 
-function formatPercent(value: number) {
-  return `${Math.round(Math.max(0, Math.min(100, value)))}%`;
-}
 
-function formatLatency(value?: number | null) {
-  if (value == null || !Number.isFinite(value) || value <= 0) return "--";
-  return `${Math.round(value)} ms`;
-}
 
 function networkDetail(network: unknown) {
   if (!network || typeof network !== "object") return "rede em leitura";
@@ -413,28 +380,15 @@ function networkDetail(network: unknown) {
   return [name, loss, jitter].filter(Boolean).join(" - ");
 }
 
-function formatGb(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0 GB";
-  return `${value.toFixed(value >= 10 ? 0 : 1)} GB`;
-}
 
-function formatMb(value: number) {
-  if (!Number.isFinite(value) || value <= 0) return "0 MB";
-  if (value >= 1024) return formatGb(value / 1024);
-  return `${Math.round(value)} MB`;
-}
 
-function formatGhz(value: number | null | undefined) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "--";
-  return `${(value / 1000).toFixed(2)} GHz`;
-}
 
 /** Strips vendor/marketing boilerplate off a raw CPU brand string so the
  * card shows "Ryzen 5 5600X" instead of "AMD Ryzen 5 5600X 6-Core
  * Processor" (or "i7-10700K" instead of "Intel(R) Core(TM) i7-10700K CPU
  * @ 3.80GHz") - a real user found the full string got cut off in the card. */
 function shortCpuName(raw: string | undefined) {
-  if (!raw || !raw.trim()) return "--";
+  if (!raw || !raw.trim()) return MISSING;
   return raw
     .trim()
     .replace(/^AMD\s+/i, "")
@@ -449,7 +403,7 @@ function shortCpuName(raw: string | undefined) {
 
 /** Same idea for GPU names - "RTX 3060" instead of "NVIDIA GeForce RTX 3060". */
 function shortGpuName(raw: string | undefined) {
-  if (!raw || !raw.trim()) return "--";
+  if (!raw || !raw.trim()) return MISSING;
   return raw
     .trim()
     .replace(/^NVIDIA\s+GeForce\s+/i, "")
@@ -460,24 +414,8 @@ function shortGpuName(raw: string | undefined) {
     .trim() || raw.trim();
 }
 
-function formatTemp(value: number | undefined, available: boolean | undefined) {
-  if (!available || typeof value !== "number" || !Number.isFinite(value)) return "--";
-  return `${Math.round(value)} C`;
-}
 
-function formatGameModeMinutes(seconds: number) {
-  const minutes = Math.max(0, Math.round(seconds / 60));
-  return `${minutes} min`;
-}
 
-function formatDuration(seconds: number) {
-  if (!Number.isFinite(seconds) || seconds < 60) return `${Math.max(0, Math.round(seconds || 0))}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 48) return `${hours}h`;
-  return `${Math.floor(hours / 24)}d`;
-}
 
 function healthTone(level?: string) {
   if (level === "critical") return "border-danger/30 bg-danger/10 text-danger";

@@ -53,7 +53,6 @@ import {
   listenToAgentSessionInvalidated,
   listenToPlanSynced,
   restorePerformanceSession,
-  runPerformanceScan,
   syncAccountPlan,
   type AgentStatus,
   type AgentTelemetrySample,
@@ -62,6 +61,7 @@ import {
   type OptimizationResult,
 } from "@/services/tauri/agent";
 import { captureTelemetry } from "@/services/telemetry";
+import { performanceReport } from "@/features/performance/usePerformanceScan";
 
 export type User = {
   name: string;
@@ -1034,7 +1034,8 @@ export function useAuth() {
   const performanceScan = useCallback(
     async (mode: "baseline" | "after" | "quick" = "quick") => {
       return runAction(async () => {
-        const report = await runPerformanceScan(mode);
+        // Mesmo store que Controles lê (features/performance).
+        const report = await performanceReport.refresh(mode);
         setMessage({
           key: "agent.messages.optimizationActionApplied",
           params: { message: `Performance score ${report.overallScore}` },
