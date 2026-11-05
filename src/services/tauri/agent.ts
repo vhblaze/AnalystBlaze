@@ -958,6 +958,46 @@ export async function getForegroundGame(): Promise<ForegroundGame> {
   return invoke<ForegroundGame>("foreground_game");
 }
 
+export type UsageProfileName = "collecting" | "games" | "work" | "creation" | "light" | "mixed";
+
+export type UsageProfile = {
+  profile: UsageProfileName;
+  confidence: number;
+  daysObserved: number;
+  windowDays: number;
+  activeSeconds: number;
+  idleSeconds: number;
+  shares: Record<string, number>;
+  topApps: { name: string; category: string; seconds: number; share: number }[];
+  peakHours: number[];
+  idleHours: number[];
+  reasons: string[];
+};
+
+export type IdleWeightItem = {
+  kind: "startup" | "service";
+  name: string;
+  displayName: string;
+  location: string | null;
+  memoryMb: number;
+  cpuPercent: number;
+  lastForegroundDaysAgo: number | null;
+  daysTracked: number;
+  action: "delay_startup" | "stop_service";
+};
+
+/** "Pesa sem você usar": só lista; leva ~1 s (amostra de CPU). */
+export async function getIdleWeightCandidates(): Promise<IdleWeightItem[]> {
+  requireTauriRuntime("Pesa sem você usar");
+  return invoke<IdleWeightItem[]>("idle_weight_candidates");
+}
+
+/** Perfil de uso medido deste PC (só local, só leitura). */
+export async function getUsageProfile(): Promise<UsageProfile> {
+  requireTauriRuntime("Perfil de uso");
+  return invoke<UsageProfile>("usage_profile");
+}
+
 /** Medições guardadas só no PC, da mais nova para a mais velha. */
 export async function getFrameMeasurements(limit = 10): Promise<FrameMeasurementEntry[]> {
   requireTauriRuntime("Medições de FPS");

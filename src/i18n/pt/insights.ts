@@ -56,6 +56,18 @@ export const insights = {
       requiresPro: "Deixar o agente aplicar sozinho é um recurso dos planos pagos. Você ainda pode fazer isso manualmente.",
       requestFailed: "Não deu para pedir a ação ao agente.",
     },
+    idleWeight: {
+      title: "Pesa sem você usar",
+      explanation: "Rodando agora, com custo medido, e sem aparecer na sua frente há 7 dias. Cada ação fica no Histórico com Desfazer.",
+      kind: { startup: "abre com o Windows", service: "serviço do Windows" },
+      cpu: "{{percent}} de CPU",
+      neverSeen: "nunca em primeiro plano em {{days}} dias",
+      lastSeen: "última vez em primeiro plano há {{days}} dias",
+      serviceNever: "nunca usado",
+      serviceDays: "sem uso há {{days}} dias",
+      action: { delay_startup: "Adiar na inicialização", stop_service: "Pausar serviço" },
+      foot: "Medido neste PC: memória e CPU de agora, e o tempo em primeiro plano dos últimos 30 dias. Só o nome do programa é anotado, e fica aqui.",
+    },
     diskUsage: {
       title: "Disco quase cheio",
       explanation: "Seu disco está com {{percent}}% de uso. Veja o detalhamento por jogos, apps, vídeos, downloads e arquivos grandes para decidir o que liberar.",
