@@ -485,7 +485,7 @@ export function Network({
   const NETWORK_LAG_METRIC_LABEL: Record<(typeof NETWORK_LAG_FLAGS)[number], string> = {
     packet_loss_detected: `perda de pacotes de ${(networkDiagnostics?.packet_loss_percent ?? 0).toFixed(1)}%`,
     jitter_high: `jitter de ${Math.round(networkDiagnostics?.jitter_ms ?? 0)}ms`,
-    latency_high: `latencia de ${Math.round(networkDiagnostics?.external_latency_ms ?? 0)}ms`,
+    latency_high: `latência de ${Math.round(networkDiagnostics?.external_latency_ms ?? 0)}ms`,
   };
   const activeLagFlags = NETWORK_LAG_FLAGS.filter((flag) => networkDiagnostics?.recommendations?.includes(flag));
   // Only offered as a probable cause, not a diagnosis: needs the VPN/virtual
@@ -505,7 +505,7 @@ export function Network({
       const metricsText = activeLagFlags.map((flag) => NETWORK_LAG_METRIC_LABEL[flag]).join(", ");
       // Honest framing: a probable cause tied to the metric that actually
       // triggered, not a claim of certainty.
-      const reason = `${adapterName} esta ativo e detectamos ${metricsText}. E uma causa provavel, mas nao confirmada - desativar temporariamente ajuda a comparar.`;
+      const reason = `${adapterName} está ativo e detectamos ${metricsText}. E uma causa provavel, mas não confirmada - desativar temporariamente ajuda a comparar.`;
 
       let riskWarning: string | undefined;
       try {
@@ -513,9 +513,9 @@ export function Network({
         if (guard.gameInForeground || guard.adapterHasActiveTraffic) {
           const reasons = [
             guard.gameInForeground ? `um jogo (${guard.gameProcessName ?? "detectado"}) parece estar em primeiro plano` : null,
-            guard.adapterHasActiveTraffic ? "essa interface tem trafego ativo agora" : null,
+            guard.adapterHasActiveTraffic ? "essa interface tem tráfego ativo agora" : null,
           ].filter((value): value is string => value != null);
-          riskWarning = `${reasons.join(" e ")}. Desativar ${adapterName} pode derrubar uma conexao em uso agora mesmo (ex: LAN virtual de jogo). Confirme apenas se tiver certeza.`;
+          riskWarning = `${reasons.join(" e ")}. Desativar ${adapterName} pode derrubar uma conexão em uso agora mesmo (ex: LAN virtual de jogo). Confirme apenas se tiver certeza.`;
         }
       } catch {
         // If the guard check itself fails, proceed to the normal
@@ -734,7 +734,7 @@ export function Network({
               <button
                 disabled={heroDisableBusy || diagnosticsBusy || !helperStatus?.available}
                 onClick={() => void disableProblemAdapter()}
-                title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avancado) para liberar esta acao." : undefined}
+                title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition-all hover:border-amber-300/60 disabled:opacity-50"
               >
                 <Router className={`h-3.5 w-3.5 ${heroDisableBusy ? "animate-pulse" : ""}`} />
@@ -799,7 +799,7 @@ export function Network({
               disabled={dnsSuggestionBusy || !runtimeAvailable || !helperStatus?.available}
               onClick={() => void applyDnsSuggestion()}
               className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
-              title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avancado) para liberar esta acao." : undefined}
+              title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
             >
               {t("network.dnsSuggestionApply")}
             </button>
@@ -1036,7 +1036,7 @@ export function Network({
                             disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available}
                             onClick={() => void useBenchmarkedDns(result.server)}
                             className="shrink-0 rounded-md border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
-                            title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avancado) para liberar esta acao." : undefined}
+                            title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
                           >
                             {t("network.useThis")}
                           </button>
@@ -1157,10 +1157,10 @@ export function Network({
             disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available}
             onClick={() => void runNetworkAction(
               onResetWinsockCatalog,
-              "Catalogo Winsock resetado. Reinicie o computador para concluir.",
+              "Catálogo Winsock resetado. Reinicie o computador para concluir.",
             )}
             className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
-            title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avancado) para liberar esta acao." : "Exige reinicializacao do computador."}
+            title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : "Exige reinicialização do computador."}
           >
             Resetar Winsock
           </button>
@@ -1207,7 +1207,7 @@ export function Network({
           disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available || !dnsAdapterName}
           onClick={() => void applyDnsServers()}
           className="mt-3 inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
-          title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avancado) para liberar esta acao." : undefined}
+          title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
         >
           Aplicar DNS
         </button>
@@ -1252,7 +1252,7 @@ export function Network({
                           ? "inline-flex items-center gap-2 rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
                           : "inline-flex items-center gap-2 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
                       }
-                      title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avancado) para liberar esta acao." : undefined}
+                      title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
                     >
                       {isEnabled ? t("network.disableAdapter") : t("network.enableAdapter")}
                     </button>
@@ -1309,7 +1309,7 @@ export function Network({
               disabled={tuneBusy || !runtimeAvailable || !helperStatus?.available || Boolean(tuneSession)}
               onClick={() => void applyLiveTune()}
               className="mt-3 inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
-              title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avancado) para liberar esta acao." : undefined}
+              title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
             >
               {t("network.tuneApplyLive")}
             </button>
@@ -1365,7 +1365,7 @@ export function Network({
               }
               onClick={() => void applyRebootTune()}
               className="mt-3 inline-flex items-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-2.5 text-sm font-semibold text-amber-100 transition-all hover:bg-amber-400/15 disabled:opacity-50"
-              title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avancado) para liberar esta acao." : undefined}
+              title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
             >
               {t("network.tuneApplyReboot")}
             </button>

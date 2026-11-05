@@ -24,6 +24,8 @@ use tokio::net::windows::named_pipe::{NamedPipeServer, ServerOptions};
 use super::{safety, snapshot, ExecutionResult};
 use crate::audit;
 
+use super::helper_keys;
+
 const SERVICE_NAME: &str = "AnalystBlazeHelper";
 const SERVICE_DISPLAY_NAME: &str = "AnalystBlaze Privileged Helper";
 const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -36,6 +38,11 @@ const REQUEST_ORIGIN: &str = "analystblaze-desktop-app";
 // works end to end ("Testar conexao"). Kept off the optimization allowlist on
 // purpose and short-circuited before any safety validation.
 const HELPER_PING_ACTION: &str = "HELPER_PING";
+// Asks the service to create this Windows user's signing key (S1). Sent
+// unsigned - the caller has no key yet - and answered only after the service
+// has read the caller's SID from its process token and provisioned the key.
+// It never runs an action; the response is signed with the new key.
+const HELPER_PROVISION_ACTION: &str = "HELPER_PROVISION_KEY";
 const REQUEST_TTL_SECONDS: i64 = 60;
 const REQUEST_MAX_CLOCK_SKEW_SECONDS: i64 = 15;
 const MIN_SIGNING_KEY_LEN: usize = 32;
@@ -112,7 +119,11 @@ pub fn status() -> PrivilegedHelperStatus {
     let installed = service_installed();
     let running = service_running();
     let service_source_trusted = !installed || installed_service_source_is_trusted();
-    let request_signing_ready = !installed || helper_signing_key_is_readable();
+    // With per-user keys a running service can always provision the caller's
+    // key on first use, so a missing key is no longer a reason to report the
+    // helper as unavailable (that dialog was where users got stuck).
+    let request_signing_ready =
+        !installed || running || client_key_is_readable() || helper_signing_key_is_readable();
     let available = installed && running && service_source_trusted && request_signing_ready;
     let requires_update = installed
         && helper_version_file()
@@ -197,33 +208,19 @@ pub fn install() -> Result<PrivilegedHelperStatus, String> {
                 exe.display()
             ));
         }
-        let user_sid = current_user_sid()?;
         let script = elevated_script_path("install");
         let helper_root = helper_root();
         let script_body = format!(
             r#"
 $ErrorActionPreference = 'Stop'
 $helperRoot = '{helper_root}'
-$appUserSid = '{user_sid}'
-$systemFull = '*S-1-5-18:(OI)(CI)F'
-$adminsFull = '*S-1-5-32-544:(OI)(CI)F'
-$userRead = "*{{0}}:(OI)(CI)RX" -f $appUserSid
 New-Item -ItemType Directory -Force -Path $helperRoot | Out-Null
+# Same model as the NSIS install: the root is SYSTEM/Administrators only. No
+# shared signing key is created here anymore - the service provisions one
+# key per Windows user (Helper\keys\<SID>) on that user's first request.
+icacls $helperRoot /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 Set-Content -Path (Join-Path $helperRoot 'version.txt') -Value '{version}' -Encoding UTF8
-$keyPath = Join-Path $helperRoot 'request-signing.key'
-if (!(Test-Path $keyPath)) {{
-  $bytes = New-Object byte[] 32
-  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
-  try {{
-    $rng.GetBytes($bytes)
-  }} finally {{
-    $rng.Dispose()
-  }}
-  [Convert]::ToBase64String($bytes) | Set-Content -Path $keyPath -Encoding ASCII
-}}
-icacls $helperRoot /inheritance:r /grant:r $systemFull $adminsFull $userRead | Out-Null
-icacls (Join-Path $helperRoot 'version.txt') /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' ("*{{0}}:R" -f $appUserSid) | Out-Null
-icacls $keyPath /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' ("*{{0}}:R" -f $appUserSid) | Out-Null
+icacls (Join-Path $helperRoot 'version.txt') /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-32-545:R' | Out-Null
 $svc = Get-Service -Name '{service_name}' -ErrorAction SilentlyContinue
 if ($svc) {{
   Stop-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue
@@ -237,7 +234,6 @@ New-Service -Name '{service_name}' -BinaryPathName $binPath -DisplayName '{displ
 Start-Service -Name '{service_name}'
 "#,
             helper_root = ps_escape(&helper_root.display().to_string()),
-            user_sid = ps_escape(&user_sid),
             version = HELPER_VERSION,
             service_name = SERVICE_NAME,
             display_name = SERVICE_DISPLAY_NAME,
@@ -457,7 +453,7 @@ pub fn handshake() -> Result<PrivilegedHelperHandshake, String> {
 fn handshake_roundtrip() -> Result<PrivilegedHelperHandshake, String> {
     use std::time::Instant;
 
-    let signing_key = load_helper_signing_key()?;
+    let signing_key = client_signing_key()?;
     let request =
         build_signed_request(HELPER_PING_ACTION, None, safety::CommandSource::ManualUser, true, &signing_key)?;
     let action_id = request.action_id.clone();
@@ -597,7 +593,7 @@ fn execute_once(
     source: safety::CommandSource,
     local_confirmation: bool,
 ) -> Result<ExecutionResult, String> {
-    let signing_key = load_helper_signing_key()?;
+    let signing_key = client_signing_key()?;
     let request = build_signed_request(action_name, payload, source, local_confirmation, &signing_key)?;
     let action_id = request.action_id.clone();
 
@@ -706,27 +702,10 @@ fn run_service_loop() -> windows_service::Result<()> {
         }
     }
 
-    fs::write(helper_root().join("version.txt"), HELPER_VERSION).ok();
-    if let Err(error) = ensure_helper_signing_key_file() {
-        eprintln!("Falha ao preparar chave local do helper: {error}");
-    }
-
-    // Loaded once here instead of per-connection: re-reading the key file on
-    // every single pipe connection was one more (small, but real) piece of
-    // per-request disk I/O sitting between "client connected" and "server
-    // ready to read the request", and any failure there used to unwind via
-    // a bare `?` with zero audit trail - indistinguishable, from the
-    // client's side, from the server having vanished mid-handshake.
-    let signing_key = Arc::new(load_helper_signing_key().unwrap_or_else(|error| {
-        eprintln!("Falha ao carregar chave de assinatura do helper: {error}");
-        audit_helper_event(
-            "warn",
-            "optimization.helper.signing_key_load_failed",
-            "Helper iniciou sem conseguir carregar a chave local de assinatura.",
-            json!({ "error": error }),
-        );
-        Vec::new()
-    }));
+    prepare_helper_root();
+    // One key per Windows user, resolved per connection from the client's
+    // process token (S1). Replaces the single shared key loaded here before.
+    let key_store = Arc::new(HelperKeyStore::new(helper_root()));
 
     // The whole pipe server - the accept loop and every connection it
     // spawns - runs on this runtime for the service's lifetime. Async I/O
@@ -757,8 +736,7 @@ fn run_service_loop() -> windows_service::Result<()> {
     };
 
     let (shutdown_watch_tx, shutdown_watch_rx) = tokio::sync::watch::channel(false);
-    let server_signing_key = Arc::clone(&signing_key);
-    runtime.spawn(run_named_pipe_server_async(shutdown_watch_rx, server_signing_key));
+    runtime.spawn(run_named_pipe_server_async(shutdown_watch_rx, Arc::clone(&key_store)));
 
     let (shutdown_tx, shutdown_rx) = mpsc::channel();
     // register() hands back the status handle, but the control callback needs
@@ -869,13 +847,13 @@ const PIPE_ACCEPTOR_COUNT: usize = 16;
 #[cfg(windows)]
 async fn run_named_pipe_server_async(
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
-    signing_key: Arc<Vec<u8>>,
+    key_store: Arc<HelperKeyStore>,
 ) {
     let acceptors: Vec<_> = (0..PIPE_ACCEPTOR_COUNT)
         .map(|_| {
             tokio::spawn(run_named_pipe_acceptor_loop(
                 shutdown_rx.clone(),
-                Arc::clone(&signing_key),
+                Arc::clone(&key_store),
             ))
         })
         .collect();
@@ -887,7 +865,7 @@ async fn run_named_pipe_server_async(
 #[cfg(windows)]
 async fn run_named_pipe_acceptor_loop(
     mut shutdown_rx: tokio::sync::watch::Receiver<bool>,
-    signing_key: Arc<Vec<u8>>,
+    key_store: Arc<HelperKeyStore>,
 ) {
     loop {
         if *shutdown_rx.borrow() {
@@ -913,9 +891,9 @@ async fn run_named_pipe_acceptor_loop(
             connect_result = server.connect() => {
                 match connect_result {
                     Ok(()) => {
-                        let signing_key = Arc::clone(&signing_key);
+                        let key_store = Arc::clone(&key_store);
                         tokio::spawn(async move {
-                            handle_named_pipe_connection_with_timeout(server, signing_key).await;
+                            handle_named_pipe_connection_with_timeout(server, key_store).await;
                         });
                     }
                     Err(error) => {
@@ -936,8 +914,8 @@ async fn run_named_pipe_acceptor_loop(
 }
 
 #[cfg(windows)]
-async fn handle_named_pipe_connection_with_timeout(server: NamedPipeServer, signing_key: Arc<Vec<u8>>) {
-    handle_named_pipe_connection_with_timeout_for(server, signing_key, PIPE_CONNECTION_TIMEOUT).await;
+async fn handle_named_pipe_connection_with_timeout(server: NamedPipeServer, key_store: Arc<HelperKeyStore>) {
+    handle_named_pipe_connection_with_timeout_for(server, key_store, PIPE_CONNECTION_TIMEOUT).await;
 }
 
 /// Split out from `handle_named_pipe_connection_with_timeout` purely so
@@ -946,10 +924,10 @@ async fn handle_named_pipe_connection_with_timeout(server: NamedPipeServer, sign
 #[cfg(windows)]
 async fn handle_named_pipe_connection_with_timeout_for(
     server: NamedPipeServer,
-    signing_key: Arc<Vec<u8>>,
+    key_store: Arc<HelperKeyStore>,
     timeout: Duration,
 ) {
-    match tokio::time::timeout(timeout, handle_named_pipe_connection_async(server, &signing_key)).await {
+    match tokio::time::timeout(timeout, handle_named_pipe_connection_async(server, &key_store)).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => {
             eprintln!("Falha ao processar request do helper: {error}");
@@ -974,7 +952,7 @@ async fn handle_named_pipe_connection_with_timeout_for(
 #[cfg(windows)]
 async fn handle_named_pipe_connection_async(
     mut pipe: NamedPipeServer,
-    signing_key: &[u8],
+    key_store: &HelperKeyStore,
 ) -> Result<(), String> {
     let handle = windows::Win32::Foundation::HANDLE(pipe.as_raw_handle() as _);
     let client = match validate_named_pipe_client(handle) {
@@ -991,7 +969,34 @@ async fn handle_named_pipe_connection_async(
         }
     };
 
+    // S1: the key comes from the SID in the client's process token, never
+    // from anything the client sends.
+    let (client_sid, signing_key) = match key_store.key_for_client(client.pid) {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            audit_helper_event(
+                "warn",
+                "optimization.helper.client_key_unavailable",
+                "Nao foi possivel resolver a chave do usuario do cliente do helper.",
+                json!({ "reason": error, "client_pid": client.pid }),
+            );
+            let _ = pipe.disconnect();
+            return Err(error);
+        }
+    };
+    let signing_key = signing_key.as_slice();
+
     let response = match read_request_from_pipe_async(&mut pipe, signing_key).await {
+        Ok(request) if request.action_name.eq_ignore_ascii_case(HELPER_PROVISION_ACTION) => {
+            build_response(
+                request.action_id,
+                request.nonce,
+                true,
+                "provisioned".to_string(),
+                json!({ "provisioned": true, "helperVersion": HELPER_VERSION }),
+                signing_key,
+            )?
+        }
         Ok(request) => {
             audit_helper_event(
                 "info",
@@ -1003,6 +1008,7 @@ async fn handle_named_pipe_connection_async(
                     "source": request.source,
                     "client_pid": client.pid,
                     "client_path": client.path,
+                    "client_sid": client_sid,
                 }),
             );
             execute_request_async(request, signing_key).await
@@ -1058,6 +1064,16 @@ async fn read_request_from_pipe_async(
         request.action_id.clone()
     };
     let rejection_nonce = request.nonce.clone();
+    if request.action_name.eq_ignore_ascii_case(HELPER_PROVISION_ACTION) {
+        if is_action_id(&request.action_id) && is_nonce(&request.nonce) {
+            return Ok(request);
+        }
+        return Err(RejectedHelperRequest {
+            action_id: rejection_action_id,
+            request_nonce: rejection_nonce,
+            message: "Request de provisionamento malformado.".to_string(),
+        });
+    }
     validate_request_envelope(&request, signing_key, now_ts()).map_err(|message| {
         RejectedHelperRequest {
             action_id: rejection_action_id.clone(),
@@ -1829,23 +1845,134 @@ fn wide_null(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// App side (S1): this Windows user's key, `Helper\keys\<SID>`. When it does
+/// not exist yet, the service is asked to provision it. A service from before
+/// 0.1.78 does not know that request; then the legacy shared key is used, so
+/// an app updated ahead of its service still works.
+#[cfg(windows)]
+fn client_signing_key() -> Result<Vec<u8>, String> {
+    let root = helper_root();
+    let sid = helper_keys::current_process_sid()?;
+    let path = helper_keys::user_key_path(&root, &sid)?;
+    if let Ok(key) = helper_keys::load_key(&path) {
+        return Ok(key);
+    }
+    match request_key_provisioning(&path) {
+        Ok(key) => return Ok(key),
+        Err(error) => audit_helper_event(
+            "warn",
+            "optimization.helper.key_provisioning_failed",
+            "Helper nao provisionou a chave deste usuario; tentando a chave compartilhada antiga.",
+            json!({ "error": error }),
+        ),
+    }
+    load_helper_signing_key()
+}
+
+#[cfg(windows)]
+fn client_key_is_readable() -> bool {
+    helper_keys::current_process_sid()
+        .and_then(|sid| helper_keys::user_key_path(&helper_root(), &sid))
+        .and_then(|path| helper_keys::load_key(&path))
+        .is_ok()
+}
+
+#[cfg(not(windows))]
+fn client_key_is_readable() -> bool {
+    false
+}
+
+#[cfg(windows)]
+fn request_key_provisioning(key_path: &Path) -> Result<Vec<u8>, String> {
+    let now = now_ts();
+    let request = HelperCommandRequest {
+        protocol_version: REQUEST_PROTOCOL_VERSION,
+        origin: REQUEST_ORIGIN.to_string(),
+        action_id: uuid::Uuid::new_v4().simple().to_string(),
+        action_name: HELPER_PROVISION_ACTION.to_string(),
+        source: safety::CommandSource::ManualUser,
+        local_confirmation: false,
+        payload: None,
+        payload_sha256: payload_sha256(None)?,
+        nonce: format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple()),
+        created_at: now,
+        expires_at: now.saturating_add(REQUEST_TTL_SECONDS),
+        signature: String::new(),
+    };
+    let mut pipe = open_helper_pipe()?;
+    let request_bytes = serde_json::to_vec(&request).map_err(|error| error.to_string())?;
+    write_pipe_frame(&mut pipe, &request_bytes)?;
+    let response_bytes = read_pipe_frame(&mut pipe)?;
+    let response: HelperCommandResponse =
+        serde_json::from_slice(&response_bytes).map_err(|error| error.to_string())?;
+    if response.action_id != request.action_id || response.request_nonce != request.nonce {
+        return Err("Helper respondeu o provisionamento com ids inesperados.".to_string());
+    }
+    if !response.success {
+        return Err(response.message);
+    }
+    let key = helper_keys::load_key(key_path)?;
+    // Proves the answer came from the service that wrote this key.
+    verify_response_signature(&response, &key)?;
+    Ok(key)
+}
+
+/// Service side (S1): resolves the signing key of whoever is on the other end
+/// of the pipe, from the client process token.
+struct HelperKeyStore {
+    root: PathBuf,
+}
+
+impl HelperKeyStore {
+    fn new(root: PathBuf) -> Self {
+        Self { root }
+    }
+
+    #[cfg(windows)]
+    fn key_for_client(&self, client_pid: u32) -> Result<(String, Vec<u8>), String> {
+        let sid = helper_keys::sid_of_process(client_pid)?;
+        let (key, outcome) = helper_keys::provision_user_key(&self.root, &sid)?;
+        if outcome != helper_keys::ProvisionOutcome::Existing {
+            audit_helper_event(
+                "info",
+                "optimization.helper.key_provisioned",
+                "Chave de assinatura do helper criada para um usuario do Windows.",
+                json!({
+                    "sid": sid,
+                    "migrated_legacy_shared_key": outcome == helper_keys::ProvisionOutcome::MigratedLegacy,
+                }),
+            );
+        }
+        Ok((sid, key))
+    }
+}
+
+/// Root of the helper data: SYSTEM/Administrators only (no more
+/// `BUILTIN\Users:RX`). version.txt stays readable by every local user.
+#[cfg(windows)]
+fn prepare_helper_root() {
+    let root = helper_root();
+    let _ = fs::create_dir_all(&root);
+    if let Err(error) = helper_keys::apply_sddl(&root, "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)") {
+        audit_helper_event(
+            "warn",
+            "optimization.helper.root_acl_failed",
+            "Helper nao conseguiu restringir a ACL da pasta de dados.",
+            json!({ "error": error }),
+        );
+    }
+    let version = root.join("version.txt");
+    if fs::write(&version, HELPER_VERSION).is_ok() {
+        let _ = helper_keys::apply_sddl(&version, helper_keys::PUBLIC_FILE_SDDL);
+    }
+}
+
 fn helper_signing_key_path() -> PathBuf {
     helper_root().join("request-signing.key")
 }
 
 fn helper_signing_key_is_readable() -> bool {
     load_helper_signing_key().is_ok()
-}
-
-fn ensure_helper_signing_key_file() -> Result<(), String> {
-    let path = helper_signing_key_path();
-    if path.exists() {
-        return Ok(());
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    fs::write(path, generate_signing_key()).map_err(|error| error.to_string())
 }
 
 fn load_helper_signing_key() -> Result<Vec<u8>, String> {
@@ -1862,12 +1989,6 @@ fn load_helper_signing_key() -> Result<Vec<u8>, String> {
     Ok(decoded)
 }
 
-fn generate_signing_key() -> String {
-    let mut bytes = Vec::with_capacity(MIN_SIGNING_KEY_LEN);
-    bytes.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
-    bytes.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
-    general_purpose::STANDARD.encode(bytes)
-}
 
 fn supported_actions() -> &'static [&'static str] {
     &[
@@ -1966,26 +2087,6 @@ fn installed_service_source_is_trusted() -> bool {
     }
 }
 
-#[cfg(windows)]
-fn current_user_sid() -> Result<String, String> {
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-        ])
-        .no_window()
-        .output()
-        .map_err(|error| error.to_string())?;
-    if !output.status.success() {
-        return Err("Nao foi possivel descobrir o SID do usuario atual.".to_string());
-    }
-    let sid = decode_console_bytes(&output.stdout).trim().to_string();
-    if !sid.starts_with("S-1-") {
-        return Err("SID do usuario atual retornou formato inesperado.".to_string());
-    }
-    Ok(sid)
-}
 
 fn exe_path_is_trusted_service_source(path: &Path) -> bool {
     #[cfg(not(windows))]
@@ -2410,6 +2511,26 @@ mod protocol_tests {
 mod tests {
     use super::*;
 
+    fn doc_list(doc: &str, marker: &str) -> Vec<String> {
+        let start = format!("<!-- {marker}:start -->");
+        let end = format!("<!-- {marker}:end -->");
+        let from = doc.find(&start).expect("start marker") + start.len();
+        let to = doc.find(&end).expect("end marker");
+        doc[from..to]
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("- `"))
+            .filter_map(|line| line.strip_suffix('`'))
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn safety_matrix_doc_matches_helper_allowlist() {
+        let doc = include_str!("../../../docs/optimization-safety-matrix.md");
+        let code: Vec<String> = supported_actions().iter().map(ToString::to_string).collect();
+        assert_eq!(doc_list(doc, "helper-actions"), code);
+    }
+
     #[test]
     fn trusted_service_source_accepts_program_files_binary() {
         let roots = vec![PathBuf::from(r"C:\Program Files")];
@@ -2493,9 +2614,11 @@ mod tests {
             .await
             .expect("server should accept the waiting client");
 
-        let signing_key = Arc::new(vec![0_u8; 32]);
+        let key_store = Arc::new(HelperKeyStore::new(
+            std::env::temp_dir().join(format!("analystblaze-helper-test-{}", uuid::Uuid::new_v4().simple())),
+        ));
         let started = std::time::Instant::now();
-        handle_named_pipe_connection_with_timeout_for(server, signing_key, Duration::from_millis(200)).await;
+        handle_named_pipe_connection_with_timeout_for(server, key_store, Duration::from_millis(200)).await;
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "should have abandoned the stuck read within the timeout, not hung"

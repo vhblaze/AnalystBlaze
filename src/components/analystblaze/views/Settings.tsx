@@ -376,7 +376,7 @@ export function Settings({
           <div className={`mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${weeklyAiUsage.limitReached ? "border-amber-400/20 bg-amber-400/5 text-amber-200/80" : "border-cyan-400/20 bg-cyan-400/5 text-cyan-100/80"}`}>
             <Zap className="h-3 w-3" />
             {weeklyAiUsage.limitReached
-              ? "Limite semanal de automacao atingido. Volta na proxima semana, ou assine um plano pago para automacao continua."
+              ? "Limite semanal de automacao atingido. Volta na próxima semana, ou assine um plano pago para automacao continua."
               : `Automacao: ${formatMinutesLabel(weeklyAiUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito).`}
           </div>
         )}

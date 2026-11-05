@@ -430,7 +430,7 @@ impl TelemetryEngine {
                 let _ = self.mode_tx.send(TelemetryMode::Normal);
             }
             Err(error) => {
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 self.record_backend_failure("consultar modo realtime", &error);
@@ -525,7 +525,7 @@ impl TelemetryEngine {
                 self.coalesced_realtime_samples = self
                     .coalesced_realtime_samples
                     .saturating_add(coalesced_samples);
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 self.record_backend_failure("enviar telemetria realtime efemera", &error);
@@ -588,7 +588,7 @@ impl TelemetryEngine {
             };
 
             if let Err(error) = self.api.post_batch(&access_token, &hw_secret, &batch).await {
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 if is_batch_cooldown_error(&error) {
@@ -626,7 +626,7 @@ impl TelemetryEngine {
                 self.policy = Some(policy);
             }
             Err(error) => {
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 self.record_backend_failure("atualizar policy bundle local", &error);
@@ -753,7 +753,7 @@ impl TelemetryEngine {
         {
             Ok(result) => result,
             Err(error) => {
-                if self.clear_local_session_if_device_inactive(&error) {
+                if self.handle_session_error(&error).await {
                     return;
                 }
                 self.record_backend_failure("buscar comandos", &error);
@@ -787,6 +787,7 @@ impl TelemetryEngine {
             // the game may have started since. This is the same check against
             // the live local signal, so a disk sweep never lands mid-match.
             if execution_mode != "automation_disabled"
+                && execution_mode != NOT_ELIGIBLE_FOR_AUTOMATIC
                 && action_disrupts_gameplay(&command.action_name)
                 && optimizations::focus::should_pause_heavy_scans()
             {
@@ -811,6 +812,15 @@ impl TelemetryEngine {
                         "required_setting": "allow_automatic_sensitive_actions",
                     }),
                 )
+            } else if execution_mode == NOT_ELIGIBLE_FOR_AUTOMATIC {
+                let rejection = not_eligible_rejection(&command);
+                let _ = crate::audit::record_event(
+                    "warn",
+                    "optimization.remote.not_eligible_for_automatic",
+                    "Comando remoto em modo automatico recusado: acao fora da lista local de acoes automaticas.",
+                    rejection.details.clone(),
+                );
+                rejection
             } else if execution_mode == "deferred_gameplay" {
                 optimizations::ExecutionResult::rejected(
                     &command.action_name,
@@ -1087,7 +1097,7 @@ impl TelemetryEngine {
             .post_agent_event(access_token, hw_secret, &event_payload)
             .await
         {
-            if self.clear_local_session_if_device_inactive(&error) {
+            if self.handle_session_error(&error).await {
                 return;
             }
             if is_request_validation_error(&error) {
@@ -1102,8 +1112,11 @@ impl TelemetryEngine {
         app_handle: AppHandle,
         command: &CommandResponse,
     ) -> (bool, &'static str) {
-        let learned_auto = command.authorization_mode.as_deref() == Some("learned_auto")
-            && !command.requires_confirmation;
+        let learned_auto = match learned_auto_gate(command) {
+            LearnedAutoGate::NotEligible => return (false, NOT_ELIGIBLE_FOR_AUTOMATIC),
+            LearnedAutoGate::Eligible => true,
+            LearnedAutoGate::NotLearnedAuto => false,
+        };
         if learned_auto {
             let policy = optimizations::local_ai_policy::load_local_ai_policy();
             if policy.enabled && policy.allow_automatic_sensitive_actions {
@@ -1150,7 +1163,7 @@ impl TelemetryEngine {
                 .confirmation_prompt
                 .clone()
                 .unwrap_or_else(|| command.action_name.replace('_', " ")),
-            description: "O dashboard autorizou esta acao. Confirme neste PC para permitir que a IA aprenda este contexto.".to_string(),
+            description: "O dashboard autorizou esta ação. Confirme neste PC para executá-la.".to_string(),
             risk: command
                 .risk_level
                 .clone()
@@ -1272,24 +1285,66 @@ impl TelemetryEngine {
         )
     }
 
-    fn clear_local_session_if_device_inactive(&mut self, error: &str) -> bool {
-        if !is_device_inactive_error(error) {
-            return false;
+    /// Bloco 5.4: the desktop is never logged out by time. An expired or
+    /// rejected access token is renewed in the background with the refresh
+    /// token; the session only ends when the server refuses that renewal,
+    /// and then the user is told the real reason. No network is not a 401:
+    /// the app keeps working locally and tries again on the next tick.
+    /// Returns true when the caller should stop this round.
+    async fn handle_session_error(&mut self, error: &str) -> bool {
+        if is_unauthorized_error(error) {
+            let Ok(mut credentials) = self.store.load() else {
+                return false;
+            };
+            let Some(refresh_token) = credentials.refresh_token.clone() else {
+                self.end_local_session("expired");
+                return true;
+            };
+            match self.api.refresh_session(&refresh_token).await {
+                crate::api::RefreshOutcome::Refreshed {
+                    access_token,
+                    refresh_token,
+                } => {
+                    credentials.access_token = Some(access_token);
+                    if refresh_token.is_some() {
+                        credentials.refresh_token = refresh_token;
+                    }
+                    if let Err(error) = self.store.save(&credentials) {
+                        eprintln!("Nao foi possivel salvar a sessao renovada: {error}");
+                    }
+                }
+                crate::api::RefreshOutcome::Refused(reason) => self.end_local_session(&reason),
+                crate::api::RefreshOutcome::Unavailable(error) => {
+                    eprintln!("Renovacao da sessao indisponivel agora ({error}); tentando de novo depois.");
+                }
+            }
+            return true;
         }
+        if is_account_gone_error(error) {
+            self.end_local_session("account_disabled");
+            return true;
+        }
+        if is_device_inactive_error(error) {
+            self.end_local_session("device_removed");
+            return true;
+        }
+        false
+    }
 
-        eprintln!("Sessao desktop desativada pelo servidor: {error}");
+    fn end_local_session(&mut self, reason: &str) {
+        eprintln!("Sessao desktop encerrada pelo servidor: {reason}");
         let _ = self.store.clear();
         let _ = self.mode_tx.send(TelemetryMode::Normal);
         self.last_sample = None;
         if let Ok(mut state) = self.telemetry_state.try_write() {
             *state = None;
         }
-        let _ = self.app_handle.emit(AGENT_SESSION_INVALIDATED_EVENT, ());
-        // The server just kicked this device out from under a possibly
-        // minimized/background window - surface it immediately rather than
-        // leaving the user unknowingly logged out.
+        let _ = self
+            .app_handle
+            .emit(AGENT_SESSION_INVALIDATED_EVENT, json!({ "reason": reason }));
+        // The server just ended this session under a possibly minimized
+        // window - surface it immediately with the reason.
         crate::show_main_window(&self.app_handle);
-        true
     }
 }
 
@@ -1361,6 +1416,22 @@ fn optimization_delta(before: &TelemetrySample, after: &TelemetrySample) -> Valu
     })
 }
 
+fn is_unauthorized_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("status 401")
+        || normalized.contains("invalid access token")
+        || normalized.contains("invalid_access_token")
+        || normalized.contains("token de acesso invalido")
+        || normalized.contains("token de acesso inválido")
+}
+
+fn is_account_gone_error(error: &str) -> bool {
+    let normalized = error.to_ascii_lowercase();
+    normalized.contains("user not found")
+        || normalized.contains("usuario nao encontrado")
+        || normalized.contains("usuário não encontrado")
+}
+
 fn is_device_inactive_error(error: &str) -> bool {
     let normalized = error.to_ascii_lowercase();
     normalized.contains("not active")
@@ -1369,11 +1440,6 @@ fn is_device_inactive_error(error: &str) -> bool {
         || normalized.contains("no esta activo")
         || normalized.contains("hardware not found")
         || normalized.contains("invalid hardware")
-        || normalized.contains("user not found")
-        || normalized.contains("usuario nao encontrado")
-        || normalized.contains("usuário não encontrado")
-        || normalized.contains("invalid access token")
-        || normalized.contains("invalid_access_token")
 }
 
 fn is_batch_cooldown_error(error: &str) -> bool {
@@ -2383,9 +2449,138 @@ fn window_looks_like_game(title: &str) -> bool {
     .any(|needle| normalized.contains(needle))
 }
 
+/// Execution mode reported to the server when the client refuses to run an
+/// action unattended. Not a failure of the action itself.
+const NOT_ELIGIBLE_FOR_AUTOMATIC: &str = "not_eligible_for_automatic";
+
+#[derive(Debug, PartialEq, Eq)]
+enum LearnedAutoGate {
+    /// Not an automatic command; the normal confirmation flow applies.
+    NotLearnedAuto,
+    /// Automatic command for an action on the local eligible list.
+    Eligible,
+    /// Automatic command for an action that may never run unattended.
+    NotEligible,
+}
+
+/// S3: decided only from the action name and the local list. Whatever the
+/// server sets in `requiresConfirmation`, an automatic command for an
+/// ineligible action is refused here, without a popup (decision 10: no
+/// prompts for automatic actions).
+fn learned_auto_gate(command: &CommandResponse) -> LearnedAutoGate {
+    if command.authorization_mode.as_deref() != Some("learned_auto") {
+        return LearnedAutoGate::NotLearnedAuto;
+    }
+    if !optimizations::safety::is_learned_auto_eligible(&command.action_name) {
+        return LearnedAutoGate::NotEligible;
+    }
+    if command.requires_confirmation {
+        return LearnedAutoGate::NotLearnedAuto;
+    }
+    LearnedAutoGate::Eligible
+}
+
+fn not_eligible_rejection(command: &CommandResponse) -> optimizations::ExecutionResult {
+    optimizations::ExecutionResult::rejected(
+        &command.action_name,
+        "action_not_eligible_for_automatic_execution",
+        json!({
+            "command_id": command.id,
+            "authorization_id": command.authorization_id,
+            "authorization_mode": command.authorization_mode,
+            "requires_confirmation": command.requires_confirmation,
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn remote_command(action: &str, mode: Option<&str>, requires_confirmation: bool) -> CommandResponse {
+        CommandResponse {
+            id: Uuid::new_v4(),
+            hw_id: Uuid::new_v4(),
+            action_name: action.to_string(),
+            action_payload: Some(json!({ "path": "C:\\Users\\someone\\Documents" })),
+            status: "pending".to_string(),
+            created_at: "2026-11-03T00:00:00Z".to_string(),
+            requires_confirmation,
+            authorization_mode: mode.map(ToString::to_string),
+            authorization_id: Some("auth-1".to_string()),
+            context_key: None,
+            risk_level: None,
+            confirmation_prompt: None,
+        }
+    }
+
+    #[test]
+    fn expired_access_is_renewed_not_treated_as_logout() {
+        // Bloco 5.4: a 401 goes to refresh; it must not count as "device gone".
+        let expired = "API retornou status 401 Unauthorized: Invalid access token.";
+        assert!(is_unauthorized_error(expired));
+        assert!(!is_device_inactive_error(expired));
+        assert!(!is_account_gone_error(expired));
+    }
+
+    #[test]
+    fn inactive_device_and_missing_account_end_the_session() {
+        assert!(is_device_inactive_error("API retornou status 403 Forbidden: Hardware not active"));
+        assert!(!is_unauthorized_error("API retornou status 403 Forbidden: Hardware not active"));
+        assert!(is_account_gone_error("API retornou status 404 Not Found: User not found"));
+    }
+
+    #[test]
+    fn network_failure_is_neither_logout_nor_refresh() {
+        // No internet must never pop the "session ended" modal.
+        let offline = "error sending request for url (https://api.analystblaze.com/api/v1/telemetry/batch)";
+        assert!(!is_unauthorized_error(offline));
+        assert!(!is_device_inactive_error(offline));
+        assert!(!is_account_gone_error(offline));
+    }
+
+    #[test]
+    fn learned_auto_delete_disk_usage_item_is_refused() {
+        for requires_confirmation in [false, true] {
+            let command = remote_command("DELETE_DISK_USAGE_ITEM", Some("learned_auto"), requires_confirmation);
+            assert_eq!(learned_auto_gate(&command), LearnedAutoGate::NotEligible);
+        }
+        let rejection = not_eligible_rejection(&remote_command(
+            "DELETE_DISK_USAGE_ITEM",
+            Some("learned_auto"),
+            false,
+        ));
+        assert!(!rejection.success);
+        assert!(rejection
+            .message
+            .contains("action_not_eligible_for_automatic_execution"));
+        assert_eq!(
+            rejection.details.get("blocked_by").and_then(Value::as_str),
+            Some("local_safety_gate")
+        );
+    }
+
+    #[test]
+    fn learned_auto_never_list_is_refused() {
+        for action in optimizations::safety::NEVER_AUTOMATIC_ACTIONS {
+            let command = remote_command(action, Some("learned_auto"), false);
+            assert_eq!(learned_auto_gate(&command), LearnedAutoGate::NotEligible, "{action}");
+        }
+    }
+
+    #[test]
+    fn learned_auto_game_mode_is_accepted() {
+        let command = remote_command("APPLY_GAME_MODE", Some("learned_auto"), false);
+        assert_eq!(learned_auto_gate(&command), LearnedAutoGate::Eligible);
+    }
+
+    #[test]
+    fn non_automatic_commands_keep_the_confirmation_flow() {
+        let manual = remote_command("DELETE_DISK_USAGE_ITEM", Some("manual_confirmation"), true);
+        assert_eq!(learned_auto_gate(&manual), LearnedAutoGate::NotLearnedAuto);
+        let plain = remote_command("APPLY_GAME_MODE", None, false);
+        assert_eq!(learned_auto_gate(&plain), LearnedAutoGate::NotLearnedAuto);
+    }
     use crate::telemetry::advanced::AdvancedTelemetry;
     use crate::telemetry::network::{NetworkDiagnostics, NetworkProbe};
 

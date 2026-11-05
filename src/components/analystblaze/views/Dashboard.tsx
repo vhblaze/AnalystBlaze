@@ -183,7 +183,9 @@ export function Dashboard({
               <p className="mt-2 text-sm text-slate-400">
                 {lastCheckSeconds === null
                   ? t("dashboard.noTelemetryDesc")
-                  : t("dashboard.lastCheck", { seconds: lastCheckSeconds })}
+                  : lastCheckSeconds === 1
+                    ? t("dashboard.lastCheckOne")
+                    : t("dashboard.lastCheck", { seconds: lastCheckSeconds })}
               </p>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-2">
@@ -262,7 +264,7 @@ export function Dashboard({
               {isReady && !paidGameModeAllowed && gameModeUsage && (
                 <span className={`text-xs ${gameModeUsage.limitReached ? "text-amber-300" : "text-slate-500"}`}>
                   {gameModeUsage.limitReached
-                    ? "Limite semanal de Modo Gamer atingido. Volta na proxima semana."
+                    ? "Limite semanal de Modo Gamer atingido. Volta na próxima semana."
                     : `Modo Gamer: ${formatGameModeMinutes(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
                 </span>
               )}

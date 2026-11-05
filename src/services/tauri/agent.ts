@@ -28,6 +28,9 @@ export type AgentStatus = {
    * ainda nao decidiu se quer move-lo. Enquanto for true a UI mostra o
    * dialogo "Mover este PC?" (confirmDeviceTransfer / cancelDeviceTransfer). */
   device_transfer_pending?: boolean | null;
+  /** Bloco 5.4: preenchido quando a conta ja tem 2 PCs ativos e o login deste
+   * PC espera o usuario escolher qual deles substituir (replaceDevice). */
+  device_limit_choices?: DeviceChoice[] | null;
   /** Verificacao de e-mail. `null`/ausente = o servidor nao informou (backend
    * antigo) - a UI trata como verificado, pra nunca acusar falsamente que a
    * conta vai ser desativada. */
@@ -709,7 +712,7 @@ function validatePublicEndpoint(name: string, value: string) {
   try {
     url = new URL(value);
   } catch {
-    throw new Error(`${name} invalida: ${value}`);
+    throw new Error(`${name} inválida: ${value}`);
   }
 
   if (url.protocol === "https:") return value.replace(/\/+$/, "");
@@ -718,10 +721,10 @@ function validatePublicEndpoint(name: string, value: string) {
   }
 
   if (url.protocol === "http:") {
-    throw new Error(`${name} insegura: producao exige https://; http:// so e permitido para localhost/127.0.0.1 em modo dev.`);
+    throw new Error(`${name} insegura: producao exige https://; http:// só e permitido para localhost/127.0.0.1 em modo dev.`);
   }
 
-  throw new Error(`${name} insegura: protocolo nao permitido (${url.protocol}).`);
+  throw new Error(`${name} insegura: protocolo não permitido (${url.protocol}).`);
 }
 
 function isDevLoopbackHost(hostname: string) {
@@ -778,7 +781,7 @@ export function isTauriRuntime() {
 
 function requireTauriRuntime(feature: string) {
   if (!isTauriRuntime()) {
-    throw new Error(`${feature} exige o aplicativo desktop Tauri em execucao.`);
+    throw new Error(`${feature} exige o aplicativo desktop Tauri em execução.`);
   }
 }
 
@@ -802,7 +805,7 @@ export async function setAgentLocale(locale: string) {
  * plano" button. Passive freshness otherwise comes from a background loop;
  * see spawn_plan_sync_loop in lib.rs. */
 export async function syncAccountPlan() {
-  requireTauriRuntime("Sincronizacao de plano");
+  requireTauriRuntime("Sincronização de plano");
   return invoke<AgentStatus>("sync_account_plan");
 }
 
@@ -833,7 +836,7 @@ export async function openAgentInsights() {
 
 /** Opens a page of the Windows Security app (see lib.rs's fixed page list). */
 export async function openWindowsSecurity(page: "history" | "threat" | "threatsettings") {
-  requireTauriRuntime("Abrir Seguranca do Windows");
+  requireTauriRuntime("Abrir Segurança do Windows");
   return invoke<string>("open_windows_security", { page });
 }
 
@@ -853,12 +856,12 @@ export async function activateAgentGameMode() {
 }
 
 export async function restorePendingOptimizations(): Promise<RestoreReport> {
-  requireTauriRuntime("Restauracao de snapshots");
+  requireTauriRuntime("Restauração de snapshots");
   return invoke<RestoreReport>("restore_pending_optimizations");
 }
 
 export async function getOptimizationSnapshots(limit = 80): Promise<OptimizationSnapshot[]> {
-  requireTauriRuntime("Historico de snapshots");
+  requireTauriRuntime("Histórico de snapshots");
   return invoke<OptimizationSnapshot[]>("optimization_snapshots", { limit });
 }
 
@@ -887,12 +890,12 @@ export async function checkForUpdate(): Promise<UpdateStatus> {
 }
 
 export async function applyUpdate(): Promise<UpdateStatus> {
-  requireTauriRuntime("Instalacao de atualizacoes");
+  requireTauriRuntime("Instalação de atualizações");
   return invoke<UpdateStatus>("apply_update");
 }
 
 export async function dismissUpdate(): Promise<UpdateStatus> {
-  requireTauriRuntime("Adiar atualizacao");
+  requireTauriRuntime("Adiar atualização");
   return invoke<UpdateStatus>("dismiss_update");
 }
 
@@ -913,19 +916,19 @@ export async function getOptimizationPreview(
       requires_snapshot: true,
       requires_privileged_helper: false,
       allowed_without_helper: true,
-      message: "Preview local indisponivel fora do Tauri.",
+      message: "Preview local indisponível fora do Tauri.",
     };
   }
   return invoke<OptimizationPreview>("optimization_preview", { actionName, payload });
 }
 
 export async function getWindowsInventory(): Promise<WindowsInventory> {
-  requireTauriRuntime("Inventario real do Windows");
+  requireTauriRuntime("Inventário real do Windows");
   return invoke<WindowsInventory>("windows_inventory");
 }
 
 export async function getNetworkDiagnostics(): Promise<NetworkDiagnostics> {
-  requireTauriRuntime("Diagnostico real de rede");
+  requireTauriRuntime("Diagnóstico real de rede");
   return invoke<NetworkDiagnostics>("network_diagnostics");
 }
 
@@ -943,7 +946,7 @@ export type TracerouteResult = {
 };
 
 export async function runNetworkTraceroute(target?: string): Promise<TracerouteResult> {
-  requireTauriRuntime("Diagnostico de rota");
+  requireTauriRuntime("Diagnóstico de rota");
   return invoke<TracerouteResult>("run_network_traceroute", { target: target ?? null });
 }
 
@@ -986,7 +989,7 @@ export async function probeGatewayIdentity(gatewayIp: string): Promise<string | 
 }
 
 export async function getEnergyDiagnostics(): Promise<EnergyDiagnostics> {
-  requireTauriRuntime("Diagnostico real de energia");
+  requireTauriRuntime("Diagnóstico real de energia");
   return invoke<EnergyDiagnostics>("energy_diagnostics");
 }
 
@@ -1009,12 +1012,12 @@ export async function setDnsServers(
   adapterName: string,
   dnsServers: string[],
 ): Promise<OptimizationResult> {
-  requireTauriRuntime("Alteracao de servidores DNS");
+  requireTauriRuntime("Alteração de servidores DNS");
   return invoke<OptimizationResult>("set_dns_servers", { adapterName, dnsServers });
 }
 
 export async function resetWinsockCatalog(): Promise<OptimizationResult> {
-  requireTauriRuntime("Reset do catalogo Winsock");
+  requireTauriRuntime("Reset do catálogo Winsock");
   return invoke<OptimizationResult>("reset_winsock_catalog");
 }
 
@@ -1044,12 +1047,12 @@ export type SystemFileCheckStatus = {
 };
 
 export async function startSystemFileCheck(): Promise<OptimizationResult> {
-  requireTauriRuntime("Verificacao de arquivos de sistema");
+  requireTauriRuntime("Verificação de arquivos de sistema");
   return invoke<OptimizationResult>("start_system_file_check");
 }
 
 export async function getSystemFileCheckStatus(scanId: string): Promise<OptimizationResult> {
-  requireTauriRuntime("Verificacao de arquivos de sistema");
+  requireTauriRuntime("Verificação de arquivos de sistema");
   return invoke<OptimizationResult>("system_file_check_status", { scanId });
 }
 
@@ -1074,33 +1077,33 @@ export async function disableGameDvr(): Promise<OptimizationResult> {
 }
 
 export async function repairService(serviceName: string): Promise<OptimizationResult> {
-  requireTauriRuntime("Corrigir servico");
+  requireTauriRuntime("Corrigir serviço");
   return invoke<OptimizationResult>("repair_service", { serviceName });
 }
 
 export async function disableServicePermanently(serviceName: string): Promise<OptimizationResult> {
-  requireTauriRuntime("Desativar servico");
+  requireTauriRuntime("Desativar serviço");
   return invoke<OptimizationResult>("disable_service_permanently", { serviceName });
 }
 
 // The Defender-disk card's fixes (optimizations::defender on the Rust side).
 export async function throttleDefenderScans(): Promise<OptimizationResult> {
-  requireTauriRuntime("Limitar verificacoes do Defender");
+  requireTauriRuntime("Limitar verificações do Defender");
   return invoke<OptimizationResult>("throttle_defender_scans");
 }
 
 export async function restoreDefenderScanSettings(): Promise<OptimizationResult> {
-  requireTauriRuntime("Restaurar verificacoes do Defender");
+  requireTauriRuntime("Restaurar verificações do Defender");
   return invoke<OptimizationResult>("restore_defender_scan_settings");
 }
 
 export async function renewDefenderDefinitions(): Promise<OptimizationResult> {
-  requireTauriRuntime("Renovar definicoes do Defender");
+  requireTauriRuntime("Renovar definições do Defender");
   return invoke<OptimizationResult>("renew_defender_definitions");
 }
 
 export async function scheduleVolumeCheck(driveLetter: string): Promise<OptimizationResult> {
-  requireTauriRuntime("Agendar verificacao do disco");
+  requireTauriRuntime("Agendar verificação do disco");
   return invoke<OptimizationResult>("schedule_volume_check", { driveLetter });
 }
 
@@ -1125,7 +1128,7 @@ export type AdapterDisableGuardResult = {
 };
 
 export async function checkAdapterDisableGuard(adapterName: string): Promise<AdapterDisableGuardResult> {
-  requireTauriRuntime("Verificacao de contexto antes de desativar adaptador");
+  requireTauriRuntime("Verificação de contexto antes de desativar adaptador");
   const result = await invoke<OptimizationResult>("check_adapter_disable_guard", { adapterName });
   const details = (result.details ?? {}) as Record<string, unknown>;
   return {
@@ -1137,7 +1140,7 @@ export async function checkAdapterDisableGuard(adapterName: string): Promise<Ada
 }
 
 export async function renewDhcpLease(): Promise<OptimizationResult> {
-  requireTauriRuntime("Renovar endereco IP");
+  requireTauriRuntime("Renovar endereço IP");
   return invoke<OptimizationResult>("renew_dhcp_lease");
 }
 
@@ -1167,17 +1170,17 @@ export type NetworkTuneRequest = {
 };
 
 export async function applyNetworkTune(request: NetworkTuneRequest): Promise<OptimizationResult> {
-  requireTauriRuntime("Otimizacao de rede");
+  requireTauriRuntime("Otimização de rede");
   return invoke<OptimizationResult>("apply_network_tune", { request });
 }
 
 export async function confirmNetworkTune(): Promise<OptimizationResult> {
-  requireTauriRuntime("Otimizacao de rede");
+  requireTauriRuntime("Otimização de rede");
   return invoke<OptimizationResult>("confirm_network_tune");
 }
 
 export async function revertNetworkTune(): Promise<OptimizationResult> {
-  requireTauriRuntime("Otimizacao de rede");
+  requireTauriRuntime("Otimização de rede");
   return invoke<OptimizationResult>("revert_network_tune");
 }
 
@@ -1212,12 +1215,12 @@ export async function getPrivilegedHelperStatus(): Promise<PrivilegedHelperStatu
 }
 
 export async function installPrivilegedHelper(): Promise<PrivilegedHelperStatus> {
-  requireTauriRuntime("Instalacao do helper privilegiado");
+  requireTauriRuntime("Instalação do helper privilegiado");
   return invoke<PrivilegedHelperStatus>("install_privileged_helper");
 }
 
 export async function uninstallPrivilegedHelper(): Promise<PrivilegedHelperStatus> {
-  requireTauriRuntime("Remocao do helper privilegiado");
+  requireTauriRuntime("Remoção do helper privilegiado");
   return invoke<PrivilegedHelperStatus>("uninstall_privileged_helper");
 }
 
@@ -1227,7 +1230,7 @@ export async function restartPrivilegedHelper(): Promise<PrivilegedHelperStatus>
 }
 
 export async function startPrivilegedHelper(): Promise<PrivilegedHelperStatus> {
-  requireTauriRuntime("Inicio do helper privilegiado");
+  requireTauriRuntime("Início do helper privilegiado");
   return invoke<PrivilegedHelperStatus>("start_privileged_helper");
 }
 
@@ -1237,7 +1240,7 @@ export async function stopPrivilegedHelper(): Promise<PrivilegedHelperStatus> {
 }
 
 export async function testPrivilegedHelper(): Promise<PrivilegedHelperHandshake> {
-  requireTauriRuntime("Teste de conexao do helper privilegiado");
+  requireTauriRuntime("Teste de conexão do helper privilegiado");
   return invoke<PrivilegedHelperHandshake>("test_privileged_helper");
 }
 
@@ -1250,7 +1253,7 @@ export async function deepCleanTemp(): Promise<OptimizationResult> {
  * checkDiskOptimizationInsight, which is what surfaces the "Fazer eu
  * mesmo" prompt for this in the first place. */
 export async function enableScheduledDefrag(): Promise<OptimizationResult> {
-  requireTauriRuntime("Otimizacao agendada de disco");
+  requireTauriRuntime("Otimização agendada de disco");
   return invoke<OptimizationResult>("enable_scheduled_defrag");
 }
 
@@ -1260,12 +1263,12 @@ export async function purgeCleanupQuarantine(): Promise<OptimizationResult> {
 }
 
 export async function restoreActiveGameMode(): Promise<RestoreReport> {
-  requireTauriRuntime("Restauracao do Modo Gamer");
+  requireTauriRuntime("Restauração do Modo Gamer");
   return invoke<RestoreReport>("restore_active_game_mode");
 }
 
 export async function getActiveGameModeSession(): Promise<GameModeSession | null> {
-  requireTauriRuntime("Sessao ativa do Modo Gamer");
+  requireTauriRuntime("Sessão ativa do Modo Gamer");
   return invoke<GameModeSession | null>("active_game_mode_session");
 }
 
@@ -1275,12 +1278,12 @@ export async function activateFocusMode(profile: FocusModeProfile = "focus", dur
 }
 
 export async function restoreFocusSession(): Promise<RestoreReport> {
-  requireTauriRuntime("Restauracao do Modo Foco");
+  requireTauriRuntime("Restauração do Modo Foco");
   return invoke<RestoreReport>("restore_focus_session");
 }
 
 export async function getActiveFocusSession(): Promise<FocusSession | null> {
-  requireTauriRuntime("Sessao ativa do Modo Foco");
+  requireTauriRuntime("Sessão ativa do Modo Foco");
   return invoke<FocusSession | null>("active_focus_session");
 }
 
@@ -1301,7 +1304,7 @@ export async function applyPcCleanFastProfile(options: PcCleanFastOptions = {}):
 }
 
 export async function restorePerformanceSession(sessionId?: string | null): Promise<OptimizationResult> {
-  requireTauriRuntime("Restauracao da suite de performance");
+  requireTauriRuntime("Restauração da suite de performance");
   return invoke<OptimizationResult>("restore_performance_session", { sessionId });
 }
 
@@ -1316,17 +1319,17 @@ export async function applyCleanupCategory(category: string, mode?: "safe" | "de
 }
 
 export async function getDiskUsageSummary(forceRefresh = false): Promise<DiskUsageSummary> {
-  requireTauriRuntime("Analise de uso de disco");
+  requireTauriRuntime("Análise de uso de disco");
   return invoke<DiskUsageSummary>("disk_usage_summary", { forceRefresh });
 }
 
 export async function cancelDiskUsageScan(): Promise<boolean> {
-  requireTauriRuntime("Analise de uso de disco");
+  requireTauriRuntime("Análise de uso de disco");
   return invoke<boolean>("cancel_disk_usage_scan");
 }
 
 export async function deleteDiskUsageItem(path: string): Promise<OptimizationResult> {
-  requireTauriRuntime("Exclusao de item de disco");
+  requireTauriRuntime("Exclusão de item de disco");
   return invoke<OptimizationResult>("delete_disk_usage_item", { path });
 }
 
@@ -1382,17 +1385,17 @@ export async function listenToDiskTreeItemReady(onItemReady: (item: DiskTreeItem
 }
 
 export async function scanStartupImpact(): Promise<StartupImpact[]> {
-  requireTauriRuntime("Impacto de inicializacao");
+  requireTauriRuntime("Impacto de inicialização");
   return invoke<StartupImpact[]>("scan_startup_impact");
 }
 
 export async function delayStartupApp(name: string, location?: string | null, delaySeconds = 120): Promise<OptimizationResult> {
-  requireTauriRuntime("Inicializacao atrasada");
+  requireTauriRuntime("Inicialização atrasada");
   return invoke<OptimizationResult>("delay_startup_app", { name, location, delaySeconds });
 }
 
 export async function restoreDelayedStartupApp(name?: string | null): Promise<OptimizationResult> {
-  requireTauriRuntime("Restaurar inicializacao atrasada");
+  requireTauriRuntime("Restaurar inicialização atrasada");
   return invoke<OptimizationResult>("restore_delayed_startup_app", { name });
 }
 
@@ -1614,9 +1617,36 @@ export async function listenToGameModeUsage(onUsage: (usage: GameModeUsage) => v
   return listen<GameModeUsage>("game-mode-usage-updated", (event) => onUsage(event.payload));
 }
 
-export async function listenToAgentSessionInvalidated(onInvalidated: () => void) {
+/** Motivo com que o servidor encerrou a sessao do desktop (Bloco 5.2/5.4):
+ * device_removed, password_changed, reuse_detected, logout, logout_all,
+ * account_disabled, expired ou invalid. */
+export type SessionEndReason = string;
+
+export async function listenToAgentSessionInvalidated(onInvalidated: (reason: SessionEndReason) => void) {
   if (!isTauriRuntime()) return () => undefined;
-  return listen("agent-session-invalidated", onInvalidated);
+  return listen<{ reason?: string } | null>("agent-session-invalidated", (event) =>
+    onInvalidated(event.payload?.reason ?? "invalid"),
+  );
+}
+
+export type DeviceChoice = {
+  id: string;
+  name?: string | null;
+  machine_type?: string | null;
+  os_version?: string | null;
+  last_ping?: string | null;
+};
+
+/** Remove o PC escolhido da conta e registra este no lugar. */
+export async function replaceDevice(hwId: string) {
+  if (!isTauriRuntime()) return fallbackStatus;
+  return invoke<AgentStatus>("replace_device", { hwId });
+}
+
+/** Desiste da troca: nada e removido e o login e descartado. */
+export async function cancelDeviceReplacement() {
+  if (!isTauriRuntime()) return fallbackStatus;
+  return invoke<AgentStatus>("cancel_device_replacement");
 }
 
 export async function listenToRemoteCommandConfirmation(

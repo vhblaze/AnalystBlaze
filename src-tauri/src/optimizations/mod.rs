@@ -20,6 +20,7 @@ pub mod network_admin;
 pub mod network_tune;
 pub mod os_version;
 pub mod performance_suite;
+pub mod helper_keys;
 pub mod privileged_helper;
 pub mod processes;
 pub mod protected_apps;

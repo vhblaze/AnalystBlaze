@@ -65,12 +65,14 @@ if ([string]::IsNullOrWhiteSpace($ExePath) -or -not (Test-Path -LiteralPath $Exe
 
 New-Item -ItemType Directory -Force -Path $HelperRoot | Out-Null
 
-# SYSTEM + Administrators: full control. BUILTIN\Users: read/execute (inherited
-# by the signing key the service creates on first start).
+# SYSTEM + Administrators only. There is no shared signing key anymore: the
+# service creates one key per Windows user under keys\<SID> (readable only by
+# that user) on that user's first request, and makes version.txt readable by
+# BUILTIN\Users itself. Granting Users read here would expose every account's
+# key folder listing and the legacy shared key to all local accounts.
 & icacls $HelperRoot /inheritance:r `
     /grant:r '*S-1-5-18:(OI)(CI)F' `
-    '*S-1-5-32-544:(OI)(CI)F' `
-    '*S-1-5-32-545:(OI)(CI)RX' | Out-Null
+    '*S-1-5-32-544:(OI)(CI)F' | Out-Null
 
 Remove-HelperService
 

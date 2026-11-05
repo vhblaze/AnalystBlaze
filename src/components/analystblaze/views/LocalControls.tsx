@@ -513,14 +513,14 @@ export function LocalControls({
               {!paidGameModeAllowed && gameModeUsage && (
                 <span className={`text-xs ${gameModeUsage.limitReached ? "text-amber-300" : "text-slate-500"}`}>
                   {gameModeUsage.limitReached
-                    ? "Limite semanal atingido. Volta na proxima semana."
+                    ? "Limite semanal atingido. Volta na próxima semana."
                     : `${formatMinutesLabel(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
                 </span>
               )}
             </div>
             <button
               disabled={busy || performanceBusy || !runtimeAvailable}
-              onClick={() => void runPerformanceAction(onApplyPcCleanFast, "Perfil PC limpo/rapido aplicado.")}
+              onClick={() => void runPerformanceAction(onApplyPcCleanFast, "Perfil PC limpo/rápido aplicado.")}
               className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-4 py-2.5 text-sm font-semibold text-emerald-100 transition-all hover:bg-emerald-400/15 disabled:opacity-50"
             >
               <Sparkles className="h-4 w-4" />
@@ -576,8 +576,8 @@ export function LocalControls({
 
       <AdvancedSection
         icon={<Wrench className="h-4 w-4 text-cyan-300" />}
-        title="Avancado: comandos e diagnosticos"
-        description="Controles tecnicos, categorias detalhadas, helper admin, apps protegidos e historico ficam recolhidos para nao poluir o fluxo principal."
+        title="Avançado: comandos e diagnósticos"
+        description="Controles tecnicos, categorias detalhadas, helper admin, apps protegidos e histórico ficam recolhidos para não poluir o fluxo principal."
       >
       <section className="glass-panel cyber-glow p-6">
         <div className="flex flex-col gap-3 pb-4 md:flex-row md:items-center md:justify-between">
@@ -603,7 +603,7 @@ export function LocalControls({
             </button>
             <button
               disabled={busy || performanceBusy || !runtimeAvailable}
-              onClick={() => void runPerformanceAction(onApplyPcCleanFast, "Perfil PC limpo/rapido aplicado.")}
+              onClick={() => void runPerformanceAction(onApplyPcCleanFast, "Perfil PC limpo/rápido aplicado.")}
               className="inline-flex items-center gap-2 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-3 py-2 text-xs font-semibold text-emerald-100 transition-all hover:border-emerald-300/60 disabled:opacity-50"
             >
               <Sparkles className="h-3.5 w-3.5" />
@@ -611,7 +611,7 @@ export function LocalControls({
             </button>
             <button
               disabled={busy || performanceBusy || !runtimeAvailable}
-              onClick={() => void runPerformanceAction(() => onRestorePerformanceSession(performanceReport?.restoreSession?.id), "Sessao de performance restaurada.")}
+              onClick={() => void runPerformanceAction(() => onRestorePerformanceSession(performanceReport?.restoreSession?.id), "Sessão de performance restaurada.")}
               className="inline-flex items-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition-all hover:border-amber-300/60 disabled:opacity-50"
             >
               Restaurar suite
@@ -627,7 +627,7 @@ export function LocalControls({
               ["Atual", performanceReport ? `${Math.round(performanceReport.overallScore)}/100` : "--"],
               ["Mudanca", formatMeasuredChange(performanceReport)],
               ["Modo", performanceReport?.mode ?? "--"],
-              ["Jogo", performanceReport?.metrics.gameDetected ? performanceReport.metrics.gameProcess ?? "detectado" : "nao detectado"],
+              ["Jogo", performanceReport?.metrics.gameDetected ? performanceReport.metrics.gameProcess ?? "detectado" : "não detectado"],
             ]}
             footer={performanceReport?.bottlenecks[0]?.label ?? "Rode um baseline para medir responsividade local."}
           />
@@ -650,7 +650,7 @@ export function LocalControls({
                   ]
                     .filter(Boolean)
                     .join(" — ")
-                : "Sem gargalo critico no ultimo scan."
+                : "Sem gargalo crítico no último scan."
             }
           />
           <DiagnosticsPanel
@@ -660,7 +660,7 @@ export function LocalControls({
               category.label,
               `${formatBytes(category.reclaimableBytes)}${category.requiresHelper ? " / helper" : ""}`,
             ])}
-            footer="Categorias usam quarentena reversivel; purge libera espaco real depois."
+            footer="Categorias usam quarentena reversível; purge libera espaço real depois."
           />
           <DiagnosticsPanel
             icon={<History className="h-4 w-4 text-cyan-300" />}
@@ -689,7 +689,7 @@ export function LocalControls({
             disabled={busy || performanceBusy}
           />
           <ActionList
-            title="Apps de inicializacao"
+            title="Apps de inicialização"
             empty="Nenhum app de alto impacto seguro foi encontrado."
             items={startupImpact.filter((app) => app.availableActions.includes("delay")).slice(0, 6).map((app) => ({
               key: `${app.location}:${app.name}`,
@@ -699,11 +699,11 @@ export function LocalControls({
               secondaryAction: "Restaurar",
               onAction: () => runPerformanceAction(
                 () => onDelayStartupApp(app.name, app.location),
-                "App movido para inicializacao atrasada.",
+                "App movido para inicialização atrasada.",
               ),
               onSecondaryAction: () => runPerformanceAction(
                 () => onRestoreDelayedStartupApp(app.name),
-                "App restaurado na inicializacao.",
+                "App restaurado na inicialização.",
               ),
             }))}
             disabled={busy || performanceBusy}
@@ -785,7 +785,7 @@ export function LocalControls({
         </p>
         <div className="grid gap-4 lg:grid-cols-2">
           <SystemRepairPanel
-            title="Verificacao de arquivos (SFC)"
+            title="Verificação de arquivos (SFC)"
             description="sfc /scannow - verifica e repara arquivos de sistema protegidos."
             starting={sfcStarting}
             status={sfcStatus}
@@ -795,7 +795,7 @@ export function LocalControls({
           />
           <SystemRepairPanel
             title="Reparo de componentes (DISM)"
-            description="DISM /Online /Cleanup-Image /RestoreHealth - repara o repositorio de componentes do Windows. Recomendado quando o SFC nao consegue corrigir sozinho."
+            description="DISM /Online /Cleanup-Image /RestoreHealth - repara o repositorio de componentes do Windows. Recomendado quando o SFC não consegue corrigir sozinho."
             starting={dismStarting}
             status={dismStatus}
             onStart={() => void startDismRestoreHealth()}
@@ -1012,7 +1012,7 @@ export function LocalControls({
         <div className="mt-4 flex flex-wrap gap-2">
           <button
             disabled={busy || !runtimeAvailable}
-            onClick={() => void runTempAction(onDeepCleanTemp, "Limpeza profunda TEMP concluida.")}
+            onClick={() => void runTempAction(onDeepCleanTemp, "Limpeza profunda TEMP concluída.")}
             className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
           >
             Limpeza profunda TEMP
@@ -1108,13 +1108,13 @@ function systemRepairOutcomeLabel(status: SystemFileCheckStatus | null): string 
     case "repaired":
       return "Arquivos corrompidos encontrados e reparados";
     case "needs_dism_repair":
-      return "Corrupcao encontrada - o SFC nao conseguiu corrigir sozinho";
+      return "Corrupcao encontrada - o SFC não conseguiu corrigir sozinho";
     case "could_not_perform":
-      return "Nao foi possivel concluir a verificacao";
+      return "Não foi possível concluir a verificação";
     case "failed":
-      return "A verificacao encerrou com erro";
+      return "A verificação encerrou com erro";
     default:
-      return "Resultado nao reconhecido - veja o texto original abaixo";
+      return "Resultado não reconhecido - veja o texto original abaixo";
   }
 }
 
@@ -1157,7 +1157,7 @@ function SystemRepairPanel({
           <RefreshCw className="h-3.5 w-3.5 animate-spin" />
           {starting
             ? "Iniciando..."
-            : `Em andamento - ${Math.round((status?.elapsedSeconds ?? 0) / 60)} min decorridos. Nao feche o app nem reinicie o PC.`}
+            : `Em andamento - ${Math.round((status?.elapsedSeconds ?? 0) / 60)} min decorridos. Não feche o app nem reinicie o PC.`}
         </div>
       )}
       {status?.done && status.result && (
@@ -1232,8 +1232,8 @@ function automaticGameModeStatusLabel(
 ) {
   if (!status?.authenticated || !status.registered) return "Aguardando agente";
   if (!planAllowed) return "Bloqueado pelo plano";
-  if (!policy) return "Disponivel no plano";
-  if (policy.enabled && policy.auto_game_mode) return "Automatico ativo";
+  if (!policy) return "Disponível no plano";
+  if (policy.enabled && policy.auto_game_mode) return "Automático ativo";
   return "Pausado pela policy";
 }
 

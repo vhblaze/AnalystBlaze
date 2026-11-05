@@ -11,8 +11,11 @@ import { useTelemetry } from "@/hooks/useTelemetry";
 import { isUpdateDismissedNow, useUpdater } from "@/hooks/useUpdater";
 import { useI18n } from "@/i18n";
 import {
+  cancelDeviceReplacement,
   cancelDeviceTransfer,
   confirmDeviceTransfer,
+  replaceDevice,
+  type DeviceChoice,
   getActiveAnnouncements,
   getPrivilegedHelperStatus,
   getTodaysAutomaticActions,
@@ -93,7 +96,7 @@ export function AppShell() {
       .apply()
       .catch((error) => {
         toast({
-          title: "Atualizacao nao foi instalada",
+          title: "Atualização não foi instalada",
           description: String(error),
           variant: "destructive",
         });
@@ -105,9 +108,39 @@ export function AppShell() {
   }, [updater]);
 
   const loggedOutError = useMemo(() => {
+    // Bloco 5.4: the server ended the session and said why - show that.
+    if (auth.message.key.startsWith("agent.messages.sessionEnded.")) {
+      return { code: null, message: t(auth.message.key) };
+    }
     if (auth.message.key !== "agent.messages.error") return null;
     return splitBackendErrorCode(t(auth.message.key, auth.message.params));
   }, [auth.message, t]);
+
+  const deviceLimitChoices = auth.status?.device_limit_choices ?? [];
+  const [replacingDevice, setReplacingDevice] = useState(false);
+  const handleReplaceDevice = useCallback(
+    async (hwId: string) => {
+      setReplacingDevice(true);
+      try {
+        await replaceDevice(hwId);
+      } catch (error) {
+        await cancelDeviceReplacement().catch(() => undefined);
+        toast({
+          title: t("deviceLimit.failedTitle"),
+          description: splitBackendErrorCode(String(error)).message,
+          variant: "destructive",
+        });
+      } finally {
+        setReplacingDevice(false);
+        await auth.refreshStatus().catch(() => undefined);
+      }
+    },
+    [auth, t],
+  );
+  const handleCancelDeviceLimit = useCallback(async () => {
+    await cancelDeviceReplacement().catch(() => undefined);
+    await auth.refreshStatus().catch(() => undefined);
+  }, [auth]);
 
   const titles = useMemo<Record<ViewKey, string>>(
     () => ({
@@ -216,7 +249,7 @@ export function AppShell() {
         return runConfirmed(
           {
             title: "Ativar Modo Gamer",
-            description: "O agente aplica jogo em alta prioridade, reduz fundo, ajusta energia/visual, faz limpeza segura reversivel e mede rede. A restauracao fica pronta para quando voce sair do jogo.",
+            description: "O agente aplica jogo em alta prioridade, reduz fundo, ajusta energia/visual, faz limpeza segura reversível e mede rede. A restauração fica pronta para quando você sair do jogo.",
             risk: "sensivel",
             snapshot: true,
           },
@@ -227,7 +260,7 @@ export function AppShell() {
         return runConfirmed(
           {
             title: "Limpeza profunda TEMP",
-            description: "Move arquivos temporarios destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
+            description: "Move arquivos temporários destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
             risk: "sensivel",
             snapshot: true,
           },
@@ -237,8 +270,8 @@ export function AppShell() {
       if (actionName === "ENABLE_SCHEDULED_DEFRAG") {
         return runConfirmed(
           {
-            title: "Reativar otimizacao automatica de disco",
-            description: "Reativa a tarefa nativa do Windows que desfragmenta seu HD periodicamente, mantendo a leitura de arquivos rapida com o tempo. Exige o helper privilegiado instalado.",
+            title: "Reativar otimização automática de disco",
+            description: "Reativa a tarefa nativa do Windows que desfragmenta seu HD periodicamente, mantendo a leitura de arquivos rápida com o tempo. Exige o helper privilegiado instalado.",
             risk: "sensivel",
             snapshot: false,
           },
@@ -249,7 +282,7 @@ export function AppShell() {
         return runConfirmed(
           {
             title: "Verificar arquivos de sistema (SFC)",
-            description: "Executa sfc /scannow. Pode levar varios minutos e usa privilegios administrativos - nao interrompa nem reinicie o PC enquanto estiver em andamento.",
+            description: "Executa sfc /scannow. Pode levar vários minutos e usa privilégios administrativos - não interrompa nem reinicie o PC enquanto estiver em andamento.",
             risk: "sensivel",
             snapshot: false,
           },
@@ -274,8 +307,8 @@ export function AppShell() {
       if (actionName === "DISABLE_GAME_DVR") {
         return runConfirmed(
           {
-            title: "Desativar gravacao do Game Bar",
-            description: "Desliga a gravacao em segundo plano do Xbox Game Bar (Game DVR). Reversivel - a chave anterior fica salva no historico de acoes.",
+            title: "Desativar gravação do Game Bar",
+            description: "Desliga a gravação em segundo plano do Xbox Game Bar (Game DVR). Reversível - a chave anterior fica salva no histórico de ações.",
             risk: "sensivel",
             snapshot: true,
           },
@@ -289,8 +322,8 @@ export function AppShell() {
         }
         return runConfirmed(
           {
-            title: "Tentar corrigir servico",
-            description: "Para e reinicia o servico, depois confere se ele realmente continua ativo antes de dizer que funcionou. Pode nao resolver causas mais profundas (instalacao corrompida, dependencia ausente).",
+            title: "Tentar corrigir serviço",
+            description: "Para e reinicia o serviço, depois confere se ele realmente continua ativo antes de dizer que funcionou. Pode não resolver causas mais profundas (instalação corrompida, dependência ausente).",
             risk: "sensivel",
             snapshot: true,
           },
@@ -304,8 +337,8 @@ export function AppShell() {
         }
         return runConfirmed(
           {
-            title: "Desativar servico permanentemente",
-            description: "O servico para de iniciar sozinho (Tipo de inicializacao = Desativado). Reversivel pelo historico de acoes, mas so use se tiver certeza de que nao precisa dele.",
+            title: "Desativar serviço permanentemente",
+            description: "O serviço para de iniciar sozinho (Tipo de inicialização = Desativado). Reversível pelo histórico de ações, mas só use se tiver certeza de que não precisa dele.",
             risk: "sensivel",
             snapshot: true,
           },
@@ -315,8 +348,8 @@ export function AppShell() {
       if (actionName === "THROTTLE_DEFENDER_SCANS") {
         return runConfirmed(
           {
-            title: "Limitar verificacoes do Defender",
-            description: "Reduz a CPU que as verificacoes agendadas do Windows Defender podem usar (de 50% para 20%) e faz elas rodarem so com o PC ocioso. A protecao em tempo real nao muda. Reversivel pelo proprio card.",
+            title: "Limitar verificações do Defender",
+            description: "Reduz a CPU que as verificações agendadas do Windows Defender podem usar (de 50% para 20%) e faz elas rodarem só com o PC ocioso. A proteção em tempo real não muda. Reversível pelo próprio card.",
             risk: "sensivel",
             snapshot: true,
           },
@@ -326,8 +359,8 @@ export function AppShell() {
       if (actionName === "RESTORE_DEFENDER_SCAN_SETTINGS") {
         return runConfirmed(
           {
-            title: "Restaurar verificacoes do Defender",
-            description: "Devolve as preferencias de verificacao do Defender exatamente como estavam antes do AnalystBlaze limita-las.",
+            title: "Restaurar verificações do Defender",
+            description: "Devolve as preferências de verificação do Defender exatamente como estavam antes do AnalystBlaze limita-las.",
             risk: "sensivel",
             snapshot: false,
           },
@@ -337,8 +370,8 @@ export function AppShell() {
       if (actionName === "RENEW_DEFENDER_DEFINITIONS") {
         return runConfirmed(
           {
-            title: "Renovar definicoes do Defender",
-            description: "Remove o conjunto atual de definicoes de virus (que pode estar corrompido) e baixa um novo. O Defender fica alguns minutos sem definicoes ate o download terminar - nao abra arquivos suspeitos nesse intervalo.",
+            title: "Renovar definições do Defender",
+            description: "Remove o conjunto atual de definições de vírus (que pode estar corrompido) e baixa um novo. O Defender fica alguns minutos sem definições até o download terminar - não abra arquivos suspeitos nesse intervalo.",
             risk: "sensivel",
             snapshot: false,
           },
@@ -352,15 +385,15 @@ export function AppShell() {
         }
         return runConfirmed(
           {
-            title: `Verificar o disco ${driveLetter}: na proxima reinicializacao`,
-            description: "Marca a unidade para o Windows rodar a verificacao e reparo do sistema de arquivos (chkdsk) antes de abrir, na proxima vez que voce reiniciar. Pode levar alguns minutos a mais nesse boot.",
+            title: `Verificar o disco ${driveLetter}: na próxima reinicialização`,
+            description: "Marca a unidade para o Windows rodar a verificação e reparo do sistema de arquivos (chkdsk) antes de abrir, na próxima vez que você reiniciar. Pode levar alguns minutos a mais nesse boot.",
             risk: "sensivel",
             snapshot: false,
           },
           () => auth.scheduleVolumeCheck(driveLetter),
         );
       }
-      return Promise.reject(new Error(`Acao nao suportada localmente: ${actionName}`));
+      return Promise.reject(new Error(`Ação não suportada localmente: ${actionName}`));
     },
     [runConfirmed, activateGameModeWithUpsell, auth],
   );
@@ -417,7 +450,7 @@ export function AppShell() {
       {
         id: "view-dashboard",
         title: t("nav.dashboard"),
-        description: "Visao geral do agente, saude e atalhos principais.",
+        description: "Visão geral do agente, saúde e atalhos principais.",
         keywords: ["home", "inicio", "painel"],
         hint: "view",
         onSelect: () => handleViewChange("dashboard"),
@@ -433,7 +466,7 @@ export function AppShell() {
       {
         id: "view-insights",
         title: t("nav.insights"),
-        description: "Insights da IA baseados na telemetria do backend.",
+        description: "Insights baseados na telemetria do backend.",
         keywords: ["ia", "recomendacoes", "insights"],
         hint: "view",
         onSelect: () => handleViewChange("insights"),
@@ -441,7 +474,7 @@ export function AppShell() {
       {
         id: "view-controls",
         title: t("nav.controls"),
-        description: "Helper admin, snapshots, servicos, energia e acoes reversiveis.",
+        description: "Helper admin, snapshots, serviços, energia e ações reversíveis.",
         keywords: ["helper", "windows", "servicos", "temp", "energia"],
         hint: "view",
         onSelect: () => handleViewChange("controls"),
@@ -449,7 +482,7 @@ export function AppShell() {
       {
         id: "view-settings",
         title: t("nav.settings"),
-        description: "Conta, login, idioma e configuracoes do agente.",
+        description: "Conta, login, idioma e configurações do agente.",
         keywords: ["conta", "idioma", "login"],
         hint: "view",
         onSelect: () => handleViewChange("settings"),
@@ -483,7 +516,7 @@ export function AppShell() {
           void runConfirmed(
             {
               title: "Aplicar PC limpo/rapido",
-              description: "O agente mede antes/depois, aplica somente acoes allowlisted com snapshots locais e mostra o ganho real deste computador.",
+              description: "O agente mede antes/depois, aplica somente ações allowlisted com snapshots locais e mostra o ganho real deste computador.",
               risk: "sensivel",
               snapshot: true,
             },
@@ -501,7 +534,7 @@ export function AppShell() {
           void runConfirmed(
             {
               title: "Ativar Modo Gamer",
-              description: "O agente aplica um pacote seguro: prioriza jogo/app ativo, reduz apps de fundo, usa limpeza TEMP reversivel, ajusta energia/visual e mede rede. Deep clean e purge nao entram neste fluxo.",
+              description: "O agente aplica um pacote seguro: prioriza jogo/app ativo, reduz apps de fundo, usa limpeza TEMP reversível, ajusta energia/visual e mede rede. Deep clean e purge não entram neste fluxo.",
               risk: "sensivel",
               snapshot: true,
             },
@@ -511,7 +544,7 @@ export function AppShell() {
       {
         id: "action-restore-game-mode",
         title: "Restaurar Modo Gamer",
-        description: "Restaura a sessao ativa do Modo Gamer e seus snapshots.",
+        description: "Restaura a sessão ativa do Modo Gamer e seus snapshots.",
         keywords: ["restaurar", "restore", "jogo"],
         hint: "action",
         disabled: auth.busy,
@@ -519,7 +552,7 @@ export function AppShell() {
           void runConfirmed(
             {
               title: "Restaurar Modo Gamer",
-              description: "Restaura snapshots da sessao ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponiveis.",
+              description: "Restaura snapshots da sessão ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponíveis.",
               risk: "seguro",
               snapshot: false,
             },
@@ -529,7 +562,7 @@ export function AppShell() {
       {
         id: "action-restore-snapshots",
         title: "Restaurar snapshots",
-        description: "Desfaz alteracoes pendentes salvas pelo agente local.",
+        description: "Desfaz alterações pendentes salvas pelo agente local.",
         keywords: ["rollback", "restore", "snapshot"],
         hint: "action",
         disabled: auth.busy,
@@ -537,7 +570,7 @@ export function AppShell() {
           void runConfirmed(
             {
               title: "Restaurar snapshots",
-              description: "O agente vai tentar desfazer alteracoes pendentes de energia, limpeza, apps de inicializacao e servicos.",
+              description: "O agente vai tentar desfazer alterações pendentes de energia, limpeza, apps de inicialização e serviços.",
               risk: "seguro",
               snapshot: false,
             },
@@ -555,7 +588,7 @@ export function AppShell() {
           void runConfirmed(
             {
               title: "Limpeza profunda TEMP",
-              description: "Move arquivos temporarios destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
+              description: "Move arquivos temporários destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
               risk: "sensivel",
               snapshot: true,
             },
@@ -565,7 +598,7 @@ export function AppShell() {
       {
         id: "action-purge-cleanup",
         title: "Purgar quarentena",
-        description: "Apaga permanentemente arquivos em quarentena para liberar espaco real.",
+        description: "Apaga permanentemente arquivos em quarentena para liberar espaço real.",
         keywords: ["purge", "quarentena", "espaco", "disco"],
         hint: "action",
         disabled: auth.busy,
@@ -573,7 +606,7 @@ export function AppShell() {
           void runConfirmed(
             {
               title: "Purgar quarentena",
-              description: "Apaga permanentemente a quarentena de limpeza. Depois disso esses arquivos nao poderao ser restaurados.",
+              description: "Apaga permanentemente a quarentena de limpeza. Depois disso esses arquivos não poderão ser restaurados.",
               risk: "sensivel",
               snapshot: false,
             },
@@ -991,7 +1024,7 @@ export function AppShell() {
                     await runConfirmed(
                       {
                         title: "Ativar Modo Gamer",
-                        description: "O agente aplica jogo em alta prioridade, reduz fundo, ajusta energia/visual, faz limpeza segura reversivel e mede rede. A restauracao fica pronta para quando voce sair do jogo.",
+                        description: "O agente aplica jogo em alta prioridade, reduz fundo, ajusta energia/visual, faz limpeza segura reversível e mede rede. A restauração fica pronta para quando você sair do jogo.",
                         risk: "sensivel",
                         snapshot: true,
                       },
@@ -1002,7 +1035,7 @@ export function AppShell() {
                     await runConfirmed(
                       {
                         title: "Desativar Modo Gamer",
-                        description: "Restaura snapshots da sessao ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponiveis.",
+                        description: "Restaura snapshots da sessão ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponíveis.",
                         risk: "seguro",
                         snapshot: false,
                       },
@@ -1072,7 +1105,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Restaurar snapshots",
-                        description: "O agente vai tentar desfazer alteracoes pendentes de energia, limpeza, apps de inicializacao e servicos.",
+                        description: "O agente vai tentar desfazer alterações pendentes de energia, limpeza, apps de inicialização e serviços.",
                         risk: "seguro",
                         snapshot: false,
                       },
@@ -1083,7 +1116,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Verificar arquivos de sistema (SFC)",
-                        description: "Executa sfc /scannow. Pode levar varios minutos e usa privilegios administrativos - nao interrompa nem reinicie o PC enquanto estiver em andamento.",
+                        description: "Executa sfc /scannow. Pode levar vários minutos e usa privilégios administrativos - não interrompa nem reinicie o PC enquanto estiver em andamento.",
                         risk: "sensivel",
                         snapshot: false,
                       },
@@ -1094,7 +1127,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Reparar componentes do Windows (DISM)",
-                        description: "Executa DISM /Online /Cleanup-Image /RestoreHealth. Pode levar bem mais tempo que o SFC e precisa de conexao com a internet - nao interrompa nem reinicie o PC enquanto estiver em andamento.",
+                        description: "Executa DISM /Online /Cleanup-Image /RestoreHealth. Pode levar bem mais tempo que o SFC e precisa de conexão com a internet - não interrompa nem reinicie o PC enquanto estiver em andamento.",
                         risk: "sensivel",
                         snapshot: false,
                       },
@@ -1105,7 +1138,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: `Desativar ${name}`,
-                        description: `Remove o app da inicializacao do Windows em ${location ?? "registro detectado"} e cria snapshot para restaurar depois.`,
+                        description: `Remove o app da inicialização do Windows em ${location ?? "registro detectado"} e cria snapshot para restaurar depois.`,
                         risk: "sensivel",
                         snapshot: true,
                       },
@@ -1115,7 +1148,7 @@ export function AppShell() {
                   onRestoreStartup={(name) =>
                     runConfirmed(
                       {
-                        title: name ? `Restaurar ${name}` : "Restaurar apps de inicializacao",
+                        title: name ? `Restaurar ${name}` : "Restaurar apps de inicialização",
                         description: "Restaura o valor original salvo no snapshot local do Registro.",
                         risk: "seguro",
                         snapshot: false,
@@ -1126,8 +1159,8 @@ export function AppShell() {
                   onStopService={(name) =>
                     runConfirmed(
                       {
-                        title: `Parar servico ${name}`,
-                        description: "O servico sera parado apenas se passar pela denylist local. Um snapshot guarda se ele estava rodando antes.",
+                        title: `Parar serviço ${name}`,
+                        description: "O serviço será parado apenas se passar pela denylist local. Um snapshot guarda se ele estava rodando antes.",
                         risk: "sensivel",
                         snapshot: true,
                       },
@@ -1137,8 +1170,8 @@ export function AppShell() {
                   onRestoreService={(name) =>
                     runConfirmed(
                       {
-                        title: name ? `Restaurar servico ${name}` : "Restaurar servicos",
-                        description: "Tenta religar apenas servicos que estavam rodando antes da acao.",
+                        title: name ? `Restaurar serviço ${name}` : "Restaurar serviços",
+                        description: "Tenta religar apenas serviços que estavam rodando antes da ação.",
                         risk: "seguro",
                         snapshot: false,
                       },
@@ -1160,7 +1193,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Ativar visual de desempenho",
-                        description: "Reduz animacoes, transparencia e efeitos visuais do Windows para deixar o sistema mais leve (reversivel por snapshot). Pode causar um pequeno engasgo de um instante em outros programas abertos, principalmente navegadores - e o Windows avisando todo mundo da mudanca, um comportamento normal do sistema, nao um erro.",
+                        description: "Reduz animacoes, transparencia e efeitos visuais do Windows para deixar o sistema mais leve (reversível por snapshot). Pode causar um pequeno engasgo de um instante em outros programas abertos, principalmente navegadores - e o Windows avisando todo mundo da mudança, um comportamento normal do sistema, não um erro.",
                         risk: "sensivel",
                         snapshot: true,
                       },
@@ -1182,7 +1215,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Limpeza profunda TEMP",
-                        description: "Move arquivos temporarios destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
+                        description: "Move arquivos temporários destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
                         risk: "sensivel",
                         snapshot: true,
                       },
@@ -1193,7 +1226,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Purgar quarentena",
-                        description: "Apaga permanentemente a quarentena de limpeza. Depois disso esses arquivos nao poderao ser restaurados.",
+                        description: "Apaga permanentemente a quarentena de limpeza. Depois disso esses arquivos não poderão ser restaurados.",
                         risk: "sensivel",
                         snapshot: false,
                       },
@@ -1204,7 +1237,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Restaurar Modo Gamer",
-                        description: "Restaura snapshots da sessao ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponiveis.",
+                        description: "Restaura snapshots da sessão ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponíveis.",
                         risk: "seguro",
                         snapshot: false,
                       },
@@ -1226,7 +1259,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Restaurar Performance Suite",
-                        description: "Restaura snapshots criados pelo perfil PC limpo/rapido, incluindo visual, prioridades e inicializacao atrasada quando existirem.",
+                        description: "Restaura snapshots criados pelo perfil PC limpo/rápido, incluindo visual, prioridades e inicialização atrasada quando existirem.",
                         risk: "seguro",
                         snapshot: false,
                       },
@@ -1238,8 +1271,8 @@ export function AppShell() {
                       {
                         title: category === "cleanup_quarantine" ? "Purgar quarentena" : "Aplicar limpeza",
                         description: category === "cleanup_quarantine"
-                          ? "Apaga permanentemente a quarentena para liberar espaco real."
-                          : "Move arquivos elegiveis desta categoria para quarentena reversivel.",
+                          ? "Apaga permanentemente a quarentena para liberar espaço real."
+                          : "Move arquivos elegiveis desta categoria para quarentena reversível.",
                         risk: category === "cleanup_quarantine" ? "sensivel" : "seguro",
                         snapshot: category !== "cleanup_quarantine",
                       },
@@ -1250,7 +1283,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: `Atrasar ${name}`,
-                        description: `Remove temporariamente ${name} da inicializacao direta e coloca na fila local do AnalystBlaze para iniciar depois.`,
+                        description: `Remove temporariamente ${name} da inicialização direta e coloca na fila local do AnalystBlaze para iniciar depois.`,
                         risk: "sensivel",
                         snapshot: true,
                       },
@@ -1260,8 +1293,8 @@ export function AppShell() {
                   onRestoreDelayedStartupApp={(name) =>
                     runConfirmed(
                       {
-                        title: name ? `Restaurar ${name}` : "Restaurar inicializacao atrasada",
-                        description: "Restaura o valor de inicializacao salvo em snapshot local.",
+                        title: name ? `Restaurar ${name}` : "Restaurar inicialização atrasada",
+                        description: "Restaura o valor de inicialização salvo em snapshot local.",
                         risk: "seguro",
                         snapshot: false,
                       },
@@ -1289,7 +1322,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Limpar cache de DNS",
-                        description: "Executa ipconfig /flushdns. Nao exige admin e nao altera nenhum estado que precise de restauracao.",
+                        description: "Executa ipconfig /flushdns. Não exige admin e não altera nenhum estado que precise de restauração.",
                         risk: "seguro",
                         snapshot: false,
                       },
@@ -1300,7 +1333,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Alterar DNS do adaptador",
-                        description: "Troca os servidores DNS do adaptador selecionado. O agente salva a configuracao atual em snapshot local para restaurar depois.",
+                        description: "Troca os servidores DNS do adaptador selecionado. O agente salva a configuração atual em snapshot local para restaurar depois.",
                         risk: "sensivel",
                         snapshot: true,
                       },
@@ -1310,8 +1343,8 @@ export function AppShell() {
                   onResetWinsockCatalog={() =>
                     runConfirmed(
                       {
-                        title: "Resetar catalogo Winsock",
-                        description: "Executa netsh winsock reset. E disruptivo, exige reinicializacao do computador e nao pode ser desfeito automaticamente pelo agente.",
+                        title: "Resetar catálogo Winsock",
+                        description: "Executa netsh winsock reset. E disruptivo, exige reinicialização do computador e não pode ser desfeito automaticamente pelo agente.",
                         risk: "sensivel",
                         snapshot: false,
                       },
@@ -1321,7 +1354,7 @@ export function AppShell() {
                   onSetAdapterEnabled={async (adapterName, enabled, context) => {
                     if (context?.riskWarning) {
                       const acknowledged = await requestConfirmation({
-                        title: "Atencao: essa interface parece estar em uso",
+                        title: "Atenção: essa interface parece estar em uso",
                         description: context.riskWarning,
                         risk: "sensivel",
                         snapshot: false,
@@ -1330,7 +1363,7 @@ export function AppShell() {
                     }
                     const baseDescription = enabled
                       ? "Reativa o adaptador de rede selecionado."
-                      : "Desativa o adaptador de rede selecionado para forcar o trafego a sair por outro adaptador. O agente salva o estado atual em snapshot local para restaurar depois.";
+                      : "Desativa o adaptador de rede selecionado para forçar o tráfego a sair por outro adaptador. O agente salva o estado atual em snapshot local para restaurar depois.";
                     return runConfirmed(
                       {
                         title: enabled ? "Ativar adaptador de rede" : "Desativar adaptador de rede",
@@ -1344,8 +1377,8 @@ export function AppShell() {
                   onApplyNetworkTune={(request) =>
                     runConfirmed(
                       {
-                        title: "Aplicar otimizacao de TCP",
-                        description: "Ajusta parametros da pilha TCP do Windows (auto-tuning, ECN, congestionamento ou registro por adaptador). O agente salva a configuracao atual em snapshot local; se ninguem confirmar, e revertido automaticamente.",
+                        title: "Aplicar otimização de TCP",
+                        description: "Ajusta parâmetros da pilha TCP do Windows (auto-tuning, ECN, congestionamento ou registro por adaptador). O agente salva a configuração atual em snapshot local; se ninguém confirmar, e revertido automaticamente.",
                         risk: "sensivel",
                         snapshot: true,
                       },
@@ -1356,7 +1389,7 @@ export function AppShell() {
                     runConfirmed(
                       {
                         title: "Reiniciar o computador",
-                        description: "Fecha todos os programas abertos e reinicia o Windows em alguns segundos. Necessario para aplicar ajustes de registro na rede.",
+                        description: "Fecha todos os programas abertos e reinicia o Windows em alguns segundos. Necessário para aplicar ajustes de registro na rede.",
                         risk: "sensivel",
                         snapshot: false,
                       },
@@ -1400,8 +1433,16 @@ export function AppShell() {
           onLater={() => setEmailNoticeDismissed(true)}
         />
       )}
+      {deviceLimitChoices.length > 0 && (
+        <DeviceLimitDialog
+          devices={deviceLimitChoices}
+          busy={replacingDevice}
+          onReplace={(hwId) => void handleReplaceDevice(hwId)}
+          onCancel={() => void handleCancelDeviceLimit()}
+        />
+      )}
       <LoggedOutNotice
-        visible={auth.ready && !auth.status?.authenticated}
+        visible={auth.ready && !auth.status?.authenticated && deviceLimitChoices.length === 0}
         busy={auth.busy}
         onLogin={() => void auth.login()}
         errorMessage={loggedOutError?.message ?? null}
@@ -1460,7 +1501,7 @@ function RemoteConfirmationNotice({
  * pode ate estar desativada, entao o navegador e o caminho que funciona nos
  * dois casos - aqui o app so avisa e leva pra la.
  *
- * "Agora nao" fecha por esta sessao do app, nao dispensa o aviso: o item no
+ * "Agora não" fecha por esta sessao do app, nao dispensa o aviso: o item no
  * sininho continua la, e o popup volta na proxima abertura enquanto o e-mail
  * nao for verificado. Esconder isso de vez seria esconder a desativacao.
  */
@@ -1518,6 +1559,87 @@ function EmailVerificationNotice({
   );
 }
 
+/** Bloco 5.4: the account already has its 2 active PCs. The server no longer
+ * switches one off on its own, so the person at this PC picks which one it
+ * replaces. Same frame as ConfirmationDialog. */
+function DeviceLimitDialog({
+  devices,
+  busy,
+  onReplace,
+  onCancel,
+}: {
+  devices: DeviceChoice[];
+  busy: boolean;
+  onReplace: (hwId: string) => void;
+  onCancel: () => void;
+}) {
+  const { t, locale } = useI18n();
+  const describe = (device: DeviceChoice) =>
+    [device.machine_type, device.os_version].filter(Boolean).join(" · ");
+  const lastSeen = (value?: string | null) => {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return t("deviceLimit.lastSeen", {
+      date: date.toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }),
+    });
+  };
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 py-8 backdrop-blur-sm">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("deviceLimit.title")}
+        className="relative flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border border-cyan-400/20 bg-slate-950 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)]"
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto p-6 pb-4">
+          <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-300">
+            {t("deviceLimit.eyebrow")}
+          </div>
+          <h2 className="mt-2 text-xl font-semibold text-slate-50">{t("deviceLimit.title")}</h2>
+          <p className="mt-2 text-sm leading-relaxed text-slate-400">{t("deviceLimit.body")}</p>
+          <ul className="mt-4 grid gap-2">
+            {devices.map((device) => (
+              <li
+                key={device.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-cyan-500/10 bg-slate-900/70 p-3"
+              >
+                <div className="min-w-0">
+                  <strong className="block truncate text-sm text-slate-100">
+                    {device.name || t("deviceLimit.unnamed")}
+                  </strong>
+                  <span className="block truncate text-xs text-slate-500">{describe(device)}</span>
+                  {lastSeen(device.last_ping) && (
+                    <span className="block text-xs text-slate-500">{lastSeen(device.last_ping)}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onReplace(device.id)}
+                  className="shrink-0 rounded-xl border border-slate-600/60 px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:border-slate-400/70 disabled:opacity-50"
+                >
+                  {t("deviceLimit.replace")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-white/5 p-4">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onCancel}
+            className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70 disabled:opacity-50"
+          >
+            {t("deviceLimit.cancel")}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function ConfirmationDialog({
   request,
   onCancel,
@@ -1554,7 +1676,7 @@ function ConfirmationDialog({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-6 pb-4 pr-10">
           <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-300">
-            {request.remote ? "pedido recebido da web" : "confirmacao local"}
+            {request.remote ? "pedido recebido da web" : "confirmação local"}
           </div>
           <h2 className="mt-2 text-xl font-semibold text-slate-50">{request.title}</h2>
           <p className="mt-2 text-sm leading-relaxed text-slate-400">{request.description}</p>
@@ -1565,7 +1687,7 @@ function ConfirmationDialog({
             </div>
             <div className="rounded-xl border border-cyan-500/10 bg-slate-900/70 p-3">
               <span className="block font-mono text-[10px] uppercase tracking-widest text-slate-500">snapshot</span>
-              <strong className="mt-1 block text-sm text-slate-100">{request.snapshot ? "obrigatorio" : "nao altera snapshot"}</strong>
+              <strong className="mt-1 block text-sm text-slate-100">{request.snapshot ? "obrigatório" : "não altera snapshot"}</strong>
             </div>
           </div>
         </div>
