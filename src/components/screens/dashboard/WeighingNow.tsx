@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SectionLabel } from "@/components/ui/section-label";
 import { useI18n } from "@/i18n";
-import { formatBytes, formatMs, formatPercent } from "@/lib/format";
+import { displayProcessName, formatBytes, formatMegabytes, formatMs, formatPercent } from "@/lib/format";
 import type { WeighingNow as Weighing } from "@/features/telemetry/weighingNow";
 
 export type WeighingAction = "release_memory" | "open_disk" | "open_performance" | "open_network";
@@ -48,7 +48,9 @@ export function WeighingNow({
       break;
     case "memory":
       title = t("dashboard.d3.memoryTitle", { percent: formatPercent(weighing.percent) });
-      detail = t("dashboard.d3.memoryDetail");
+      detail = weighing.topProcess
+        ? t("dashboard.d3.memoryDetailTop", { name: displayProcessName(weighing.topProcess.name), size: formatMegabytes(weighing.topProcess.memoryMb) })
+        : t("dashboard.d3.memoryDetail");
       risk = t("dashboard.d3.memoryRisk");
       action = { id: "release_memory", label: t("dashboard.d3.releaseMemory"), blockedReason: releaseMemoryBlockedReason };
       break;

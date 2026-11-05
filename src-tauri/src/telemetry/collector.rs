@@ -109,6 +109,11 @@ pub struct TelemetrySample {
     #[serde(default)]
     pub disk_activity: Option<super::disk_activity::DiskActivity>,
     pub active_processes: usize,
+    /// L1 (redesign D3): os programas que mais usam memória agora. Fica só
+    /// no PC: `serde(skip)` impede que vá para o servidor ou para a fila de
+    /// envio em disco; só o snapshot local da tela recebe (state.rs).
+    #[serde(skip)]
+    pub top_processes: Vec<ProcessMemory>,
     pub system_uptime_seconds: u64,
     pub active_window: Option<String>,
     pub idle_seconds: u64,
@@ -399,6 +404,7 @@ impl TelemetryCollector {
         // gather Defender evidence from this tracker's latest view.
         let disk_activity = super::disk_activity::sample();
         let active_processes = self.system.processes().len();
+        let top_processes = top_processes_from_system(&self.system);
         let system_uptime_seconds = System::uptime();
         let active_window = active_window_title();
         let idle_seconds = idle_seconds();
@@ -506,6 +512,7 @@ impl TelemetryCollector {
             disk_usage_percent,
             disk_activity,
             active_processes,
+            top_processes,
             system_uptime_seconds,
             active_window: active_window.clone(),
             idle_seconds,
@@ -1617,6 +1624,83 @@ fn is_cpu_sensor_label(label: &str) -> bool {
         || label.contains("core")
         || label.contains("tctl")
         || label.contains("tdie")
+}
+
+/// Um programa e quanto ele usa agora, somando todos os processos com o
+/// mesmo nome (o Chrome abre dezenas de chrome.exe).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessMemory {
+    /// Nome do executável sem ".exe" ("chrome", "Discord").
+    pub name: String,
+    /// Memória em uso (working set), em MB.
+    pub memory_mb: f64,
+    /// Uso de CPU somado, em % do processador inteiro (0-100).
+    pub cpu_percent: f64,
+    /// Quantos processos foram somados.
+    pub process_count: u32,
+}
+
+/// Quantos programas a tela mostra ("mais pesados agora").
+pub const TOP_PROCESSES_LIMIT: usize = 5;
+
+/// Nomes que não são programas do usuário e não ajudam a explicar memória.
+fn is_system_pseudo_process(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        "" | "system idle process" | "idle" | "system" | "registry" | "memory compression" | "secure system"
+    )
+}
+
+/// Agrupa (nome, bytes, % de CPU de um núcleo) por nome e devolve os maiores
+/// em memória. `cpu_count` normaliza o CPU para % do processador inteiro.
+pub fn top_processes_by_memory<I>(entries: I, cpu_count: usize, limit: usize) -> Vec<ProcessMemory>
+where
+    I: IntoIterator<Item = (String, u64, f32)>,
+{
+    let cores = cpu_count.max(1) as f64;
+    let mut groups: std::collections::HashMap<String, ProcessMemory> = std::collections::HashMap::new();
+    for (raw_name, bytes, cpu) in entries {
+        let trimmed = raw_name.trim();
+        let display = trimmed
+            .strip_suffix(".exe")
+            .or_else(|| trimmed.strip_suffix(".EXE"))
+            .unwrap_or(trimmed)
+            .to_string();
+        if is_system_pseudo_process(&display) {
+            continue;
+        }
+        let entry = groups.entry(display.to_ascii_lowercase()).or_insert_with(|| ProcessMemory {
+            name: display.clone(),
+            memory_mb: 0.0,
+            cpu_percent: 0.0,
+            process_count: 0,
+        });
+        entry.memory_mb += bytes as f64 / (1024.0 * 1024.0);
+        entry.cpu_percent += f64::from(cpu.max(0.0)) / cores;
+        entry.process_count += 1;
+    }
+    let mut list: Vec<ProcessMemory> = groups.into_values().collect();
+    list.sort_by(|a, b| b.memory_mb.partial_cmp(&a.memory_mb).unwrap_or(std::cmp::Ordering::Equal));
+    list.truncate(limit);
+    for item in &mut list {
+        item.memory_mb = (item.memory_mb * 10.0).round() / 10.0;
+        item.cpu_percent = (item.cpu_percent.min(100.0) * 10.0).round() / 10.0;
+    }
+    list
+}
+
+fn top_processes_from_system(system: &System) -> Vec<ProcessMemory> {
+    top_processes_by_memory(
+        system.processes().values().map(|process| {
+            (
+                process.name().to_string_lossy().to_string(),
+                process.memory(),
+                process.cpu_usage(),
+            )
+        }),
+        system.cpus().len(),
+        TOP_PROCESSES_LIMIT,
+    )
 }
 
 fn running_process_names(system: &System) -> Vec<String> {
@@ -3095,3 +3179,42 @@ mod tests {
         assert_eq!(nvml_milliwatts_to_watts(0), Some(0.0));
     }
 }
+
+#[cfg(test)]
+mod top_processes_tests {
+    use super::*;
+
+    const MB: u64 = 1024 * 1024;
+
+    #[test]
+    fn groups_processes_with_the_same_name() {
+        let top = top_processes_by_memory(
+            vec![
+                ("chrome.exe".to_string(), 4000 * MB, 10.0),
+                ("chrome.exe".to_string(), 5600 * MB, 30.0),
+                ("Discord.exe".to_string(), 900 * MB, 4.0),
+            ],
+            4,
+            5,
+        );
+        assert_eq!(top.len(), 2);
+        assert_eq!(top[0].name, "chrome");
+        assert_eq!(top[0].memory_mb, 9600.0);
+        assert_eq!(top[0].process_count, 2);
+        // 40% de um núcleo somados, em 4 núcleos = 10% do processador.
+        assert_eq!(top[0].cpu_percent, 10.0);
+        assert_eq!(top[1].name, "Discord");
+    }
+
+    #[test]
+    fn keeps_only_the_largest_and_skips_system_pseudo_processes() {
+        let mut entries: Vec<(String, u64, f32)> = (0..8).map(|i| (format!("app{i}.exe"), (i as u64 + 1) * 100 * MB, 0.0)).collect();
+        entries.push(("Memory Compression".to_string(), 9000 * MB, 0.0));
+        entries.push(("System Idle Process".to_string(), 0, 800.0));
+        let top = top_processes_by_memory(entries, 8, TOP_PROCESSES_LIMIT);
+        assert_eq!(top.len(), TOP_PROCESSES_LIMIT);
+        assert_eq!(top[0].name, "app7");
+        assert!(top.iter().all(|item| item.name != "Memory Compression"));
+    }
+}
+

@@ -6,6 +6,7 @@ import type { dashboard as pt } from "../pt/dashboard";
 export const dashboard: Mirror<typeof pt> = {
   dashboard: {
     d3: {
+      memoryDetailTop: "{{name}} is using {{size}}. That makes games and apps slower.",
       factorMeasured: "measured {{value}}, limit {{limit}}",
       factorTotal: "Health now (100 minus the points above)",
       factors: {

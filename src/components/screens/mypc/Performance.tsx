@@ -23,6 +23,7 @@ import {
 } from "@/features/telemetry/telemetryHistory";
 import { temperatureSourceLabel } from "@/lib/telemetry-labels";
 import {
+  displayProcessName,
   formatDuration,
   formatGhz,
   formatGigabytes,
@@ -651,6 +652,8 @@ function SystemPanel({
 }) {
   const { t } = useI18n();
   const extras = (sample ?? {}) as SnapshotExtras;
+  // L1: mesma leitura do Dashboard ("O Chrome usa 9,6 GB").
+  const topProcesses = useLiveTelemetry()?.top_processes ?? [];
 
   const contextKey = (() => {
     const active = extras.active_profile;
@@ -717,6 +720,22 @@ function SystemPanel({
         </div>
       ) : (
         <EmptyState variant="inline" title={t("mypc.performance.noSample")} />
+      )}
+      {topProcesses.length > 0 && (
+        <div className="mt-4">
+          <div className="label-mono">{t("mypc.performance.system.heaviest")}</div>
+          <ul className="mt-2 flex flex-col gap-1.5 text-sm">
+            {topProcesses.map((item, index) => (
+              <li key={item.name} className="flex items-baseline gap-3">
+                <span className="min-w-0 flex-1 truncate text-fg">{displayProcessName(item.name)}</span>
+                <span className={index === 0 && item.memory_mb >= 4096 ? "num text-warn" : "num text-fg-2"}>
+                  {formatMegabytes(item.memory_mb)}
+                </span>
+                <span className="num w-12 text-right text-fg-3">{formatPercent(item.cpu_percent)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       <p className="mt-auto pt-6 text-xs leading-relaxed text-fg-4">{t("mypc.performance.system.privacy")}</p>
     </Card>

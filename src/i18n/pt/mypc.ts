@@ -428,6 +428,7 @@ export const mypc = {
         notReady: "Entre na sua conta para mudar o ritmo das leituras.",
       },
       system: {
+        heaviest: "Mais pesados agora",
         title: "Sistema",
         processes: "Processos",
         uptime: "Ligado há",

@@ -3,6 +3,7 @@
 export const dashboard = {
   dashboard: {
     d3: {
+      memoryDetailTop: "O {{name}} usa {{size}}. Com isso, jogos e programas ficam mais lentos.",
       factorMeasured: "medido {{value}}, limite {{limit}}",
       factorTotal: "Saúde agora (100 menos os pontos acima)",
       factors: {

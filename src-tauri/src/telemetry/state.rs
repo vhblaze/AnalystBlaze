@@ -113,6 +113,9 @@ pub struct TelemetryDashboardSnapshot {
     /// has two samples to compute rates from.
     pub disk_activity: serde_json::Value,
     pub active_processes: usize,
+    /// L1: os programas que mais usam memória agora (só local, nunca enviado).
+    #[serde(default)]
+    pub top_processes: Vec<super::collector::ProcessMemory>,
     pub system_uptime_seconds: u64,
     pub active_window: Option<String>,
     pub idle_seconds: u64,
@@ -189,6 +192,7 @@ impl TelemetryDashboardSnapshot {
             disk_usage_percent: sample.disk_usage_percent,
             disk_activity: serde_json::to_value(&sample.disk_activity).unwrap_or(serde_json::Value::Null),
             active_processes: sample.active_processes,
+            top_processes: sample.top_processes.clone(),
             system_uptime_seconds: sample.system_uptime_seconds,
             active_window: sample.active_window.clone(),
             idle_seconds: sample.idle_seconds,

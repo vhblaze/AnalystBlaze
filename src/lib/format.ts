@@ -185,3 +185,9 @@ export function shortGpuName(raw: string | null | undefined, empty = MISSING) {
     .replace(/\s{2,}/g, " ")
     .trim() || raw.trim();
 }
+
+/** Nome de programa vindo do executável ("chrome" -> "Chrome"); o resto fica como veio. */
+export function displayProcessName(name: string): string {
+  const trimmed = name.trim();
+  return trimmed ? trimmed.charAt(0).toLocaleUpperCase(currentLocale) + trimmed.slice(1) : trimmed;
+}
