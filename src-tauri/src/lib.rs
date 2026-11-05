@@ -2107,6 +2107,40 @@ fn logout(app: AppHandle, state: State<'_, AgentState>) -> Result<AgentStatus, S
     status(&state)
 }
 
+/// Configurações › Conta e PCs: os PCs da conta, como o servidor lista.
+#[tauri::command]
+async fn list_account_devices(state: State<'_, AgentState>) -> Result<Vec<api::AccountDevice>, String> {
+    let credentials = state.store.load()?;
+    let Some(access_token) = credentials.access_token else {
+        return Err("Entre na sua conta para ver os PCs.".to_string());
+    };
+    state.api.account_devices(&access_token).await
+}
+
+/// Tira um PC da conta. Se for este mesmo PC, a sessão local é apagada
+/// (o servidor já encerrou a sessão dele com "device_removed").
+#[tauri::command]
+async fn remove_account_device(
+    hw_id: String,
+    app: AppHandle,
+    state: State<'_, AgentState>,
+) -> Result<AgentStatus, String> {
+    let credentials = state.store.load()?;
+    let Some(access_token) = credentials.access_token.clone() else {
+        return Err("Entre na sua conta para remover um PC.".to_string());
+    };
+    state.api.remove_device(&access_token, &hw_id).await?;
+    let is_this_pc = credentials.hw_id.map(|id| id.to_string()) == Some(hw_id.clone());
+    if is_this_pc {
+        state.store.clear()?;
+        if let Ok(mut telemetry_state) = state.telemetry_state.try_write() {
+            *telemetry_state = None;
+        }
+        show_main_window(&app);
+    }
+    status(&state)
+}
+
 #[tauri::command]
 fn forget_device(app: AppHandle, state: State<'_, AgentState>) -> Result<AgentStatus, String> {
     // Full wipe including device identity. For uninstall or an explicit
@@ -2420,6 +2454,8 @@ pub fn run() {
             set_telemetry_mode,
             logout,
             forget_device,
+            list_account_devices,
+            remove_account_device,
             confirm_device_transfer,
             cancel_device_transfer,
             replace_device,

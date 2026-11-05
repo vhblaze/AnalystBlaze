@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { ExternalLink, LogOut, RefreshCw } from "lucide-react";
+import { ExternalLink, LogOut, Monitor, RefreshCw, Trash2 } from "lucide-react";
+import { ConfirmInline } from "@/components/ui/confirm-inline";
+import { removeDevice, useAccountDevices } from "@/features/account/useDevices";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -163,7 +165,7 @@ function AppearanceCard({ track }: { track: Track }) {
     <Card label={t("settingsD3.appearance.label")}>
       <SummaryRow
         title={t("settingsD3.appearance.theme")}
-        summary={t("settingsD3.appearance.themeHint")}
+        summary={theme === "system" ? t("settingsD3.appearance.themeSystemHint") : t("settingsD3.appearance.themeHint")}
         action={
           <Segmented<Theme>
             aria-label={t("settingsD3.appearance.theme")}
@@ -175,6 +177,7 @@ function AppearanceCard({ track }: { track: Track }) {
             options={[
               { value: "dark", label: t("settingsD3.appearance.dark") },
               { value: "light", label: t("settingsD3.appearance.light") },
+              { value: "system", label: t("settingsD3.appearance.system") },
             ]}
           />
         }
@@ -283,6 +286,22 @@ function PrivacyCard({
   const queue = useUiTelemetryQueue();
   const queueSize = queue.size;
   const didMount = useRef(false);
+  // Opt-out da leitura detalhada (doc 12 §2): a mesma política do agente
+  // que Controles › Automações grava; desligado, o agente manda só o resumo.
+  const { policy } = useAutomationPolicy();
+  const [savingDetailed, setSavingDetailed] = useState(false);
+  const setDetailed = async (enabled: boolean) => {
+    if (!policy) return;
+    setSavingDetailed(true);
+    try {
+      await saveAutomationPolicy({ ...policy, telemetry_diagnostics_enabled: enabled });
+      track("detailed_telemetry_preference_changed", { enabled });
+    } catch (error) {
+      toast({ title: t("settingsD3.updates.saveFailed"), description: errorText(error), variant: "destructive" });
+    } finally {
+      setSavingDetailed(false);
+    }
+  };
 
   useEffect(() => {
     setTelemetryEnabled(uiTelemetry);
@@ -317,7 +336,14 @@ function PrivacyCard({
       <SummaryRow
         title={t("settingsD3.privacy.detailed")}
         summary={t("settingsD3.privacy.detailedHint")}
-        state={<StatusPill>{t("settingsD3.privacy.alwaysOn")}</StatusPill>}
+        action={
+          <Switch
+            aria-label={t("settingsD3.privacy.detailed")}
+            checked={policy?.telemetry_diagnostics_enabled ?? true}
+            disabled={!policy || savingDetailed}
+            onCheckedChange={(next) => void setDetailed(next)}
+          />
+        }
       />
       <SummaryRow
         title={t("settingsD3.privacy.uiUsage")}
@@ -359,9 +385,6 @@ function planLabel(plan: string) {
   return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
 }
 
-function shortSession(id: string) {
-  return id.length > 12 ? `${id.slice(0, 8)}...${id.slice(-4)}` : id;
-}
 
 function AccountCard({
   user,
@@ -406,14 +429,7 @@ function AccountCard({
     <Card label={t("settingsD3.account.label")}>
       <SummaryRow
         title={user.email || user.name}
-        summary={
-          <>
-            {user.email ? user.name : t("settingsD3.account.noEmail")}
-            <span className="num ml-2 text-xs text-fg-4">
-              {t("settingsD3.account.session", { id: shortSession(user.sessionId) })}
-            </span>
-          </>
-        }
+        summary={user.email ? user.name : t("settingsD3.account.noEmail")}
         state={
           <StatusPill tone={isReady ? "ok" : "muted"}>
             {isReady ? t("settingsD3.account.online") : t("settingsD3.account.pending")}
@@ -444,6 +460,7 @@ function AccountCard({
           </Button>
         }
       />
+      <DeviceList currentHwId={status?.hw_id ?? null} enabled={isReady} onLogout={onLogout} />
       <div className="flex flex-wrap items-center gap-2 pt-3.5">
         <Button size="sm" variant="outline" onClick={() => void onOpenAccountSettings().catch(() => undefined)}>
           <ExternalLink aria-hidden />
@@ -649,6 +666,85 @@ function UpdateCheckPopup({
           </>
         )}
       </section>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* PCs da conta                                                        */
+/* ------------------------------------------------------------------ */
+
+function DeviceList({ currentHwId, enabled, onLogout }: { currentHwId: string | null; enabled: boolean; onLogout: () => Promise<void> }) {
+  const { t } = useI18n();
+  const { devices, loading, error } = useAccountDevices({ auto: enabled });
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const remove = async (id: string) => {
+    setConfirming(null);
+    setBusy(id);
+    try {
+      await removeDevice(id);
+      toast({ title: t("settingsD3.devices.removed") });
+      if (id === currentHwId) await onLogout().catch(() => undefined);
+    } catch (err) {
+      toast({ title: t("settingsD3.devices.removeFailed"), description: errorText(err), variant: "destructive" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const lastSeen = (device: { last_ping?: string | null; registered_at?: string | null }) => {
+    const iso = device.last_ping ?? device.registered_at;
+    const seconds = iso ? Math.floor(Date.parse(iso) / 1000) : null;
+    return seconds && Number.isFinite(seconds) ? t("settingsD3.devices.lastSeen", { time: formatAgo(seconds) }) : null;
+  };
+
+  if (!enabled) return null;
+  return (
+    <div className="border-t border-line-soft pt-3.5">
+      <div className="label-mono">{t("settingsD3.devices.label")}</div>
+      {devices.length === 0 ? (
+        <p className="mt-2 text-[13px] text-fg-3">{loading ? t("settingsD3.devices.loading") : error ?? t("settingsD3.devices.empty")}</p>
+      ) : (
+        <ul className="mt-2 flex flex-col">
+          {devices.map((device) => {
+            const isThis = device.id === currentHwId;
+            const name = device.name?.trim() || device.machine_type?.trim() || t("settingsD3.devices.unnamed");
+            return (
+              <li key={device.id} className="flex flex-col gap-2 border-b border-line-soft py-2.5 last:border-b-0">
+                <div className="flex items-center gap-3">
+                  <Monitor className="h-4 w-4 shrink-0 text-fg-3" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2 text-[15px] font-medium text-fg">
+                      <span className="truncate">{name}</span>
+                      {isThis && <StatusPill tone="ok">{t("settingsD3.devices.thisPc")}</StatusPill>}
+                      {!isThis && device.is_active && <StatusPill>{t("settingsD3.devices.active")}</StatusPill>}
+                    </div>
+                    <div className="truncate text-xs text-fg-3">
+                      {[device.os_version, lastSeen(device)].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                  <Button size="sm" variant="outline" disabled={busy !== null} onClick={() => setConfirming(device.id)}>
+                    <Trash2 aria-hidden />
+                    {t("settingsD3.devices.remove")}
+                  </Button>
+                </div>
+                {confirming === device.id && (
+                  <ConfirmInline
+                    danger
+                    busy={busy === device.id}
+                    message={isThis ? t("settingsD3.devices.confirmThis") : t("settingsD3.devices.confirmOther", { name })}
+                    confirmLabel={t("settingsD3.devices.remove")}
+                    onConfirm={() => void remove(device.id)}
+                    onCancel={() => setConfirming(null)}
+                  />
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
     </div>
   );
 }
