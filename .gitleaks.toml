@@ -1,0 +1,8 @@
+title = "AnalystBlaze"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Chaves do localStorage do app (analystblaze.<tela>.<nome>.vN): nomes fixos, sem valor secreto."
+regexes = ['''analystblaze\.[a-zA-Z0-9_.-]+''']

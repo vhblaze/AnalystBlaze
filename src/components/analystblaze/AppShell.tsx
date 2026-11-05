@@ -17,6 +17,7 @@ import { CommandPalette, useCommandItems } from "@/components/shell/CommandPalet
 import { Notifications, useNotificationItems } from "@/components/shell/Notifications";
 import { ScreenOutlet } from "@/components/shell/ScreenOutlet";
 import { useAgentPrompts } from "@/components/shell/useAgentPrompts";
+import { useAppNotifications } from "@/features/notifications/useAppNotifications";
 import { useConfirmation } from "@/components/shell/useConfirmation";
 import { ConfirmationDialog } from "@/components/shell/dialogs/ConfirmationDialog";
 import { DeviceLimitDialog } from "@/components/shell/dialogs/DeviceLimitDialog";
@@ -53,7 +54,7 @@ export function AppShell() {
   const auth = useAuth();
   const telemetry = useAgentTelemetry();
   const updater = useUpdater();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const track = useTelemetry("navigation");
   const { confirmRequest, requestConfirmation, closeConfirmation, runConfirmed } = useConfirmation();
   const prompts = useAgentPrompts({ auth, updater, requestConfirmation });
@@ -67,6 +68,13 @@ export function AppShell() {
   );
 
   const commandItems = useCommandItems({ auth, navigate, runConfirmed });
+  // Avisos do Windows e o ponto de novidade em Insights (features/notifications).
+  const appNotifications = useAppNotifications({
+    enabled: Boolean(auth.status?.authenticated && auth.status.registered),
+    locale,
+    t,
+    onInsightsScreen: current.screen === "insights",
+  });
   const notificationItems = useNotificationItems({
     remoteConfirmationQueue: prompts.remoteConfirmationQueue,
     user: auth.user,
@@ -102,6 +110,7 @@ export function AppShell() {
         busy={auth.busy}
         onLogin={auth.login}
         onLogout={auth.logout}
+        badges={{ insights: appNotifications.unseenInsights }}
       />
 
       <main className="relative z-10 flex flex-1 flex-col overflow-hidden">

@@ -66,6 +66,7 @@ export function Sidebar({
   busy,
   onLogin,
   onLogout,
+  badges = {},
 }: {
   current: Route;
   onNavigate: (next: Route) => void;
@@ -74,6 +75,8 @@ export function Sidebar({
   busy: boolean;
   onLogin: () => Promise<void>;
   onLogout: () => Promise<void>;
+  /** Contagem de novidades por tela (doc 14 U7): hoje só Insights. */
+  badges?: Partial<Record<ScreenKey, number>>;
 }) {
   const { t } = useI18n();
   const track = useTelemetry("sidebar");
@@ -123,6 +126,14 @@ export function Sidebar({
               {active && <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] rounded-l-control bg-accent" />}
               <Icon className={cn("h-4 w-4 shrink-0", active ? "text-accent" : "text-fg-3")} />
               <span className="flex-1 text-left">{t(labelKey)}</span>
+              {(badges[key] ?? 0) > 0 && (
+                <span
+                  role="img"
+                  aria-label={t("sidebar.newItems", { count: badges[key] ?? 0 })}
+                  title={t("sidebar.newItems", { count: badges[key] ?? 0 })}
+                  className="h-2 w-2 shrink-0 rounded-pill bg-warn"
+                />
+              )}
             </button>
           );
         })}

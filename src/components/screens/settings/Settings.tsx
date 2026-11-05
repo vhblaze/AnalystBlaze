@@ -20,6 +20,7 @@ import type { AgentStatus, LocalAiPolicy, UpdateStatus } from "@/services/tauri/
 import { isTelemetryEnabled, setTelemetryEnabled } from "@/services/telemetry";
 import { useUiTelemetryQueue } from "@/features/telemetry/useUiTelemetryQueue";
 import { useHelper } from "@/features/helper/useHelper";
+import { ensureNotificationPermission } from "@/features/notifications/useAppNotifications";
 import {
   automationPolicy,
   saveAutomationPolicy,
@@ -236,6 +237,36 @@ function readNotificationPermission(): PermissionState {
 function NotificationsCard({ onOpenHistory }: { onOpenHistory?: () => void }) {
   const { t } = useI18n();
   const [permission, setPermission] = useState<PermissionState>(readNotificationPermission);
+  const { policy } = useAutomationPolicy();
+  const [saving, setSaving] = useState(false);
+  const blocked = permission === "denied" || permission === "unsupported";
+  const setFlag = async (patch: Partial<LocalAiPolicy>) => {
+    if (!policy) return;
+    setSaving(true);
+    try {
+      if (Object.values(patch).some(Boolean)) setPermission(await ensureNotificationPermission());
+      await saveAutomationPolicy({ ...policy, ...patch });
+    } catch (error) {
+      toast({ title: t("settingsD3.updates.saveFailed"), description: errorText(error), variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
+  };
+  const flagRow = (key: "notify_on_improvement" | "notify_on_new_insight" | "notify_daily_summary", titleKey: string, hintKey: string) => (
+    <SummaryRow
+      title={t(titleKey)}
+      summary={t(hintKey)}
+      action={
+        <Switch
+          aria-label={t(titleKey)}
+          disabled={!policy || saving || blocked}
+          title={blocked ? t(`settingsD3.notifications.permission.${permission}`) : undefined}
+          checked={Boolean(policy?.[key]) && !blocked}
+          onCheckedChange={(next) => void setFlag({ [key]: next })}
+        />
+      }
+    />
+  );
 
   // A permissão muda fora do app (o Windows pergunta na primeira vez).
   useEffect(() => {
@@ -254,6 +285,9 @@ function NotificationsCard({ onOpenHistory }: { onOpenHistory?: () => void }) {
           </StatusPill>
         }
       />
+      {flagRow("notify_on_improvement", "settingsD3.notifications.improve", "settingsD3.notifications.improveHint")}
+      {flagRow("notify_on_new_insight", "settingsD3.notifications.newInsight", "settingsD3.notifications.newInsightHint")}
+      {flagRow("notify_daily_summary", "settingsD3.notifications.daily", "settingsD3.notifications.dailyHint")}
       <SummaryRow title={t("settingsD3.notifications.bell")} summary={t("settingsD3.notifications.bellHint")} />
       <div className="mt-3 flex flex-wrap items-center justify-between gap-x-4 gap-y-1">
         <p className="text-xs leading-relaxed text-fg-3">{t("settingsD3.notifications.rule")}</p>

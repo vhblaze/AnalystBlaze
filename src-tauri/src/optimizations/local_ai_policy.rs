@@ -70,6 +70,11 @@ pub struct LocalAiPolicy {
     /// (ver updater::wait_for_quiet_and_install). O app reinicia ao
     /// instalar; por isso o padrão é desligado.
     pub auto_install_updates: bool,
+    /// Avisos do Windows (Configurações › Notificações). O app só avisa
+    /// com a permissão do Windows dada; nunca abre janela.
+    pub notify_on_improvement: bool,
+    pub notify_on_new_insight: bool,
+    pub notify_daily_summary: bool,
     /// Whether the main window starts hidden in the tray instead of visible.
     /// Overridden regardless of this setting whenever there's something the
     /// user needs to see right away - logged out, or an update available
@@ -127,6 +132,9 @@ impl Default for LocalAiPolicy {
             autostart_enabled: true,
             start_minimized: true,
             auto_install_updates: false,
+            notify_on_improvement: true,
+            notify_on_new_insight: true,
+            notify_daily_summary: false,
             telemetry_diagnostics_enabled: true,
         }
     }
@@ -196,6 +204,9 @@ pub fn save_local_ai_policy(policy: LocalAiPolicy) -> Result<LocalAiPolicy, Stri
             "autostart_enabled": policy.autostart_enabled,
             "start_minimized": policy.start_minimized,
             "auto_install_updates": policy.auto_install_updates,
+            "notify_on_improvement": policy.notify_on_improvement,
+            "notify_on_new_insight": policy.notify_on_new_insight,
+            "notify_daily_summary": policy.notify_daily_summary,
             "telemetry_diagnostics_enabled": policy.telemetry_diagnostics_enabled,
         }),
     );
