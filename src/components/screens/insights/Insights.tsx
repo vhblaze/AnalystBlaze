@@ -13,7 +13,7 @@ import {
   type DiskOptimizationInsight,
   type NetworkDiagnostics,
 } from "@/services/tauri/agent";
-import { formatBytes } from "@/lib/format";
+import { formatBytes, formatDateTime } from "@/lib/format";
 import { networkDiagnostics as networkDiagnosticsResource, useNetwork } from "@/features/network/useNetwork";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -98,24 +98,6 @@ const HONEST_OUTCOME_ACTIONS = new Set([
  * completely unrelated one-off causes, so this is a prompt to check, not a
  * diagnosis. */
 const EVENT_LOG_CRITICAL_THRESHOLD = 10;
-// Human labels for the Win32_PnPEntity ConfigManagerErrorCode values the
-// backend already filters to (see telemetry::advanced::PROBLEM_DEVICE_CODES) -
-// matches the Device Manager wording users may already be familiar with.
-const PROBLEM_CODE_LABELS: Record<number, string> = {
-  10: "Código 10 - o dispositivo não consegue iniciar",
-  12: "Código 12 - recursos de hardware insuficientes",
-  14: "Código 14 - precisa reiniciar o Windows para funcionar",
-  18: "Código 18 - drivers precisam ser reinstalados",
-  19: "Código 19 - configuração do Registro corrompida",
-  28: "Código 28 - drivers não instalados",
-  31: "Código 31 - o Windows não conseguiu iniciar o dispositivo",
-  37: "Código 37 - o driver retornou um erro",
-  38: "Código 38 - uma instancia anterior do driver ainda está carregada",
-  39: "Código 39 - driver corrompido ou ausente",
-  40: "Código 40 - entrada do Registro do driver corrompida",
-  43: "Código 43 - o Windows parou o dispositivo por um problema reportado",
-  48: "Código 48 - driver bloqueado por incompatibilidade",
-};
 
 /** Mirrors telemetry::modem_link::ModemUsbLinkIssue on the Rust side. */
 type ModemUsbLinkIssue = {
@@ -331,11 +313,11 @@ export function Insights({
       const result = await onApplyInsightActionLocally(actionName, actionContext);
       track("insight_action_applied_locally", { actionName });
       if (actionName === "START_SYSTEM_FILE_CHECK") {
-        setActionMessage("Verificação iniciada em segundo plano. Acompanhe o progresso em Meu PC › Saúde do Windows.");
+        setActionMessage(t("insightsLocal.action.sfcStarted"));
         dismissInsight(insight);
       } else if (HONEST_OUTCOME_ACTIONS.has(actionName)) {
         const outcome = result as { success?: boolean; message?: string } | null;
-        setActionMessage(outcome?.message ?? "Falha ao aplicar a ação.");
+        setActionMessage(outcome?.message ?? t("insightsLocal.action.applyFailed"));
         if (outcome?.success) {
           if (actionName === "THROTTLE_DEFENDER_SCANS" || actionName === "RESTORE_DEFENDER_SCAN_SETTINGS") {
             const throttledAt = actionName === "THROTTLE_DEFENDER_SCANS" ? Date.now() : null;
@@ -353,7 +335,7 @@ export function Insights({
         dismissInsight(insight);
       }
     } catch (e: any) {
-      setActionMessage(e?.message ?? "Falha ao aplicar a ação.");
+      setActionMessage(e?.message ?? t("insightsLocal.action.applyFailed"));
     } finally {
       setActionBusyKey(null);
     }
@@ -388,12 +370,12 @@ export function Insights({
     try {
       await onRequestAgentApplyInsight(insight.actionName, insight.title, insight.explanation);
       track("insight_action_requested_from_agent", { actionName: insight.actionName });
-      setActionMessage("Pedido enviado. O agente aplica na próxima sincronização (pode pedir confirmação local).");
+      setActionMessage(t("insightsLocal.action.requestSent"));
       dismissInsight(insight);
     } catch (e: any) {
       setActionMessage(e?.message === "INSIGHT_ACTION_REQUIRES_PRO"
-        ? "Deixar o agente aplicar sozinho e um recurso dos planos pagos. Você ainda pode fazer isso manualmente."
-        : e?.message ?? "Falha ao pedir a ação ao agente.");
+        ? t("insightsLocal.action.requiresPro")
+        : e?.message ?? t("insightsLocal.action.requestFailed"));
     } finally {
       setActionBusyKey(null);
     }
@@ -406,19 +388,19 @@ export function Insights({
     }
     if (!onOpenDiskUsage) return null;
     return {
-      title: "Disco quase cheio",
-      explanation: `Seu disco está com ${Math.round(percent)}% de uso. Veja o detalhamento por jogos, apps, videos, downloads e arquivos grandes para decidir o que liberar.`,
-      impact: `${Math.round(percent)}% usado`,
+      title: t("insightsLocal.diskUsage.title"),
+      explanation: t("insightsLocal.diskUsage.explanation", { percent: Math.round(percent) }),
+      impact: t("insightsLocal.diskUsage.impact", { percent: Math.round(percent) }),
       category: "limpeza",
       action: {
-        label: "Ver detalhes",
+        label: t("insightsLocal.diskUsage.action"),
         onClick: () => {
           track("disk_usage_insight_opened", { percent: Math.round(percent) });
           onOpenDiskUsage();
         },
       },
     };
-  }, [telemetry?.disk_usage_percent, onOpenDiskUsage, track]);
+  }, [telemetry?.disk_usage_percent, onOpenDiskUsage, track, t]);
 
   const vpnLatencyInsight = useMemo<Insight | null>(() => {
     const diagnostics = networkDiagnostics;
@@ -441,31 +423,31 @@ export function Insights({
     if (confidence < INSIGHT_CONFIDENCE_THRESHOLD) return null;
 
     const metricLabel: Record<(typeof NETWORK_LAG_FLAGS)[number], string> = {
-      packet_loss_detected: `perda de pacotes de ${(diagnostics.packet_loss_percent ?? 0).toFixed(1)}% (limite: 2%)`,
-      jitter_high: `jitter de ${Math.round(diagnostics.jitter_ms ?? 0)}ms (limite: 20ms)`,
-      latency_high: `latência de ${Math.round(diagnostics.external_latency_ms ?? 0)}ms (limite: ${LATENCY_THRESHOLD_MS}ms)`,
+      packet_loss_detected: t("insightsLocal.vpn.packetLoss", { value: (diagnostics.packet_loss_percent ?? 0).toFixed(1) }),
+      jitter_high: t("insightsLocal.vpn.jitter", { value: Math.round(diagnostics.jitter_ms ?? 0) }),
+      latency_high: t("insightsLocal.vpn.latency", { value: Math.round(diagnostics.external_latency_ms ?? 0), limit: LATENCY_THRESHOLD_MS }),
     };
     const metricsText = activeLagFlags.map((flag) => metricLabel[flag]).join(", ");
-    const adapterLabel = diagnostics.adapter_name || diagnostics.adapter_description || "adaptador de VPN/virtual";
+    const adapterLabel = diagnostics.adapter_name || diagnostics.adapter_description || t("insightsLocal.vpn.adapterFallback");
 
     return {
-      title: "VPN pode estar afetando sua conexão",
-      explanation: `Detectamos ${metricsText}, com uma VPN ou adaptador virtual ativo (${adapterLabel}). A VPN e uma causa provavel, mas não confirmada - desative-a temporariamente para comparar a conexão antes de decidir.`,
-      impact: activeLagFlags.length > 1 ? "Vários sinais de instabilidade" : "Instabilidade detectada",
+      title: t("insightsLocal.vpn.title"),
+      explanation: t("insightsLocal.vpn.explanation", { metrics: metricsText, adapter: adapterLabel }),
+      impact: activeLagFlags.length > 1 ? t("insightsLocal.vpn.impactMany") : t("insightsLocal.vpn.impactOne"),
       category: "rede",
       risk: "baixo",
       reversible: true,
       confidence,
       reason: metricsText,
       action: {
-        label: "Ver detalhes em Rede",
+        label: t("insightsLocal.vpn.action"),
         onClick: () => {
           track("vpn_latency_insight_opened", { confidence: Math.round(confidence * 100), flags: activeLagFlags.join(",") });
           onOpenNetwork();
         },
       },
     };
-  }, [networkDiagnostics, onOpenNetwork, track]);
+  }, [networkDiagnostics, onOpenNetwork, track, t]);
 
   // Explains the exact "AnalystBlaze says estável, but my game shows 500ms"
   // contradiction: external_latency_ms/jitter_ms above are always measured
@@ -491,24 +473,22 @@ export function Insights({
     }
 
     const confidence = server.best_guess ? 0.55 : 0.7;
-    const processLabel = server.process_name || "o jogo";
+    const processLabel = server.process_name || t("insightsLocal.gameServer.theGame");
     const serverMs = Math.round(server.latency_ms);
     const baselineMs = Math.round(baseline);
-    const certainty = server.best_guess
-      ? "provavelmente o servidor do jogo, ou algo perto dele na rede da empresa"
-      : "o servidor que o jogo está usando agora";
+    const certainty = server.best_guess ? t("insightsLocal.gameServer.certaintyGuess") : t("insightsLocal.gameServer.certaintySure");
 
     return {
-      title: "Sua internet está bem - o servidor do jogo que está longe ou sobrecarregado",
-      explanation: `Sua conexão geral está saudavel: ${baselineMs}ms até a internet, sem perda de pacote nem instabilidade. Mas ${processLabel} está com ${serverMs}ms até ${certainty} (${server.remote_ip}) - bem mais que o normal. Isso normalmente significa que o servidor daquela partida está fisicamente longe, sobrecarregado, ou a rota específica até ele está ruim - nada disso e algo que o AnalystBlaze ou ajustes na sua rede conseguem corrigir, porque o problema começa do lado de fora da sua conexão.`,
-      impact: `+${Math.round(gap)}ms só nesse servidor`,
+      title: t("insightsLocal.gameServer.title"),
+      explanation: t("insightsLocal.gameServer.explanation", { baseline: baselineMs, process: processLabel, server: serverMs, certainty, ip: server.remote_ip }),
+      impact: t("insightsLocal.gameServer.impact", { gap: Math.round(gap) }),
       category: "rede",
       risk: "baixo",
       reversible: true,
       confidence,
-      reason: `${serverMs}ms para ${server.remote_ip}:${server.remote_port} vs ${baselineMs}ms para a internet em geral`,
+      reason: t("insightsLocal.gameServer.reason", { server: serverMs, ip: server.remote_ip, port: server.remote_port, baseline: baselineMs }),
       action: {
-        label: "Diagnosticar causa",
+        label: t("insightsLocal.gameServer.action"),
         onClick: () => {
           track("game_server_latency_insight_opened", {
             confidence: Math.round(confidence * 100),
@@ -519,7 +499,7 @@ export function Insights({
         },
       },
     };
-  }, [networkDiagnostics, onOpenNetwork, track]);
+  }, [networkDiagnostics, onOpenNetwork, track, t]);
 
   const diskNearFullInsight = useMemo<Insight | null>(() => {
     const info = diskNearFullInfo;
@@ -533,26 +513,26 @@ export function Insights({
 
     const offendersText = info.topOffenders.length > 0
       ? info.topOffenders.map((item) => `${item.label} (${formatBytes(item.sizeBytes)})`).join(", ")
-      : "não foi possível identificar os maiores itens agora";
+      : t("insightsLocal.diskNearFull.noOffenders");
 
     return {
-      title: `Disco ${info.label || info.mountPoint} quase cheio`,
-      explanation: `${info.mountPoint} está com ${Math.round(info.usedPercent)}% de uso. Maiores itens encontrados: ${offendersText}. Abra o Explorador de Disco para revisar e limpar com segurança (itens vao para quarentena reversível quando aplicavel).`,
-      impact: `${Math.round(info.usedPercent)}% usado`,
+      title: t("insightsLocal.diskNearFull.title", { label: info.label || info.mountPoint }),
+      explanation: t("insightsLocal.diskNearFull.explanation", { mount: info.mountPoint, percent: Math.round(info.usedPercent), offenders: offendersText }),
+      impact: t("insightsLocal.diskNearFull.impact", { percent: Math.round(info.usedPercent) }),
       category: "limpeza",
       risk: "medio",
       reversible: true,
       confidence,
-      reason: `Uso medido diretamente no volume ${info.mountPoint}: ${Math.round(info.usedPercent)}% (limite: ${DISK_NEAR_FULL_BASE_PERCENT}%).`,
+      reason: t("insightsLocal.diskNearFull.reason", { mount: info.mountPoint, percent: Math.round(info.usedPercent), limit: DISK_NEAR_FULL_BASE_PERCENT }),
       action: {
-        label: "Ver detalhes",
+        label: t("insightsLocal.diskNearFull.action"),
         onClick: () => {
           track("disk_near_full_insight_opened", { mountPoint: info.mountPoint, usedPercent: Math.round(info.usedPercent) });
           onOpenDiskUsage();
         },
       },
     };
-  }, [diskNearFullInfo, onOpenDiskUsage, track]);
+  }, [diskNearFullInfo, onOpenDiskUsage, track, t]);
 
   const scheduledDefragInsight = useMemo<Insight | null>(() => {
     const data = diskOptimizationInsightData;
@@ -562,18 +542,17 @@ export function Insights({
     if (!data?.isHdd || data.defrag?.enabled !== false) return null;
 
     return {
-      title: "Otimização automática de disco está desativada",
-      explanation:
-        "Seu disco principal é um HD (mecânico) e a desfragmentação agendada do Windows está desativada - isso e o que mantém a leitura de arquivos rápida com o tempo. Quer que eu reative?",
-      impact: "HD sem otimização agendada",
+      title: t("insightsLocal.defrag.title"),
+      explanation: t("insightsLocal.defrag.explanation"),
+      impact: t("insightsLocal.defrag.impact"),
       category: "limpeza",
       risk: "baixo",
       reversible: true,
       confidence: 0.9,
-      reason: "Tarefa nativa \"Otimizar Unidades\" do Windows (ScheduledDefrag) está desativada.",
+      reason: t("insightsLocal.defrag.reason"),
       actionName: "ENABLE_SCHEDULED_DEFRAG",
     };
-  }, [diskOptimizationInsightData]);
+  }, [diskOptimizationInsightData, t]);
 
 
   const modemUsbLinkIssue = useMemo<ModemUsbLinkIssue | null>(() => {
@@ -604,66 +583,63 @@ export function Insights({
     if (!issue) return null;
 
     const ghosts = issue.ghost_wwan_adapter_count;
-    const port = issue.link.port != null ? `porta USB ${issue.link.port}` : "uma porta USB";
+    const port = issue.link.port != null ? t("insightsLocal.modem.portKnown", { port: issue.link.port }) : t("insightsLocal.modem.portUnknown");
     const hub = issue.link.on_root_hub
       ? issue.link.hub_version
-        ? `direto no controlador, hub raiz USB ${issue.link.hub_version}`
-        : "direto no controlador"
-      : "atras de um hub USB";
-    const changeAnswer = { label: "Mudar resposta", onClick: () => answerModemQuestion(null) };
+        ? t("insightsLocal.modem.hubRootVersion", { version: issue.link.hub_version })
+        : t("insightsLocal.modem.hubRoot")
+      : t("insightsLocal.modem.hubBehind");
+    const root = issue.root_net_device_id ?? t("insightsLocal.modem.noRootNet");
+    const changeAnswer = { label: t("insightsLocal.modem.changeAnswer"), onClick: () => answerModemQuestion(null) };
 
     if (modemAnswer === null) {
       return {
-        title: "Você usa modem ou antena 4G/5G neste PC?",
-        explanation: `Encontramos tres sinais que costumam ser um problema só: um adaptador de rede movel que não inicia, um dispositivo na ${port} que o Windows não consegue nem identificar, e ${ghosts} interfaces "Celular" antigas deixadas para tras. O diagnóstico certo depende de você ter ou não um modem 4G/5G ligado neste computador.`,
-        impact: "Precisa de uma resposta sua",
+        title: t("insightsLocal.modem.askTitle"),
+        explanation: t("insightsLocal.modem.askExplanation", { port, ghosts }),
+        impact: t("insightsLocal.modem.askImpact"),
         category: "rede",
         risk: "baixo",
         reversible: true,
         confidence: 0.8,
-        reason: `${issue.usb_device_id}; ${issue.root_net_device_id ?? "sem ROOT\\NET"}; ${ghosts} interfaces WWAN ocultas`,
-        action: { label: "Sim, uso modem/antena 4G ou 5G", onClick: () => answerModemQuestion("yes") },
-        secondaryAction: { label: "Não uso", onClick: () => answerModemQuestion("no") },
+        reason: t("insightsLocal.modem.reasonQuestion", { usb: issue.usb_device_id, root, ghosts }),
+        action: { label: t("insightsLocal.modem.askYes"), onClick: () => answerModemQuestion("yes") },
+        secondaryAction: { label: t("insightsLocal.modem.askNo"), onClick: () => answerModemQuestion("no") },
       };
     }
 
     if (modemAnswer === "yes") {
       const isAmdUsb3 =
         issue.link.hub_version === "3.0" && (issue.link.controller ?? "").toUpperCase().includes("AMD");
-      const amdNote = isAmdUsb3
-        ? " - modem 4G/5G em porta USB 3.x de controlador AMD e uma incompatibilidade conhecida"
-        : "";
-      const hubStep = issue.link.on_root_hub
-        ? "3) um hub USB com fonte própria entre o modem e o PC (modem 5G puxa mais corrente do que muita porta entrega)"
-        : "3) ligar direto no PC em vez de no hub, ou trocar por um hub com fonte própria";
+      const amdNote = isAmdUsb3 ? t("insightsLocal.modem.amdNote") : "";
+      const hubStep = issue.link.on_root_hub ? t("insightsLocal.modem.hubStepRoot") : t("insightsLocal.modem.hubStepBehind");
       return {
-        title: "Sua antena 4G/5G está com a conexão USB instavel",
-        explanation: `O Windows não consegue nem identificar o modem na ${port} (${hub}) - ele aparece como "dispositivo USB desconhecido", e por isso o adaptador de rede movel fica sem nada por tras e não inicia. As ${ghosts} interfaces "Celular" fantasmas registradas mostram que a conexão vive caindo e voltando. Isso e problema físico (porta, cabo ou energia), não de driver - por isso desativar/reativar não resolve. Testa nesta ordem: 1) uma porta USB 2.0 (geralmente as pretas) direto na traseira do gabinete${amdNote}; 2) sem cabo de extensao, ou com um mais curto e blindado; ${hubStep}; 4) desconecta, espera 15 segundos e reconecta.`,
-        impact: `${ghosts} reconexoes registradas`,
+        title: t("insightsLocal.modem.yesTitle"),
+        explanation: t("insightsLocal.modem.yesExplanation", { port, hub, ghosts, amdNote, hubStep }),
+        impact: t("insightsLocal.modem.yesImpact", { ghosts }),
         category: "rede",
         risk: "baixo",
         reversible: true,
         confidence: 0.85,
-        reason: `${issue.usb_device_id} na ${port}, ${hub}${issue.link.controller ? ` (${issue.link.controller})` : ""}; ${issue.root_net_device_id ?? "sem ROOT\\NET"}; ${ghosts} interfaces WWAN ocultas`,
+        reason: t("insightsLocal.modem.yesReason", { usb: issue.usb_device_id, port, hub, controller: issue.link.controller ? ` (${issue.link.controller})` : "", root, ghosts }),
         secondaryAction: changeAnswer,
       };
     }
 
     return {
-      title: "Adaptador de rede movel fantasma",
-      explanation: `Existe um adaptador virtual de rede movel (Generic Mobile Broadband Adapter) sem nenhum modem real por tras, mais ${ghosts} interfaces "Celular" antigas. Como você não usa modem 4G/5G, isso e sobra de algum driver ou software antigo e pode ser removido pelo Gerenciador de Dispositivos (Exibir > Mostrar dispositivos ocultos > Adaptadores de rede). Já o dispositivo desconhecido na ${port} e outra coisa com conexão instavel - vale ver o que está ligado nela.`,
-      impact: "Sobra de driver antigo",
+      title: t("insightsLocal.modem.noTitle"),
+      explanation: t("insightsLocal.modem.noExplanation", { ghosts, port }),
+      impact: t("insightsLocal.modem.noImpact"),
       category: "rede",
       risk: "baixo",
       reversible: true,
       confidence: 0.6,
-      reason: `${issue.root_net_device_id ?? "sem ROOT\\NET"}; ${ghosts} interfaces WWAN ocultas; ${issue.usb_device_id}`,
+      reason: t("insightsLocal.modem.noReason", { root, ghosts, usb: issue.usb_device_id }),
       secondaryAction: changeAnswer,
     };
     // answerModemQuestion is stable enough here (setState + localStorage); listing it
     // would only re-create the card on every render for no benefit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [modemUsbLinkIssue, modemAnswer]);
+  }, [modemUsbLinkIssue, modemAnswer, t]);
 
 
   const [defenderThrottledAt, setDefenderThrottledAt] = useState<number | null>(() => loadDefenderThrottledAt());
@@ -683,64 +659,82 @@ export function Insights({
     const live = telemetry?.disk_activity ?? null;
 
     const diskLetter = firstDriveLetter(issue.disk);
-    const diskLabel = diskLetter ? `disco ${diskLetter}:` : issue.disk_number != null ? `disco ${issue.disk_number}` : "disco";
+    const diskLabel = diskLetter
+      ? t("insightsLocal.defender.diskLetter", { letter: diskLetter })
+      : issue.disk_number != null
+        ? t("insightsLocal.defender.diskNumber", { number: issue.disk_number })
+        : t("insightsLocal.defender.disk");
     const activePercent = Math.round(live?.busiest_disk_active_percent ?? issue.peak_disk_active_percent);
     const share = live?.defender ? Math.round(live.defender.share_percent) : null;
     const minutes = Math.max(issue.sustained_minutes, Math.round((live?.pressure.sustained_seconds ?? 0) / 60));
-    const pressureLine = `O Windows Defender (MsMpEng) vem mantendo o ${diskLabel} em ~${activePercent}% de atividade por ${minutes} min nos últimos 30 minutos${share != null ? `, respondendo por ~${share}% de tudo que esta sendo lido/gravado` : ""}.`;
-    const reasonBase = `${issue.disk ?? "disco ?"} ${Math.round(issue.peak_disk_active_percent)}% ativo; Defender ${issue.peak_defender_mb_s.toFixed(1)} MB/s pico; ${issue.sustained_minutes} min sob pressão`;
+    const pressureLine = t("insightsLocal.defender.pressure", {
+      disk: diskLabel,
+      percent: activePercent,
+      minutes,
+      share: share != null ? t("insightsLocal.defender.pressureShare", { share }) : "",
+    });
+    const reasonBase = t("insightsLocal.defender.reasonBase", {
+      disk: issue.disk ?? t("insightsLocal.defender.diskUnknown"),
+      percent: Math.round(issue.peak_disk_active_percent),
+      peak: issue.peak_defender_mb_s.toFixed(1),
+      minutes: issue.sustained_minutes,
+    });
 
     switch (issue.cause) {
       case "disk_failing": {
         const evidence =
           issue.disk_error_events_7d > 0
-            ? `${issue.disk_error_events_7d} erros de hardware registrados pelo Windows nesse disco nos últimos 7 dias`
-            : "o próprio disco (SMART) está avisando que vai falhar";
+            ? t("insightsLocal.defender.failingEvidenceEvents", { count: issue.disk_error_events_7d })
+            : t("insightsLocal.defender.failingEvidenceSmart");
         return {
-          title: `O ${diskLabel} está com defeito - o Defender e só a vitima`,
-          explanation: `${pressureLine} Mas a causa não e o antivirus: ${evidence}. Um disco falhando responde devagar a qualquer leitura, e o Defender só e o programa que mais le. Limitar o Defender esconderia o aviso. O que fazer: faça backup do que importa agora, enquanto o disco ainda responde, e planeje a troca. Depois do backup, o disco pode ser visto em Telemetria > Saúde do disco.`,
-          impact: "Risco de perda de dados",
+          title: t("insightsLocal.defender.failingTitle", { disk: diskLabel }),
+          explanation: t("insightsLocal.defender.failingExplanation", { pressure: pressureLine, evidence }),
+          impact: t("insightsLocal.defender.failingImpact"),
           category: "performance",
           risk: "alto",
           reversible: false,
           confidence: 0.75,
-          reason: `${reasonBase}; ${issue.disk_error_events_7d} eventos disk/storahci em 7d; SMART predict_failure`,
+          reason: t("insightsLocal.defender.failingReason", { base: reasonBase, events: issue.disk_error_events_7d }),
         };
       }
       case "file_system_corruption": {
         const drive = issue.unhealthy_volumes[0] ?? diskLetter ?? "C";
         const evidence = [
-          issue.unhealthy_volumes.length > 0 ? `o Windows marca a unidade ${issue.unhealthy_volumes.join(", ")} como não saudavel` : null,
-          issue.ntfs_corruption_events_7d > 0 ? `${issue.ntfs_corruption_events_7d} evento(s) de corrupcao NTFS nos últimos 7 dias` : null,
+          issue.unhealthy_volumes.length > 0 ? t("insightsLocal.defender.fsEvidenceVolumes", { volumes: issue.unhealthy_volumes.join(", ") }) : null,
+          issue.ntfs_corruption_events_7d > 0 ? t("insightsLocal.defender.fsEvidenceEvents", { count: issue.ntfs_corruption_events_7d }) : null,
         ]
           .filter(Boolean)
           .join(" e ");
         return {
-          title: `Sistema de arquivos da unidade ${drive}: corrompido`,
-          explanation: `${pressureLine} A causa está no disco, não no antivirus: ${evidence}. Estruturas corrompidas fazem cada leitura travar e serem tentadas de novo - e o Defender, que le tudo, e quem aparece no Gerenciador de Tarefas. A correção e o chkdsk do próprio Windows, que precisa rodar antes do sistema abrir: agende aqui e reinicie quando puder.`,
-          impact: "Leituras travando em arquivos corrompidos",
+          title: t("insightsLocal.defender.fsTitle", { drive }),
+          explanation: t("insightsLocal.defender.fsExplanation", { pressure: pressureLine, evidence }),
+          impact: t("insightsLocal.defender.fsImpact"),
           category: "performance",
           risk: "baixo",
           reversible: true,
           confidence: 0.8,
-          reason: `${reasonBase}; volumes não saudaveis: ${issue.unhealthy_volumes.join(", ") || "nenhum"}; Ntfs 55/130: ${issue.ntfs_corruption_events_7d}`,
+          reason: t("insightsLocal.defender.fsReason", { base: reasonBase, volumes: issue.unhealthy_volumes.join(", ") || t("insightsLocal.defender.fsNone"), events: issue.ntfs_corruption_events_7d }),
           actionName: "SCHEDULE_VOLUME_CHECK",
           actionContext: { driveLetter: drive },
-          actionLabel: `Verificar ${drive}: na próxima reinicialização`,
+          actionLabel: t("insightsLocal.defender.fsAction", { drive }),
         };
       }
       case "threat_remediation_loop":
         return {
-          title: "O Defender está encontrando a mesma ameaca repetidamente",
-          explanation: `${pressureLine} O histórico do próprio Defender mostra ${issue.detections_24h} detecção(oes) nas últimas 24h${issue.remediation_failures_24h > 0 ? ` e ${issue.remediation_failures_24h} tentativa(s) de remocao que falharam` : ""}. Quando ele não consegue remover ou colocar em quarentena, encontra de novo na próxima verificação, e assim por diante - por isso o disco não descansa. Abra o Histórico de proteção do Windows, veja qual arquivo e, e escolha remover ou permitir. O AnalystBlaze não decide isso por você: e a diferenca entre um falso positivo num jogo e um malware de verdade.`,
-          impact: `${issue.detections_24h} detecções em 24h`,
+          title: t("insightsLocal.defender.loopTitle"),
+          explanation: t("insightsLocal.defender.loopExplanation", {
+            pressure: pressureLine,
+            detections: issue.detections_24h,
+            failures: issue.remediation_failures_24h > 0 ? t("insightsLocal.defender.loopFailures", { count: issue.remediation_failures_24h }) : "",
+          }),
+          impact: t("insightsLocal.defender.loopImpact", { count: issue.detections_24h }),
           category: "performance",
           risk: "baixo",
           reversible: true,
           confidence: 0.8,
-          reason: `${reasonBase}; Defender 1116: ${issue.detections_24h}; 1008/1118/1119: ${issue.remediation_failures_24h}`,
+          reason: t("insightsLocal.defender.loopReason", { base: reasonBase, detections: issue.detections_24h, failures: issue.remediation_failures_24h }),
           action: {
-            label: "Abrir histórico de proteção",
+            label: t("insightsLocal.defender.openHistory"),
             onClick: () => {
               track("defender_disk_open_history");
               void openWindowsSecurity("history").catch(() => undefined);
@@ -749,18 +743,23 @@ export function Insights({
         };
       case "scan_cannot_finish":
         return {
-          title: "As verificações do Defender não estão conseguindo terminar",
-          explanation: `${pressureLine} Nas últimas 24h o Defender iniciou ${issue.scans_started_24h} verificação(oes), concluiu ${issue.scans_finished_24h}${issue.scans_failed_24h > 0 ? ` e registrou ${issue.scans_failed_24h} como falha` : ""}. Isso normalmente e um arquivo que ele não consegue atravessar - um arquivo enorme ou corrompido, um container (VHD, PST, arquivo de backup) ou uma pasta de nuvem só com placeholders - e que e tentado de novo a cada verificação. Renovar as definições resolve os casos em que o erro está no próprio Defender; se continuar, o Histórico de proteção mostra em qual pasta ele está parando, e dai vale excluir aquela pasta específica da verificação (em Segurança do Windows), nunca o disco inteiro.`,
-          impact: `${issue.scans_started_24h} verificações, ${issue.scans_finished_24h} concluidas`,
+          title: t("insightsLocal.defender.scanTitle"),
+          explanation: t("insightsLocal.defender.scanExplanation", {
+            pressure: pressureLine,
+            started: issue.scans_started_24h,
+            finished: issue.scans_finished_24h,
+            failed: issue.scans_failed_24h > 0 ? t("insightsLocal.defender.scanFailed", { count: issue.scans_failed_24h }) : "",
+          }),
+          impact: t("insightsLocal.defender.scanImpact", { started: issue.scans_started_24h, finished: issue.scans_finished_24h }),
           category: "performance",
           risk: "baixo",
           reversible: true,
           confidence: 0.7,
-          reason: `${reasonBase}; Defender 1000/1001/1005: ${issue.scans_started_24h}/${issue.scans_finished_24h}/${issue.scans_failed_24h}`,
+          reason: t("insightsLocal.defender.scanReason", { base: reasonBase, started: issue.scans_started_24h, finished: issue.scans_finished_24h, failed: issue.scans_failed_24h }),
           actionName: "RENEW_DEFENDER_DEFINITIONS",
-          actionLabel: "Renovar definições do Defender",
+          actionLabel: t("insightsLocal.defender.renewAction"),
           action: {
-            label: "Abrir histórico de proteção",
+            label: t("insightsLocal.defender.openHistory"),
             onClick: () => {
               track("defender_disk_open_history");
               void openWindowsSecurity("history").catch(() => undefined);
@@ -769,53 +768,61 @@ export function Insights({
         };
       case "definitions_or_engine_failing":
         return {
-          title: "As definições ou o motor do Defender estão falhando",
-          explanation: `${pressureLine} O log do Defender registrou ${issue.signature_update_failures_24h} falha(s) ao atualizar as definições${issue.engine_failures_24h > 0 ? ` e ${issue.engine_failures_24h} erro(s) do proprio motor de verificacao` : ""} nas últimas 24h. Um conjunto de definições corrompido e uma causa classica de verificação em loop. A correção e remover as definições atuais e baixar de novo - o Defender fica alguns minutos sem definições até o download terminar.`,
-          impact: `${issue.signature_update_failures_24h} falhas de atualização em 24h`,
+          title: t("insightsLocal.defender.defsTitle"),
+          explanation: t("insightsLocal.defender.defsExplanation", {
+            pressure: pressureLine,
+            signature: issue.signature_update_failures_24h,
+            engine: issue.engine_failures_24h > 0 ? t("insightsLocal.defender.defsEngine", { count: issue.engine_failures_24h }) : "",
+          }),
+          impact: t("insightsLocal.defender.defsImpact", { count: issue.signature_update_failures_24h }),
           category: "performance",
           risk: "baixo",
           reversible: true,
           confidence: 0.7,
-          reason: `${reasonBase}; Defender 2001: ${issue.signature_update_failures_24h}; 3002/5008: ${issue.engine_failures_24h}`,
+          reason: t("insightsLocal.defender.defsReason", { base: reasonBase, signature: issue.signature_update_failures_24h, engine: issue.engine_failures_24h }),
           actionName: "RENEW_DEFENDER_DEFINITIONS",
-          actionLabel: "Renovar definições do Defender",
+          actionLabel: t("insightsLocal.defender.renewAction"),
         };
       case "unthrottled_scan": {
         const factor = issue.scan_avg_cpu_load_factor ?? 50;
         const settings = [
-          `pode usar até ${factor}% da CPU`,
-          issue.disable_cpu_throttle_on_idle_scans ? "ignora o limite quando o PC está ocioso" : null,
-          issue.scan_only_if_idle === false ? "roda mesmo com você usando o PC" : null,
+          t("insightsLocal.defender.settingCpu", { factor }),
+          issue.disable_cpu_throttle_on_idle_scans ? t("insightsLocal.defender.settingIgnoreIdle") : null,
+          issue.scan_only_if_idle === false ? t("insightsLocal.defender.settingWhileUsing") : null,
         ]
           .filter(Boolean)
           .join(", ");
         return {
-          title: "Uma verificação do Defender está saturando o disco",
-          explanation: `${pressureLine} Não encontramos nenhum sinal de defeito no disco, corrupcao ou erro do Defender - e uma verificação normal, só que com as configurações padrão do Windows (${settings}) num disco que não acompanha o ritmo. Limitar a verificação a 20% de CPU e só com o PC ocioso deixa ela mais lenta, mas para de travar todo o resto. A proteção em tempo real não muda.${issue.full_scan_age_days == null ? " Nenhuma verificacao completa consta - a primeira e sempre a mais pesada." : ""}`,
-          impact: `${diskLabel} em ~${activePercent}%`,
+          title: t("insightsLocal.defender.unthrottledTitle"),
+          explanation: t("insightsLocal.defender.unthrottledExplanation", {
+            pressure: pressureLine,
+            settings,
+            fullScan: issue.full_scan_age_days == null ? t("insightsLocal.defender.unthrottledNoFullScan") : "",
+          }),
+          impact: t("insightsLocal.defender.unthrottledImpact", { disk: diskLabel, percent: activePercent }),
           category: "performance",
           risk: "baixo",
           reversible: true,
           confidence: 0.7,
-          reason: `${reasonBase}; ScanAvgCPULoadFactor=${factor}; DisableCpuThrottleOnIdleScans=${String(issue.disable_cpu_throttle_on_idle_scans)}; ScanOnlyIfIdleEnabled=${String(issue.scan_only_if_idle)}`,
+          reason: t("insightsLocal.defender.unthrottledReason", { base: reasonBase, factor, ignoreIdle: String(issue.disable_cpu_throttle_on_idle_scans), onlyIdle: String(issue.scan_only_if_idle) }),
           actionName: "THROTTLE_DEFENDER_SCANS",
-          actionLabel: "Limitar verificações do Defender",
+          actionLabel: t("insightsLocal.defender.throttleAction"),
         };
       }
       default:
         return {
-          title: "O Defender está saturando o disco, sem causa evidente",
-          explanation: `${pressureLine} As verificações já estão com limite de CPU, e nem o log do Defender, nem o disco, nem o sistema de arquivos apontam um motivo. Vale olhar o Histórico de proteção (pode haver uma detecção antiga em loop que o log não mostra mais) e, se acontecer todo dia no mesmo horário, e a verificação agendada - mude o horário em Segurança do Windows. Se persistir, renovar as definições e um passo seguro.`,
-          impact: `${diskLabel} em ~${activePercent}%`,
+          title: t("insightsLocal.defender.unknownTitle"),
+          explanation: t("insightsLocal.defender.unknownExplanation", { pressure: pressureLine }),
+          impact: t("insightsLocal.defender.unthrottledImpact", { disk: diskLabel, percent: activePercent }),
           category: "performance",
           risk: "baixo",
           reversible: true,
           confidence: 0.5,
           reason: reasonBase,
           actionName: "RENEW_DEFENDER_DEFINITIONS",
-          actionLabel: "Renovar definições do Defender",
+          actionLabel: t("insightsLocal.defender.renewAction"),
           action: {
-            label: "Abrir histórico de proteção",
+            label: t("insightsLocal.defender.openHistory"),
             onClick: () => {
               track("defender_disk_open_history");
               void openWindowsSecurity("history").catch(() => undefined);
@@ -823,23 +830,23 @@ export function Insights({
           },
         };
     }
-  }, [telemetry, track]);
+  }, [telemetry, track, t]);
 
   const defenderThrottledInsight = useMemo<Insight | null>(() => {
     if (defenderThrottledAt == null) return null;
     return {
-      title: "Verificações do Defender limitadas pelo AnalystBlaze",
-      explanation: `Desde ${new Date(defenderThrottledAt).toLocaleString()} as verificações agendadas do Defender usam no máximo 20% da CPU e só rodam com o PC ocioso. Se quiser voltar ao padrão do Windows, restaure aqui - os valores anteriores exatos foram guardados.`,
-      impact: "Verificações mais lentas, PC mais livre",
+      title: t("insightsLocal.defender.throttledTitle"),
+      explanation: t("insightsLocal.defender.throttledExplanation", { since: formatDateTime(Math.floor(defenderThrottledAt / 1000)) }),
+      impact: t("insightsLocal.defender.throttledImpact"),
       category: "performance",
       risk: "baixo",
       reversible: true,
       confidence: 1,
-      reason: "THROTTLE_DEFENDER_SCANS aplicado localmente",
+      reason: t("insightsLocal.defender.throttledReason"),
       actionName: "RESTORE_DEFENDER_SCAN_SETTINGS",
-      actionLabel: "Restaurar padrão do Windows",
+      actionLabel: t("insightsLocal.defender.restoreAction"),
     };
-  }, [defenderThrottledAt]);
+  }, [defenderThrottledAt, t]);
 
 
   const visibleInsights = useMemo(() => {

@@ -17,7 +17,7 @@ import type { ControlsActions } from "@/components/screens/controls/actions";
 
 const Dashboard = lazy(() => import("@/components/screens/dashboard/Dashboard").then((module) => ({ default: module.Dashboard })));
 const Telemetry = lazy(() => import("@/components/screens/mypc/Performance").then((module) => ({ default: module.Performance })));
-const Insights = lazy(() => import("@/components/analystblaze/views/Insights").then((module) => ({ default: module.Insights })));
+const Insights = lazy(() => import("@/components/screens/insights/Insights").then((module) => ({ default: module.Insights })));
 const Controls = lazy(() => import("@/components/screens/controls/Controls").then((module) => ({ default: module.Controls })));
 const DiskExplorer = lazy(() => import("@/components/screens/mypc/Disk").then((module) => ({ default: module.Disk })));
 const Network = lazy(() => import("@/components/screens/mypc/Network").then((module) => ({ default: module.Network })));
