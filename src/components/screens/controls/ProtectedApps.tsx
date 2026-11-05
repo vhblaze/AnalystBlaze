@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Shield, X } from "lucide-react";
+import { Shield, X, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toast } from "@/hooks/use-toast";
@@ -15,7 +15,7 @@ import { protectApp, unprotectApp, useProtectedApps } from "@/features/windows/u
 export function ProtectedApps() {
   const { t } = useI18n();
   const track = useTelemetry("controls_protected");
-  const { apps, loading } = useProtectedApps();
+  const { apps, loading, refresh } = useProtectedApps();
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -50,9 +50,15 @@ export function ProtectedApps() {
 
   return (
     <div className="flex max-w-3xl flex-col gap-5">
-      <header>
-        <h2 className="text-[28px] font-semibold tracking-tight text-fg">{t("controls.d3.protected.title")}</h2>
-        <p className="mt-1 text-sm text-fg-3">{t("controls.d3.protected.subtitle")}</p>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-[28px] font-semibold tracking-tight text-fg">{t("controls.d3.protected.title")}</h2>
+          <p className="mt-1 text-sm text-fg-3">{t("controls.d3.protected.subtitle")}</p>
+        </div>
+        <Button size="sm" variant="outline" disabled={loading || busy} onClick={() => void refresh().catch(() => undefined)}>
+          <RefreshCw />
+          {t("common.refresh")}
+        </Button>
       </header>
       <Card>
         <form

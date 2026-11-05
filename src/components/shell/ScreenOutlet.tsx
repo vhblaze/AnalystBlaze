@@ -571,6 +571,7 @@ export function ScreenOutlet({
             onSyncPlan={auth.syncPlan}
             onOpenHistory={() => navigate(route("history"))}
             onOpenControls={() => navigate(route("controls"))}
+            onOpenSystemComponent={() => navigate(route("controls", "advanced"))}
           />
         </Suspense>
       );
@@ -592,6 +593,8 @@ export function ScreenOutlet({
               />
             ) : tab === "disk" ? (
               <DiskExplorer
+                shadowConsentNeeded={shadowConsentNeeded}
+                onResolveShadowConsent={resolveShadowConsent}
                 autoScan={focusDiskUsage}
                 onAutoScanHandled={() => setFocusDiskUsage(false)}
                 onDiskNearFullDetected={setDiskNearFullInfo}

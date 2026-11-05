@@ -46,9 +46,12 @@ export const history: Mirror<typeof pt> = {
       undone: "Undone",
       gain: "Average 1% low gain",
       gainPending: "no FPS measurement yet",
+      gainCount: "over {{count}} measurements",
     },
     result: {
       freedMemory: "freed {{size}}",
+      fpsLow: "1% low {{before}} → {{after}} fps",
+      fpsSame: "no measurable difference (±{{noise}} fps)",
       quarantined: "{{size}} in quarantine",
     },
     change: {

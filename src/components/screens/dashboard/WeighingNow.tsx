@@ -2,10 +2,10 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { SectionLabel } from "@/components/ui/section-label";
 import { useI18n } from "@/i18n";
-import { displayProcessName, formatBytes, formatMegabytes, formatMs, formatPercent } from "@/lib/format";
+import { displayGameName, displayProcessName, formatBytes, formatMegabytes, formatMs, formatPercent } from "@/lib/format";
 import type { WeighingNow as Weighing } from "@/features/telemetry/weighingNow";
 
-export type WeighingAction = "release_memory" | "open_disk" | "open_performance" | "open_network";
+export type WeighingAction = "release_memory" | "open_disk" | "open_performance" | "open_network" | "game_mode_on";
 
 /**
  * "O que está pesando agora": o problema em uma frase, o porquê em outra
@@ -17,6 +17,7 @@ export function WeighingNow({
   onAction,
   onDismiss,
   releaseMemoryBlockedReason,
+  gameModeBlockedReason = null,
   busy,
   lastResult,
 }: {
@@ -25,6 +26,8 @@ export function WeighingNow({
   onDismiss: (kind: Weighing["kind"]) => void;
   /** Por que "Liberar memória" não roda agora (componente de sistema ausente). */
   releaseMemoryBlockedReason: string | null;
+  /** Por que o Modo Jogo não liga agora (minutos da semana acabaram). */
+  gameModeBlockedReason?: string | null;
   busy: boolean;
   lastResult: string | null;
 }) {
@@ -45,6 +48,11 @@ export function WeighingNow({
     case "game_mode":
       title = weighing.game ? t("dashboard.d3.gameModeOnFor", { game: weighing.game }) : t("dashboard.d3.gameModeOn");
       detail = t("dashboard.d3.gameModeOnDetail");
+      break;
+    case "game_open":
+      title = t("dashboard.d3.gameOpenTitle", { game: displayGameName(weighing.game) });
+      detail = t("dashboard.d3.gameOpenDetail");
+      action = { id: "game_mode_on", label: t("dashboard.d3.gameMode"), blockedReason: gameModeBlockedReason };
       break;
     case "memory":
       title = t("dashboard.d3.memoryTitle", { percent: formatPercent(weighing.percent) });

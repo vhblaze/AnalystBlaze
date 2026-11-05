@@ -445,6 +445,13 @@ export const mypc: Mirror<typeof pt> = {
         hide: "hide",
         noWindow: "no window reported",
         privacy: "Process and window names stay on your PC.",
+        thermal: "Temperature",
+        throttling: "the processor is limiting its clock due to heat",
+        thermalRising: "rising",
+        fans: "Fans",
+        fansMany: "{{count}} · fastest at {{max}}",
+        sessionEnergy: "Energy this session",
+        sessionEnergyValue: "~{{value}} kWh (estimated)",
       },
       contextValue: {
         focus_work: "Focus Mode: work",

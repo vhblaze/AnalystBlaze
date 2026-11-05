@@ -111,6 +111,7 @@ export function AppShell() {
             <>
               {current.screen === "mypc" && <PcSpecs />}
               {current.screen === "history" && <RestoreToDateButton />}
+              {current.screen === "settings" && <span className="text-xs text-fg-3">{t("settingsD3.headerNote")}</span>}
               {current.screen === "controls" && current.section && (
                 <Button size="sm" variant="link" onClick={() => navigate(route("controls"))}>
                   <ArrowLeft />

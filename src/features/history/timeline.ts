@@ -187,9 +187,32 @@ function quarantinedBytes(snapshot: OptimizationSnapshot): number {
 function measuredResult(event: AuditEvent | undefined, t: (key: string, params?: Record<string, string | number>) => string): string | null {
   if (!event) return null;
   const inner = auditDetails(event).details;
-  const freed = inner && typeof inner === "object" ? Number((inner as Record<string, unknown>).freed_mb) : NaN;
+  if (!inner || typeof inner !== "object") return null;
+  const record = inner as Record<string, unknown>;
+  const freed = Number(record.freed_mb);
   if (Number.isFinite(freed) && freed > 0) return t("history.result.freedMemory", { size: formatMegabytes(freed) });
+  // L4: antes/depois em 1% low guardado junto com a ação do Modo Jogo.
+  const fps = record.frameMeasurement as { verdict?: string; baseline?: { low1PctFps?: number | null }; optimized?: { low1PctFps?: number | null }; noiseFps?: number } | null | undefined;
+  const before = fps?.baseline?.low1PctFps;
+  const after = fps?.optimized?.low1PctFps;
+  if (fps?.verdict && typeof before === "number" && typeof after === "number") {
+    if (fps.verdict === "no_measurable_difference") return t("history.result.fpsSame", { noise: Math.round(fps.noiseFps ?? 3) });
+    if (fps.verdict === "better" || fps.verdict === "worse") {
+      return t("history.result.fpsLow", { before: Math.round(before), after: Math.round(after) });
+    }
+  }
   return null;
+}
+
+/** Quando a última ação de uma lista rodou com sucesso (Unix s), ou null. */
+export function lastActionAt(audit: AuditEvent[], actionNames: string[]): number | null {
+  let latest: number | null = null;
+  for (const event of audit) {
+    const details = auditDetails(event);
+    if (!details.success || !details.action_name || !actionNames.includes(details.action_name)) continue;
+    if (latest === null || event.timestamp > latest) latest = event.timestamp;
+  }
+  return latest;
 }
 
 const MATCH_WINDOW_SECONDS = 15;

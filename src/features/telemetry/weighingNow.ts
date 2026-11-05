@@ -1,4 +1,4 @@
-import type { AgentTelemetrySnapshot, DiskVolumeInfo, GameModeSession } from "@/services/tauri/agent";
+import type { AgentTelemetrySnapshot, DiskVolumeInfo, ForegroundGame, GameModeSession } from "@/services/tauri/agent";
 
 /**
  * "O que está pesando agora" (doc 13 §4, doc 11 §0): o maior problema da
@@ -17,6 +17,7 @@ export const THRESHOLDS = {
 
 export type WeighingNow =
   | { kind: "game_mode"; game: string | null }
+  | { kind: "game_open"; game: string }
   | { kind: "memory"; percent: number; topProcess: { name: string; memoryMb: number } | null }
   | { kind: "disk"; mountPoint: string; freeBytes: number }
   | { kind: "cpu"; percent: number }
@@ -34,11 +35,14 @@ export function pickWeighingNow({
   telemetry,
   volumes,
   gameSession,
+  foregroundGame = null,
   dismissed = [],
 }: {
   telemetry: AgentTelemetrySnapshot | null;
   volumes: DiskVolumeInfo[];
   gameSession: GameModeSession | null;
+  /** Jogo em primeiro plano agora, mesmo sem Modo Jogo (doc 14 U2). */
+  foregroundGame?: ForegroundGame | null;
   /** Tipos que o usuário dispensou nesta sessão ("Agora não"). */
   dismissed?: WeighingNow["kind"][];
 }): WeighingNow {
@@ -47,6 +51,10 @@ export function pickWeighingNow({
   // Doc 14 U2: com o Modo Jogo ligado, o card fala do jogo.
   if (gameSession && allowed("game_mode")) {
     return { kind: "game_mode", game: gameSession.targetProcessName ?? null };
+  }
+  // Doc 14 U2: jogo aberto sem Modo Jogo também fala do jogo.
+  if (foregroundGame?.detected && foregroundGame.process_name && allowed("game_open")) {
+    return { kind: "game_open", game: foregroundGame.process_name };
   }
   if (!telemetry) return { kind: "ok" };
 

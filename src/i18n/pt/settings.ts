@@ -119,9 +119,18 @@ export const settings = {
       versionUnknown: "versão não lida",
     },
     moved: {
-      title: "O componente de sistema e as automações ficam em Controles",
+      title: "As automações ficam em Controles",
       body: "Aqui ficam só as preferências do app. O que mexe no Windows está em Controles e em Controles › Avançado.",
       action: "Abrir Controles",
+      componentTitle: "Componente de sistema",
+      componentReading: "Lendo o estado…",
+      componentState: {
+        ready: "Instalado e rodando · versão {{version}}",
+        attention: "Instalado, mas precisa de atenção",
+        missing: "Não instalado: ações que pedem administrador não rodam",
+      },
+      componentAction: "Gerenciar em Avançado",
     },
+    headerNote: "As mudanças valem na hora",
   },
 } as const;

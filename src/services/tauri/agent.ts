@@ -938,6 +938,20 @@ export type FrameMeasurementEntry = {
   measurement: FrameMeasurement;
 };
 
+export type ForegroundGame = {
+  detected: boolean;
+  process_name?: string | null;
+  pid?: string | null;
+  confidence: number;
+  reason: string;
+};
+
+/** Jogo em primeiro plano agora, pela lista do agente. Não liga nada. */
+export async function getForegroundGame(): Promise<ForegroundGame> {
+  requireTauriRuntime("Jogo em primeiro plano");
+  return invoke<ForegroundGame>("foreground_game");
+}
+
 /** Medições guardadas só no PC, da mais nova para a mais velha. */
 export async function getFrameMeasurements(limit = 10): Promise<FrameMeasurementEntry[]> {
   requireTauriRuntime("Medições de FPS");

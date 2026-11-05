@@ -67,6 +67,8 @@ export const dashboard: Mirror<typeof pt> = {
       networkTitle: "The internet is slow: {{latency}}",
       networkDetail: "That shows up as lag in games and calls.",
       openNetwork: "Diagnose the network",
+      gameOpenTitle: "{{game}} is open",
+      gameOpenDetail: "Turn on Game Mode to give the game priority. When it turns on by itself, FPS before and after is measured.",
       gameModeOn: "Game Mode is on",
       gameModeOnFor: "Game Mode is on for {{game}}",
       gameModeOnDetail: "When you turn it off, everything goes back to how it was.",

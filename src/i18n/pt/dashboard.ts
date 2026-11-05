@@ -64,6 +64,8 @@ export const dashboard = {
       networkTitle: "A internet está lenta: {{latency}}",
       networkDetail: "Isso aparece como lag em jogos e chamadas.",
       openNetwork: "Diagnosticar a rede",
+      gameOpenTitle: "{{game}} está aberto",
+      gameOpenDetail: "Ligue o Modo Jogo para dar prioridade ao jogo. Quando ele liga sozinho, o antes e depois em FPS é medido.",
       gameModeOn: "O Modo Jogo está ligado",
       gameModeOnFor: "O Modo Jogo está ligado para {{game}}",
       gameModeOnDetail: "Ao desligar, tudo volta como estava antes.",

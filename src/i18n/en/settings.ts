@@ -122,9 +122,18 @@ export const settings: Mirror<typeof pt> = {
       versionUnknown: "version not read",
     },
     moved: {
-      title: "The system component and automations live in Controls",
-      body: "Only app preferences stay here. What changes Windows is in Controls and Controls › Advanced.",
+      title: "Automations live in Controls",
+      body: "Only app preferences live here. What touches Windows is in Controls and Controls › Advanced.",
       action: "Open Controls",
+      componentTitle: "System component",
+      componentReading: "Reading state…",
+      componentState: {
+        ready: "Installed and running · version {{version}}",
+        attention: "Installed, but needs attention",
+        missing: "Not installed: actions that need administrator do not run",
+      },
+      componentAction: "Manage in Advanced",
     },
+    headerNote: "Changes apply right away",
   },
 };

@@ -63,7 +63,9 @@ export const controls: Mirror<typeof pt> = {
         services: {
           title: "Windows services",
           summary: "{{count}} services that can be stopped safely",
+          failing: "{{count}} failing in the last 24 h",
         },
+        lastRun: "last: {{when}}",
         protected: {
           title: "Protected apps",
           summary: "Apps AnalystBlaze never touches (Discord, OBS…)",
@@ -196,6 +198,7 @@ export const controls: Mirror<typeof pt> = {
           unavailable: "Could not read the boot time: {{reason}}",
           reading: "Reading the boot time…",
           retry: "Read again",
+          estimate: "Removing the {{count}} suggested should leave it at ~{{time}}: together, Windows measured {{saved}} of delay.",
         },
         footnote: "\"Off\" only stops the app from opening on its own: it stays installed and comes back with 1 click. Every change goes to History.",
       },
