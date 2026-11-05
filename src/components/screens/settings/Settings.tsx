@@ -587,6 +587,19 @@ function UpdatesCard({ track }: { track: Track }) {
           />
         }
       />
+      <SummaryRow
+        title={t("settingsD3.updates.autoInstall")}
+        summary={t("settingsD3.updates.autoInstallHint")}
+        action={
+          <Switch
+            aria-label={t("settingsD3.updates.autoInstall")}
+            title={loadingReason ?? undefined}
+            disabled={!policy}
+            checked={policy?.auto_install_updates ?? false}
+            onCheckedChange={(auto_install_updates) => savePolicy({ auto_install_updates })}
+          />
+        }
+      />
 
       {popup && (
         <UpdateCheckPopup

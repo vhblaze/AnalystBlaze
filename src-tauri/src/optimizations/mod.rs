@@ -839,7 +839,7 @@ fn save_active_game_mode_session(
     Ok(session)
 }
 
-fn read_active_game_mode_session() -> Option<GameModeSession> {
+pub(crate) fn read_active_game_mode_session() -> Option<GameModeSession> {
     let raw = fs::read_to_string(game_mode_session_path()).ok()?;
     serde_json::from_str(&raw).ok()
 }

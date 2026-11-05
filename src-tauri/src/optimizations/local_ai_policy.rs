@@ -65,6 +65,11 @@ pub struct LocalAiPolicy {
     /// every startup, so this field is the source of truth even if the
     /// registry entry was removed some other way.
     pub autostart_enabled: bool,
+    /// Instala a atualização já baixada sem perguntar, mas só com o PC
+    /// parado (sem entrada há 10 min), sem jogo aberto e sem Modo Jogo
+    /// (ver updater::wait_for_quiet_and_install). O app reinicia ao
+    /// instalar; por isso o padrão é desligado.
+    pub auto_install_updates: bool,
     /// Whether the main window starts hidden in the tray instead of visible.
     /// Overridden regardless of this setting whenever there's something the
     /// user needs to see right away - logged out, or an update available
@@ -121,6 +126,7 @@ impl Default for LocalAiPolicy {
             adaptive_idle_eco_threshold_seconds: 10 * 60,
             autostart_enabled: true,
             start_minimized: true,
+            auto_install_updates: false,
             telemetry_diagnostics_enabled: true,
         }
     }
@@ -189,6 +195,7 @@ pub fn save_local_ai_policy(policy: LocalAiPolicy) -> Result<LocalAiPolicy, Stri
             "adaptive_idle_eco_threshold_seconds": policy.adaptive_idle_eco_threshold_seconds,
             "autostart_enabled": policy.autostart_enabled,
             "start_minimized": policy.start_minimized,
+            "auto_install_updates": policy.auto_install_updates,
             "telemetry_diagnostics_enabled": policy.telemetry_diagnostics_enabled,
         }),
     );

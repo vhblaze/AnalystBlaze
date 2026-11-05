@@ -124,6 +124,8 @@ export const settings = {
       autostartHint: "Liga junto com o PC. Isto é só o AnalystBlaze; os outros apps ficam em Controles › Inicialização.",
       startMinimized: "Abrir só na bandeja",
       startMinimizedHint: "Ao ligar o PC, fica perto do relógio, sem abrir a janela",
+      autoInstall: "Instalar atualizações sozinho",
+      autoInstallHint: "Só com o PC parado há 10 min, sem jogo aberto e sem Modo Jogo. O app reinicia ao instalar. Desligado: você escolhe quando, pelo sino.",
       policyLoading: "Lendo a preferência...",
       saveFailed: "Não deu para salvar a preferência",
     },

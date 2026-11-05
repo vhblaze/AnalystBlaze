@@ -127,6 +127,8 @@ export const settings: Mirror<typeof pt> = {
       autostartHint: "Starts with the PC. This is only AnalystBlaze; other apps are in Controls › Startup.",
       startMinimized: "Open in the tray only",
       startMinimizedHint: "When the PC starts, it stays near the clock without opening the window",
+      autoInstall: "Install updates on its own",
+      autoInstallHint: "Only after the PC has been idle for 10 min, with no game open and no Game Mode. The app restarts to install. Off: you choose when, from the bell.",
       policyLoading: "Reading the preference...",
       saveFailed: "Could not save the preference",
     },
