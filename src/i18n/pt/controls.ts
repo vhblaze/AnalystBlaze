@@ -351,12 +351,12 @@ export const controls = {
       quarantine: {
         label: "Quarentena",
         title: "Esvaziar a quarentena",
-        size: "{{size}} guardados até você esvaziar",
+        size: "{{size}} guardados · até 5 GB e 7 dias",
         empty: "A quarentena está vazia",
         purge: "Esvaziar",
         confirm: "Apaga de vez {{size}}. Não dá para desfazer pelo AnalystBlaze.",
         done: "Quarentena esvaziada",
-        foot: "O que a limpeza tira fica aqui e pode voltar. Nada sai sozinho; esvaziar não tem volta.",
+        foot: "O que a limpeza tira fica aqui e pode voltar por até 7 dias. Passou de 7 dias, ou a quarentena passou de 5 GB, os mais antigos saem sozinhos e isso entra no Histórico. Esvaziar não tem volta.",
       },
       revert: {
         label: "Reverter e registros",

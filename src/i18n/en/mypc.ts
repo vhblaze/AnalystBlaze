@@ -115,7 +115,7 @@ export const mypc: Mirror<typeof pt> = {
       deleteSuccess: "{{name}} moved to quarantine.",
       selectedSummary: "{{count}} selected · {{size}}",
       selectedSummaryOne: "1 selected · {{size}}",
-      selectionRule: "Up to {{limit}} per item goes to quarantine and can be undone. Above that it is deleted for good: the confirmation lists each one first.",
+      selectionRule: "Up to {{limit}} per item goes to quarantine for 7 days and can be undone. Above that it is deleted for good: the confirmation lists each one first.",
       clearSelection: "Clear selection",
       deleteSelected: "Delete selected",
       bulkDeleting: "Deleting {{done}} of {{total}}...",

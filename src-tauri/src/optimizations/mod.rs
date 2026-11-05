@@ -26,6 +26,7 @@ pub mod helper_keys;
 pub mod privileged_helper;
 pub mod processes;
 pub mod protected_apps;
+pub mod quarantine_limits;
 pub mod safety;
 pub mod service_usage;
 pub mod shadow_storage;

@@ -241,6 +241,7 @@ async fn todays_automatic_actions() -> Result<Vec<audit::AuditEvent>, String> {
     const AUTOMATIC_ACTION_EVENTS: &[&str] = &[
         "shadow_storage.auto_resized",
         "service_usage.auto_restored",
+        "quarantine.auto_pruned",
     ];
     let events = tokio::task::spawn_blocking(|| audit::recent_events(250))
         .await
@@ -2295,6 +2296,7 @@ pub fn run() {
                 let _ = ensure_agent_running(&state, app.handle());
             }
             spawn_plan_sync_loop(app.handle().clone());
+            spawn_quarantine_prune_loop();
 
             // The window starts hidden (see tauri.conf.json) regardless of how
             // it was launched, so this is the single place that decides
@@ -2642,6 +2644,19 @@ const PLAN_SYNC_PERIODIC_INTERVAL: std::time::Duration = std::time::Duration::fr
 /// requiring a manual action), then a retry every 30 minutes. Failures are
 /// logged via record_plan_sync_outcome and simply retried on the next tick -
 /// never surfaced as a hard error (see refresh_account_profile_if_needed).
+/// Quarentena: até 5 GB e 7 dias (optimizations::quarantine_limits). Roda
+/// pouco depois de abrir e depois a cada 6 h; só apaga pastas da própria
+/// quarentena e registra no Histórico. Nunca abre janela.
+fn spawn_quarantine_prune_loop() {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(2 * 60)).await;
+        loop {
+            let _ = tokio::task::spawn_blocking(optimizations::quarantine_limits::prune_quarantine).await;
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+        }
+    });
+}
+
 fn spawn_plan_sync_loop(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {

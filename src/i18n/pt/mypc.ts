@@ -112,7 +112,7 @@ export const mypc = {
       deleteSuccess: "{{name}} foi para a quarentena.",
       selectedSummary: "{{count}} selecionados · {{size}}",
       selectedSummaryOne: "1 selecionado · {{size}}",
-      selectionRule: "Até {{limit}} por item vai para a quarentena e dá para desfazer. Acima disso é apagado de vez: a confirmação lista cada um antes.",
+      selectionRule: "Até {{limit}} por item vai para a quarentena por 7 dias e dá para desfazer. Acima disso é apagado de vez: a confirmação lista cada um antes.",
       clearSelection: "Limpar seleção",
       deleteSelected: "Apagar selecionados",
       bulkDeleting: "Apagando {{done}} de {{total}}...",
