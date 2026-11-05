@@ -1,4 +1,4 @@
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import markSvg from "@/brand/pulso-mark.svg?raw";
 import markMonoSvg from "@/brand/pulso-mark-mono.svg?raw";
 import { cn } from "@/lib/utils";
@@ -81,11 +81,17 @@ export function LogoMark({ size = 28, variant = "gradient", title, className }: 
   );
 }
 
-/** Marca + "AnalystBlaze", com "Blaze" em --accent-2 (doc 15 §5). */
-export function Logo({ size = 28, className }: { size?: number; className?: string }) {
+/**
+ * Marca na caixa + "AnalystBlaze", com "Blaze" em --accent-2, como no board
+ * Opcao-D3-Equilibrio (caixa escura com borda; o ponto de estado fica no canto).
+ */
+export function Logo({ badge, className }: { badge?: ReactNode; className?: string }) {
   return (
-    <span className={cn("inline-flex items-center gap-2.5", className)}>
-      <LogoMark size={size} />
+    <span className={cn("inline-flex items-center gap-3", className)}>
+      <span className="relative grid h-[37px] w-[37px] shrink-0 place-items-center rounded-control border border-line bg-surface-2">
+        <LogoMark size={22} />
+        {badge}
+      </span>
       <span className="text-[15px] font-bold tracking-tight text-fg">
         Analyst<span className="text-accent-2">Blaze</span>
       </span>

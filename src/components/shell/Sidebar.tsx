@@ -87,18 +87,20 @@ export function Sidebar({
   return (
     <aside className="relative z-20 flex h-full w-60 shrink-0 flex-col border-r border-line bg-surface">
       <div className="flex items-center px-6 pb-5 pt-6">
-        <span className="relative" title={agentLabel}>
-          <Logo />
-          {/* Estado do agente: o que antes era o "AGENT::ONLINE" do topo. */}
-          <span
-            role="img"
-            aria-label={agentLabel}
-            className={cn(
-              "absolute left-[22px] top-[22px] h-2 w-2 rounded-pill ring-2 ring-surface",
-              isReady ? "bg-ok" : "bg-warn",
-            )}
-          />
-        </span>
+        <Logo
+          badge={
+            // Estado do agente: o que antes era o "AGENT::ONLINE" do topo.
+            <span
+              role="img"
+              aria-label={agentLabel}
+              title={agentLabel}
+              className={cn(
+                "absolute -bottom-1 -right-1 h-2.5 w-2.5 rounded-pill ring-2 ring-surface",
+                isReady ? "bg-ok" : "bg-warn",
+              )}
+            />
+          }
+        />
       </div>
 
       <nav aria-label={t("nav.section")} className="flex flex-col gap-0.5 px-4">
