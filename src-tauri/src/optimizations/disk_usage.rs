@@ -867,7 +867,7 @@ pub async fn delete_item(path: String) -> ExecutionResult {
 /// let ~150GB of already-unwanted data (whole game installs) sit
 /// unreclaimed for months - see the AnalystBlaze-desktop audit session.
 /// Small/ordinary deletes still get the reversible quarantine safety net.
-const DIRECT_DELETE_THRESHOLD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const DIRECT_DELETE_THRESHOLD_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 fn delete_item_blocking(path: String) -> ExecutionResult {
     let validated = match validate_deletable_path(&path) {

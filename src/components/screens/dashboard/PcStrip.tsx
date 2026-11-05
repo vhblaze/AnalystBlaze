@@ -9,7 +9,6 @@ import {
   formatMegabytes,
   formatPercent,
   formatTemperature,
-  MISSING,
   shortGpuName,
 } from "@/lib/format";
 import type { AgentTelemetrySnapshot, DiskVolumeInfo } from "@/services/tauri/agent";
@@ -72,7 +71,7 @@ export function PcStrip({
         <Kpi
           className="px-4"
           label={t("dashboard.d3.memory")}
-          value={formatMegabytes(telemetry.ram_usage_mb, MISSING)}
+          value={formatMegabytes(telemetry.ram_usage_mb)}
           hint={telemetry.ram_total_mb ? `/ ${formatMegabytes(telemetry.ram_total_mb)}` : null}
           tone={memoryPercent !== null && memoryPercent >= THRESHOLDS.memoryPercent ? "warn" : "default"}
         />

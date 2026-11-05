@@ -10,14 +10,12 @@ import { StatusPill } from "@/components/ui/status-pill";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import { useDiskVolumes } from "@/features/disk/useDiskVolumes";
+import { diskDirectDeleteThreshold, diskOptimizationInsight as diskOptimizationInsightResource, diskUsageSummary, forgetDirectories, listDirectory } from "@/features/disk/useDiskUsage";
 import { useCleanup } from "@/features/cleanup/useCleanup";
 import {
   cancelDiskTreeScan,
-  checkDiskOptimizationInsight,
   deleteDiskUsageItem,
-  getDiskUsageSummary,
   isTauriRuntime,
-  listDiskDirectory,
   listenToDiskTreeItemReady,
   listenToDiskTreeProgress,
   type DiskOptimizationInsight,
@@ -32,14 +30,11 @@ import { cn } from "@/lib/utils";
 import { DiskTreemap, DiskTreemapLegend } from "./DiskTreemap";
 
 /**
- * Espelha `DIRECT_DELETE_THRESHOLD_BYTES` de
- * src-tauri/src/optimizations/disk_usage.rs (2 GiB). O agente não expõe o
- * valor, então ele mora só aqui: serve para avisar ANTES do clique e entra
- * nos textos via formatBytes (nunca "2 GB" fixo). Quem decide de verdade é
- * o backend, seja qual for o aviso mostrado. Se a constante do Rust mudar,
- * mude esta junto.
+ * Limite acima do qual o agente apaga de vez (sem quarentena). Vem do agente
+ * (`disk_direct_delete_threshold_bytes`); até a leitura chegar, usamos o
+ * valor atual do Rust só para o aviso. Quem decide de verdade é o agente.
  */
-const DIRECT_DELETE_THRESHOLD_BYTES = 2 * 1024 * 1024 * 1024;
+const DIRECT_DELETE_THRESHOLD_FALLBACK = 2 * 1024 * 1024 * 1024;
 /** Limite por unidade para o insight "disco quase cheio" - de propósito
  * acima do aviso de 80% da máquina inteira mostrado em outros lugares. */
 const DISK_NEAR_FULL_THRESHOLD_PERCENT = 90;
@@ -56,8 +51,8 @@ function errorMessage(error: unknown) {
   return String(error);
 }
 
-function isPermanent(item: DiskTreeNodeSummary) {
-  return item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES;
+function isPermanent(item: DiskTreeNodeSummary, threshold: number) {
+  return item.sizeBytes >= threshold;
 }
 
 function volumeName(volume: DiskVolumeInfo) {
@@ -91,7 +86,7 @@ async function detectDiskNearFull(
 
   const { volume, usedPercent } = candidates[0];
   try {
-    const summary = await getDiskUsageSummary();
+    const summary = await diskUsageSummary.refresh();
     const mount = volume.mountPoint.toLowerCase();
     const offenders = summary.categories
       .flatMap((category) => category.items)
@@ -189,8 +184,11 @@ export function Disk({
   const [selectedVolume, setSelectedVolume] = useState<string>("");
   const activeVolume = selectedVolume || volumes[0]?.mountPoint || "";
   // Só não é null quando o disco de boot é HD E a otimização agendada está
-  // desligada (ver checkDiskOptimizationInsight). Lido uma vez por visita.
-  const [diskOptimizationInsight, setDiskOptimizationInsight] = useState<DiskOptimizationInsight | null>(null);
+  // desligada. A mesma leitura de Insights (features/disk).
+  const diskOptimizationInsightRead = diskOptimizationInsightResource.use({ auto: runtimeAvailable }).data ?? null;
+  const [defragCardHidden, setDefragCardHidden] = useState(false);
+  const diskOptimizationInsight = defragCardHidden ? null : diskOptimizationInsightRead;
+  const DIRECT_DELETE_THRESHOLD_BYTES = diskDirectDeleteThreshold.use({ auto: runtimeAvailable }).data ?? DIRECT_DELETE_THRESHOLD_FALLBACK;
   const [shadowBusy, setShadowBusy] = useState(false);
 
   const [rootPath, setRootPath] = useState<string | null>(null);
@@ -230,13 +228,6 @@ export function Disk({
     void detectDiskNearFull(volumes, onDiskNearFullDetected);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runtimeAvailable, volumes]);
-
-  useEffect(() => {
-    if (!runtimeAvailable) return;
-    checkDiskOptimizationInsight()
-      .then((insight) => setDiskOptimizationInsight(insight))
-      .catch(() => undefined);
-  }, [runtimeAvailable]);
 
   useEffect(() => {
     if (!runtimeAvailable) return;
@@ -306,7 +297,7 @@ export function Disk({
       // Nada em andamento, ou a chamada falhou: não vale travar a navegação.
     }
     try {
-      const kids = await listDiskDirectory(path);
+      const kids = await listDirectory(path, { fresh: true });
       setCurrentPath(path);
       setChildren(kids);
       setPendingSizePaths(new Set(kids.filter((item) => item.isDir).map((item) => item.path)));
@@ -387,7 +378,7 @@ export function Disk({
       // A mensagem do backend diz com precisão se foi para a quarentena ou
       // se foi apagado de vez - nunca trocar por um texto fixo.
       setActionMessage(outcome?.message ?? t("mypc.disk.deleteSuccess", { name: item.name }));
-      track("disk_tree_item_deleted", { isDir: item.isDir, permanent: isPermanent(item) });
+      track("disk_tree_item_deleted", { isDir: item.isDir, permanent: isPermanent(item, DIRECT_DELETE_THRESHOLD_BYTES) });
       setSelectedPaths((current) => {
         if (!current.has(item.path)) return current;
         const next = new Map(current);
@@ -517,7 +508,7 @@ export function Disk({
               <p className="mt-1 text-[11px] text-fg-4">{t("mypc.disk.defragTech")}</p>
             </div>
           </div>
-          <Button size="sm" variant="outline" onClick={() => setDiskOptimizationInsight(null)} className="self-end sm:self-auto">
+          <Button size="sm" variant="outline" onClick={() => setDefragCardHidden(true)} className="self-end sm:self-auto">
             {t("common.close")}
           </Button>
         </div>
@@ -773,6 +764,7 @@ export function Disk({
                 <ul className="flex flex-col">
                   {sortedChildren.map((item) => (
                     <DiskRow
+                      threshold={DIRECT_DELETE_THRESHOLD_BYTES}
                       key={item.path}
                       item={item}
                       t={t}
@@ -841,6 +833,7 @@ export function Disk({
         <BulkDeleteConfirmDialog
           items={selectedItems}
           limitText={limitText}
+          threshold={DIRECT_DELETE_THRESHOLD_BYTES}
           onRemoveItem={removeFromSelection}
           onConfirm={() => void deleteSelected()}
           onCancel={() => setConfirmingBulkDelete(false)}
@@ -867,9 +860,11 @@ function DiskRow({
   onAskDelete,
   onCancelDelete,
   onConfirmDelete,
+  threshold,
 }: {
   item: DiskTreeNodeSummary;
   t: Translate;
+  threshold: number;
   selected: boolean;
   calculating: boolean;
   deleting: boolean;
@@ -882,7 +877,7 @@ function DiskRow({
   onCancelDelete: () => void;
   onConfirmDelete: () => void;
 }) {
-  const permanent = isPermanent(item);
+  const permanent = isPermanent(item, threshold);
   return (
     <li
       className={cn(
@@ -1000,6 +995,7 @@ function DiskRow({
 function BulkDeleteConfirmDialog({
   items,
   limitText,
+  threshold,
   onRemoveItem,
   onConfirm,
   onCancel,
@@ -1007,6 +1003,7 @@ function BulkDeleteConfirmDialog({
 }: {
   items: DiskTreeNodeSummary[];
   limitText: string;
+  threshold: number;
   onRemoveItem: (path: string) => void;
   onConfirm: () => void;
   onCancel: () => void;
@@ -1022,7 +1019,7 @@ function BulkDeleteConfirmDialog({
   const folderCount = items.filter((item) => item.isDir).length;
   const fileCount = items.length - folderCount;
   const totalBytes = items.reduce((sum, item) => sum + item.sizeBytes, 0);
-  const permanentCount = items.filter(isPermanent).length;
+  const permanentCount = items.filter((item) => isPermanent(item, threshold)).length;
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-bg/80 px-4">
@@ -1045,7 +1042,7 @@ function BulkDeleteConfirmDialog({
 
         <ul className="mt-4 max-h-64 overflow-y-auto rounded-control border border-line bg-bg/40">
           {items.map((item) => {
-            const permanent = isPermanent(item);
+            const permanent = isPermanent(item, threshold);
             const parent = parentPath(item.path);
             return (
               <li key={item.path} className="flex items-center gap-2.5 border-b border-line-soft px-3 py-2 text-sm last:border-b-0">

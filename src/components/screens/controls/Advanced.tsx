@@ -11,7 +11,6 @@ import { useI18n } from "@/i18n";
 import { formatBytes, formatDateTime, formatScore } from "@/lib/format";
 import { route, type Route } from "@/lib/routes";
 import {
-  getAuditLog,
   installPrivilegedHelper,
   purgeCleanupQuarantine,
   restartPrivilegedHelper,
@@ -23,7 +22,7 @@ import {
 } from "@/services/tauri/agent";
 import { useCleanup } from "@/features/cleanup/useCleanup";
 import { privilegedHelperStatus, useHelper } from "@/features/helper/useHelper";
-import { useHistory } from "@/features/history/useHistory";
+import { exportAuditLog, useHistory } from "@/features/history/useHistory";
 import { usePerformanceScan } from "@/features/performance/usePerformanceScan";
 import { errorText } from "@/features/shared/agentResource";
 import type { ControlsActions } from "./actions";
@@ -293,7 +292,7 @@ function RevertAndLogs({ actions, navigate }: { actions: ControlsActions; naviga
 
   const exportAudit = async () => {
     try {
-      const events = await getAuditLog(1000);
+      const events = await exportAuditLog();
       const blob = new Blob([JSON.stringify(events, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");

@@ -121,7 +121,7 @@ function FpsBeforeAfter({ entry, note }: { entry: FrameMeasurementEntry; note: R
           <ArrowRight className="h-5 w-5 self-center text-fg-3" aria-hidden />
           <span className={cn("text-[34px] font-semibold", verdict === "better" ? "text-ok" : "text-fg")}>{fpsNumber(after)}</span>
           <span className="text-sm text-fg-3">fps</span>
-          {verdict !== "no_measurable_difference" && <span className={cn("text-sm font-semibold", tone)}>{delta}</span>}
+          {(verdict === "better" || verdict === "worse") && <span className={cn("text-sm font-semibold", tone)}>{delta}</span>}
         </div>
         <p className={cn("mt-1 text-[13px]", tone)}>{sentence}</p>
         {m.baseline?.avgFps != null && m.optimized?.avgFps != null && (

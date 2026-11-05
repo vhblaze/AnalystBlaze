@@ -91,8 +91,8 @@ export function ScreenOutlet({
       if (actionName === "APPLY_GAME_MODE") {
         return runConfirmed(
           {
-            title: "Ativar Modo Gamer",
-            description: "O agente aplica jogo em alta prioridade, reduz fundo, ajusta energia/visual, faz limpeza segura reversível e mede rede. A restauração fica pronta para quando você sair do jogo.",
+            title: t("confirm.gameMode.title"),
+            description: t("confirm.gameMode.body"),
             risk: "sensivel",
             snapshot: true,
           },
@@ -102,8 +102,8 @@ export function ScreenOutlet({
       if (actionName === "EMPTY_TEMP") {
         return runConfirmed(
           {
-            title: "Limpeza profunda TEMP",
-            description: "Move arquivos temporários destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
+            title: t("confirm.deepTemp.title"),
+            description: t("confirm.deepTemp.body"),
             risk: "sensivel",
             snapshot: true,
           },
@@ -113,8 +113,8 @@ export function ScreenOutlet({
       if (actionName === "ENABLE_SCHEDULED_DEFRAG") {
         return runConfirmed(
           {
-            title: "Reativar otimização automática de disco",
-            description: "Reativa a tarefa nativa do Windows que desfragmenta seu HD periodicamente, mantendo a leitura de arquivos rápida com o tempo. Exige o helper privilegiado instalado.",
+            title: t("confirm.enableDefrag.title"),
+            description: t("confirm.enableDefrag.body"),
             risk: "sensivel",
             snapshot: false,
           },
@@ -124,8 +124,8 @@ export function ScreenOutlet({
       if (actionName === "START_SYSTEM_FILE_CHECK") {
         return runConfirmed(
           {
-            title: "Verificar arquivos de sistema (SFC)",
-            description: "Executa sfc /scannow. Pode levar vários minutos e usa privilégios administrativos - não interrompa nem reinicie o PC enquanto estiver em andamento.",
+            title: t("confirm.sfc.title"),
+            description: t("confirm.sfc.body"),
             risk: "sensivel",
             snapshot: false,
           },
@@ -139,8 +139,8 @@ export function ScreenOutlet({
         }
         return runConfirmed(
           {
-            title: "Reiniciar dispositivo",
-            description: "Desativa e reativa o dispositivo (o mesmo que fazer manualmente no Gerenciador de Dispositivos). Resolve boa parte dos erros de driver, mas nem sempre - alguns só somem com uma reinicialização completa do Windows.",
+            title: t("confirm.restartDevice.title"),
+            description: t("confirm.restartDevice.body"),
             risk: "sensivel",
             snapshot: false,
           },
@@ -150,8 +150,8 @@ export function ScreenOutlet({
       if (actionName === "DISABLE_GAME_DVR") {
         return runConfirmed(
           {
-            title: "Desativar gravação do Game Bar",
-            description: "Desliga a gravação em segundo plano do Xbox Game Bar (Game DVR). Reversível - a chave anterior fica salva no histórico de ações.",
+            title: t("confirm.gameDvr.title"),
+            description: t("confirm.gameDvr.body"),
             risk: "sensivel",
             snapshot: true,
           },
@@ -165,8 +165,8 @@ export function ScreenOutlet({
         }
         return runConfirmed(
           {
-            title: "Tentar corrigir serviço",
-            description: "Para e reinicia o serviço, depois confere se ele realmente continua ativo antes de dizer que funcionou. Pode não resolver causas mais profundas (instalação corrompida, dependência ausente).",
+            title: t("confirm.repairService.title"),
+            description: t("confirm.repairService.body"),
             risk: "sensivel",
             snapshot: true,
           },
@@ -180,8 +180,8 @@ export function ScreenOutlet({
         }
         return runConfirmed(
           {
-            title: "Desativar serviço permanentemente",
-            description: "O serviço para de iniciar sozinho (Tipo de inicialização = Desativado). Reversível pelo histórico de ações, mas só use se tiver certeza de que não precisa dele.",
+            title: t("confirm.disableService.title"),
+            description: t("confirm.disableService.body"),
             risk: "sensivel",
             snapshot: true,
           },
@@ -191,8 +191,8 @@ export function ScreenOutlet({
       if (actionName === "THROTTLE_DEFENDER_SCANS") {
         return runConfirmed(
           {
-            title: "Limitar verificações do Defender",
-            description: "Reduz a CPU que as verificações agendadas do Windows Defender podem usar (de 50% para 20%) e faz elas rodarem só com o PC ocioso. A proteção em tempo real não muda. Reversível pelo próprio card.",
+            title: t("confirm.defenderThrottle.title"),
+            description: t("confirm.defenderThrottle.body"),
             risk: "sensivel",
             snapshot: true,
           },
@@ -202,8 +202,8 @@ export function ScreenOutlet({
       if (actionName === "RESTORE_DEFENDER_SCAN_SETTINGS") {
         return runConfirmed(
           {
-            title: "Restaurar verificações do Defender",
-            description: "Devolve as preferências de verificação do Defender exatamente como estavam antes do AnalystBlaze limita-las.",
+            title: t("confirm.defenderRestore.title"),
+            description: t("confirm.defenderRestore.body"),
             risk: "sensivel",
             snapshot: false,
           },
@@ -213,8 +213,8 @@ export function ScreenOutlet({
       if (actionName === "RENEW_DEFENDER_DEFINITIONS") {
         return runConfirmed(
           {
-            title: "Renovar definições do Defender",
-            description: "Remove o conjunto atual de definições de vírus (que pode estar corrompido) e baixa um novo. O Defender fica alguns minutos sem definições até o download terminar - não abra arquivos suspeitos nesse intervalo.",
+            title: t("confirm.defenderRenew.title"),
+            description: t("confirm.defenderRenew.body"),
             risk: "sensivel",
             snapshot: false,
           },
@@ -228,8 +228,8 @@ export function ScreenOutlet({
         }
         return runConfirmed(
           {
-            title: `Verificar o disco ${driveLetter}: na próxima reinicialização`,
-            description: "Marca a unidade para o Windows rodar a verificação e reparo do sistema de arquivos (chkdsk) antes de abrir, na próxima vez que você reiniciar. Pode levar alguns minutos a mais nesse boot.",
+            title: t("confirm.volumeCheck.title", { drive: driveLetter }),
+            description: t("confirm.volumeCheck.body"),
             risk: "sensivel",
             snapshot: false,
           },
@@ -246,8 +246,8 @@ export function ScreenOutlet({
     onActivateGameMode: () =>
               runConfirmed(
                 {
-                  title: "Ativar Modo Gamer",
-                  description: "Aplica o perfil completo de jogo: prioridade alta para o alvo, fundo reduzido, limpeza segura, energia/visual e rede.",
+                  title: t("confirm.gameMode.title"),
+                  description: t("confirm.gameMode.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
@@ -256,8 +256,8 @@ export function ScreenOutlet({
     onRestoreOptimizations: () =>
               runConfirmed(
                 {
-                  title: "Restaurar snapshots",
-                  description: "O agente vai tentar desfazer alterações pendentes de energia, limpeza, apps de inicialização e serviços.",
+                  title: t("confirm.restoreAll.title"),
+                  description: t("confirm.restoreAll.body"),
                   risk: "seguro",
                   snapshot: false,
                 },
@@ -266,8 +266,8 @@ export function ScreenOutlet({
     onStartSystemFileCheck: () =>
               runConfirmed(
                 {
-                  title: "Verificar arquivos de sistema (SFC)",
-                  description: "Executa sfc /scannow. Pode levar vários minutos e usa privilégios administrativos - não interrompa nem reinicie o PC enquanto estiver em andamento.",
+                  title: t("confirm.sfc.title"),
+                  description: t("confirm.sfc.body"),
                   risk: "sensivel",
                   snapshot: false,
                 },
@@ -276,8 +276,8 @@ export function ScreenOutlet({
     onStartDismRestoreHealth: () =>
               runConfirmed(
                 {
-                  title: "Reparar componentes do Windows (DISM)",
-                  description: "Executa DISM /Online /Cleanup-Image /RestoreHealth. Pode levar bem mais tempo que o SFC e precisa de conexão com a internet - não interrompa nem reinicie o PC enquanto estiver em andamento.",
+                  title: t("confirm.dism.title"),
+                  description: t("confirm.dism.body"),
                   risk: "sensivel",
                   snapshot: false,
                 },
@@ -286,8 +286,8 @@ export function ScreenOutlet({
     onDisableStartup: (name, location) =>
               runConfirmed(
                 {
-                  title: `Desativar ${name}`,
-                  description: `Remove o app da inicialização do Windows em ${location ?? "registro detectado"} e cria snapshot para restaurar depois.`,
+                  title: t("confirm.disableStartup.title", { name }),
+                  description: t("confirm.disableStartup.body", { name, location: location ?? t("confirm.disableStartup.unknownLocation") }),
                   risk: "sensivel",
                   snapshot: true,
                 },
@@ -296,8 +296,8 @@ export function ScreenOutlet({
     onRestoreStartup: (name) =>
               runConfirmed(
                 {
-                  title: name ? `Restaurar ${name}` : "Restaurar apps de inicialização",
-                  description: "Restaura o valor original salvo no snapshot local do Registro.",
+                  title: name ? t("confirm.restoreStartup.title", { name }) : t("confirm.restoreStartup.titleAll"),
+                  description: t("confirm.restoreStartup.body"),
                   risk: "seguro",
                   snapshot: false,
                 },
@@ -306,8 +306,8 @@ export function ScreenOutlet({
     onStopService: (name) =>
               runConfirmed(
                 {
-                  title: `Parar serviço ${name}`,
-                  description: "O serviço será parado apenas se passar pela denylist local. Um snapshot guarda se ele estava rodando antes.",
+                  title: t("confirm.stopService.title", { name }),
+                  description: t("confirm.stopService.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
@@ -316,8 +316,8 @@ export function ScreenOutlet({
     onRestoreService: (name) =>
               runConfirmed(
                 {
-                  title: name ? `Restaurar serviço ${name}` : "Restaurar serviços",
-                  description: "Tenta religar apenas serviços que estavam rodando antes da ação.",
+                  title: name ? t("confirm.restoreService.title", { name }) : t("confirm.restoreService.titleAll"),
+                  description: t("confirm.restoreService.body"),
                   risk: "seguro",
                   snapshot: false,
                 },
@@ -326,8 +326,8 @@ export function ScreenOutlet({
     onSetPowerPlan: (plan) =>
               runConfirmed(
                 {
-                  title: plan === "high_performance" ? "Ativar alto desempenho" : plan === "power_saver" ? "Ativar economia de energia" : "Ativar plano equilibrado",
-                  description: "Altera o plano de energia do Windows e cria snapshot local para restaurar o plano anterior depois.",
+                  title: plan === "high_performance" ? t("confirm.powerPlan.high") : plan === "power_saver" ? t("confirm.powerPlan.saver") : t("confirm.powerPlan.balanced"),
+                  description: t("confirm.powerPlan.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
@@ -336,8 +336,8 @@ export function ScreenOutlet({
     onApplyVisualPerformance: () =>
               runConfirmed(
                 {
-                  title: "Ativar visual de desempenho",
-                  description: "Reduz animacoes, transparencia e efeitos visuais do Windows para deixar o sistema mais leve (reversível por snapshot). Pode causar um pequeno engasgo de um instante em outros programas abertos, principalmente navegadores - e o Windows avisando todo mundo da mudança, um comportamento normal do sistema, não um erro.",
+                  title: t("confirm.visualPerformance.title"),
+                  description: t("confirm.visualPerformance.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
@@ -346,8 +346,8 @@ export function ScreenOutlet({
     onRestoreVisualPerformance: () =>
               runConfirmed(
                 {
-                  title: "Restaurar efeitos visuais",
-                  description: "Restaura os valores visuais do Windows salvos no snapshot local mais recente.",
+                  title: t("confirm.restoreVisual.title"),
+                  description: t("confirm.restoreVisual.body"),
                   risk: "seguro",
                   snapshot: false,
                 },
@@ -356,8 +356,8 @@ export function ScreenOutlet({
     onDeepCleanTemp: () =>
               runConfirmed(
                 {
-                  title: "Limpeza profunda TEMP",
-                  description: "Move arquivos temporários destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
+                  title: t("confirm.deepTemp.title"),
+                  description: t("confirm.deepTemp.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
@@ -366,8 +366,8 @@ export function ScreenOutlet({
     onPurgeCleanup: () =>
               runConfirmed(
                 {
-                  title: "Purgar quarentena",
-                  description: "Apaga permanentemente a quarentena de limpeza. Depois disso esses arquivos não poderão ser restaurados.",
+                  title: t("confirm.purgeQuarantine.title"),
+                  description: t("confirm.purgeQuarantine.body"),
                   risk: "sensivel",
                   snapshot: false,
                 },
@@ -376,8 +376,8 @@ export function ScreenOutlet({
     onRestoreGameMode: () =>
               runConfirmed(
                 {
-                  title: "Restaurar Modo Gamer",
-                  description: "Restaura snapshots da sessão ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponíveis.",
+                  title: t("confirm.restoreGameMode.title"),
+                  description: t("confirm.restoreGameMode.body"),
                   risk: "seguro",
                   snapshot: false,
                 },
@@ -386,8 +386,8 @@ export function ScreenOutlet({
     onApplyPcCleanFast: () =>
               runConfirmed(
                 {
-                  title: "Aplicar PC limpo/rapido",
-                  description: "Executa Performance Scan, limpeza segura, ajuste visual, priorizacao de apps de fundo e Modo Gamer se houver jogo detectado.",
+                  title: t("confirm.pcCleanFast.title"),
+                  description: t("confirm.pcCleanFast.body"),
                   risk: "sensivel",
                   snapshot: true,
                 },
@@ -396,8 +396,8 @@ export function ScreenOutlet({
     onRestorePerformanceSession: (sessionId) =>
               runConfirmed(
                 {
-                  title: "Restaurar Performance Suite",
-                  description: "Restaura snapshots criados pelo perfil PC limpo/rápido, incluindo visual, prioridades e inicialização atrasada quando existirem.",
+                  title: t("confirm.restorePerformanceSession.title"),
+                  description: t("confirm.restorePerformanceSession.body"),
                   risk: "seguro",
                   snapshot: false,
                 },
@@ -406,10 +406,8 @@ export function ScreenOutlet({
     onApplyCleanupCategory: (category, mode) =>
               runConfirmed(
                 {
-                  title: category === "cleanup_quarantine" ? "Purgar quarentena" : "Aplicar limpeza",
-                  description: category === "cleanup_quarantine"
-                    ? "Apaga permanentemente a quarentena para liberar espaço real."
-                    : "Move arquivos elegiveis desta categoria para quarentena reversível.",
+                  title: category === "cleanup_quarantine" ? t("confirm.purgeQuarantine.title") : t("confirm.cleanupCategory.title"),
+                  description: category === "cleanup_quarantine" ? t("confirm.purgeQuarantine.body") : t("confirm.cleanupCategory.body"),
                   risk: category === "cleanup_quarantine" ? "sensivel" : "seguro",
                   snapshot: category !== "cleanup_quarantine",
                 },
@@ -418,8 +416,8 @@ export function ScreenOutlet({
     onDelayStartupApp: (name, location) =>
               runConfirmed(
                 {
-                  title: `Atrasar ${name}`,
-                  description: `Remove temporariamente ${name} da inicialização direta e coloca na fila local do AnalystBlaze para iniciar depois.`,
+                  title: t("confirm.delayStartup.title", { name }),
+                  description: t("confirm.delayStartup.body", { name }),
                   risk: "sensivel",
                   snapshot: true,
                 },
@@ -428,8 +426,8 @@ export function ScreenOutlet({
     onRestoreDelayedStartupApp: (name) =>
               runConfirmed(
                 {
-                  title: name ? `Restaurar ${name}` : "Restaurar inicialização atrasada",
-                  description: "Restaura o valor de inicialização salvo em snapshot local.",
+                  title: name ? t("confirm.restoreDelayedStartup.title", { name }) : t("confirm.restoreDelayedStartup.titleAll"),
+                  description: t("confirm.restoreDelayedStartup.body"),
                   risk: "seguro",
                   snapshot: false,
                 },
@@ -438,8 +436,8 @@ export function ScreenOutlet({
     onDisableGameDvr: () =>
       runConfirmed(
         {
-          title: "Desativar gravação do Game Bar",
-          description: "Desliga a gravação em segundo plano do Xbox Game Bar (Game DVR). Reversível - a chave anterior fica salva no histórico de ações.",
+          title: t("confirm.gameDvr.title"),
+          description: t("confirm.gameDvr.body"),
           risk: "sensivel",
           snapshot: true,
         },
@@ -608,8 +606,8 @@ export function ScreenOutlet({
                 onFlushDnsCache={() =>
                   runConfirmed(
                     {
-                      title: "Limpar cache de DNS",
-                      description: "Executa ipconfig /flushdns. Não exige admin e não altera nenhum estado que precise de restauração.",
+                      title: t("confirm.flushDns.title"),
+                      description: t("confirm.flushDns.body"),
                       risk: "seguro",
                       snapshot: false,
                     },
@@ -619,8 +617,8 @@ export function ScreenOutlet({
                 onSetDnsServers={(adapterName, dnsServers) =>
                   runConfirmed(
                     {
-                      title: "Alterar DNS do adaptador",
-                      description: "Troca os servidores DNS do adaptador selecionado. O agente salva a configuração atual em snapshot local para restaurar depois.",
+                      title: t("confirm.setDns.title"),
+                      description: t("confirm.setDns.body"),
                       risk: "sensivel",
                       snapshot: true,
                     },
@@ -630,8 +628,8 @@ export function ScreenOutlet({
                 onResetWinsockCatalog={() =>
                   runConfirmed(
                     {
-                      title: "Resetar catálogo Winsock",
-                      description: "Executa netsh winsock reset. E disruptivo, exige reinicialização do computador e não pode ser desfeito automaticamente pelo agente.",
+                      title: t("confirm.resetWinsock.title"),
+                      description: t("confirm.resetWinsock.body"),
                       risk: "sensivel",
                       snapshot: false,
                     },
@@ -641,19 +639,17 @@ export function ScreenOutlet({
                 onSetAdapterEnabled={async (adapterName, enabled, context) => {
                   if (context?.riskWarning) {
                     const acknowledged = await requestConfirmation({
-                      title: "Atenção: essa interface parece estar em uso",
+                      title: t("confirm.adapterInUse.title"),
                       description: context.riskWarning,
                       risk: "sensivel",
                       snapshot: false,
                     });
                     if (!acknowledged) return false;
                   }
-                  const baseDescription = enabled
-                    ? "Reativa o adaptador de rede selecionado."
-                    : "Desativa o adaptador de rede selecionado para forçar o tráfego a sair por outro adaptador. O agente salva o estado atual em snapshot local para restaurar depois.";
+                  const baseDescription = enabled ? t("confirm.adapterEnable.body") : t("confirm.adapterDisable.body");
                   return runConfirmed(
                     {
-                      title: enabled ? "Ativar adaptador de rede" : "Desativar adaptador de rede",
+                      title: enabled ? t("confirm.adapterEnable.title") : t("confirm.adapterDisable.title"),
                       description: context?.reason ? `${context.reason}\n\n${baseDescription}` : baseDescription,
                       risk: "sensivel",
                       snapshot: true,
@@ -664,8 +660,8 @@ export function ScreenOutlet({
                 onApplyNetworkTune={(request) =>
                   runConfirmed(
                     {
-                      title: "Aplicar otimização de TCP",
-                      description: "Ajusta parâmetros da pilha TCP do Windows (auto-tuning, ECN, congestionamento ou registro por adaptador). O agente salva a configuração atual em snapshot local; se ninguém confirmar, e revertido automaticamente.",
+                      title: t("confirm.networkTune.title"),
+                      description: t("confirm.networkTune.body"),
                       risk: "sensivel",
                       snapshot: true,
                     },
@@ -675,8 +671,8 @@ export function ScreenOutlet({
                 onRestartWindows={() =>
                   runConfirmed(
                     {
-                      title: "Reiniciar o computador",
-                      description: "Fecha todos os programas abertos e reinicia o Windows em alguns segundos. Necessário para aplicar ajustes de registro na rede.",
+                      title: t("confirm.restartForNetwork.title"),
+                      description: t("confirm.restartForNetwork.body"),
                       risk: "sensivel",
                       snapshot: false,
                     },

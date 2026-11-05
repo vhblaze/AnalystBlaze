@@ -11,13 +11,13 @@ import { useTelemetry } from "@/hooks/useTelemetry";
 import { useI18n } from "@/i18n";
 import { formatMs } from "@/lib/format";
 import {
-  probeGatewayIdentity,
   renewDhcpLease,
   type NetworkAdapterSummary,
   type NetworkDiagnostics,
   type NetworkTuneRequest,
   type NetworkTuneSession,
 } from "@/services/tauri/agent";
+import { identifyGateway } from "@/features/network/useLiveMode";
 
 const BUFFERBLOAT_URL = "https://www.waveform.com/tools/bufferbloat";
 
@@ -142,7 +142,7 @@ function RouterCard({ diagnostics, agentReason }: NetworkAdvancedProps) {
     if (!gateway) return;
     setBusy(true);
     try {
-      const found = await probeGatewayIdentity(gateway);
+      const found = await identifyGateway(gateway);
       setIdentity(found ?? t("mypc.network.advanced.router.unavailable"));
       track("gateway_identity_probed", { found: Boolean(found) });
     } catch {

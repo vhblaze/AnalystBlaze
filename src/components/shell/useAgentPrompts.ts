@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createElement, useCallback, useEffect, useRef, useState } from "react";
+import { ToastAction, type ToastActionElement } from "@/components/ui/toast";
+import type React from "react";
 import type { useAuth } from "@/hooks/useAuth";
 import type { useUpdater } from "@/hooks/useUpdater";
 import { toast } from "@/hooks/use-toast";
@@ -65,7 +67,7 @@ export function useAgentPrompts({
       .apply()
       .catch((error) => {
         toast({
-          title: "Atualização não foi instalada",
+          title: t("prompts.updateNotInstalled"),
           description: String(error),
           variant: "destructive",
         });
@@ -112,7 +114,7 @@ export function useAgentPrompts({
         request,
       ]);
       toast({
-        title: "Pedido do dashboard recebido",
+        title: t("prompts.remoteRequestReceived"),
         description: request.title || request.actionName,
       });
       const approved = await requestConfirmation({
@@ -373,22 +375,42 @@ export function useAgentPrompts({
         if (snooze.kind === kind && snooze.until > Date.now()) return;
 
         const copy = COPY[kind];
-        const approved = await requestConfirmation({
-          title: copy.title,
-          description: copy.body,
-          risk: t("helperHealth.risk"),
-          snapshot: false,
-        });
-        if (disposed) return;
-
-        if (!approved || !copy.fix) {
-          writeSnooze(kind, kind === "blocked" ? BLOCKED_SNOOZE_MS : SNOOZE_MS);
+        // Checagem automática: nunca abre uma janela (regra do redesign).
+        // Um aviso no canto, com o botão de corrigir; os botões que dependem
+        // do componente já dizem o motivo em cada tela.
+        writeSnooze(kind, kind === "blocked" ? BLOCKED_SNOOZE_MS : SNOOZE_MS);
+        const fix = copy.fix;
+        if (!fix) {
+          toast({ title: copy.title, description: copy.body, duration: 15_000 });
           return;
         }
+        const approved = await new Promise<boolean>((resolve) => {
+          const notice = toast({
+            title: copy.title,
+            description: `${copy.body} ${t("helperHealth.risk")}`,
+            duration: 30_000,
+            action: createElement(
+              ToastAction as unknown as React.FC<{ altText: string; onClick: () => void; children?: React.ReactNode }>,
+              {
+                altText: t("helperHealth.fixAction"),
+                onClick: () => {
+                  resolve(true);
+                  notice.dismiss();
+                },
+              },
+              t("helperHealth.fixAction"),
+            ) as unknown as ToastActionElement,
+            onOpenChange: (open: boolean) => {
+              if (!open) resolve(false);
+            },
+          });
+        });
+        if (disposed || !approved) return;
 
         toast({ title: t("helperHealth.workingTitle"), description: t("helperHealth.workingBody") });
         try {
-          let next = await copy.fix();
+          const copyFix = fix;
+          let next = await copyFix();
           if (next && typeof next === "object" && "installed" in next) privilegedHelperStatus.set(next as PrivilegedHelperStatus);
           if (disposed) return;
           // sc.exe start returns while the service is still START_PENDING,

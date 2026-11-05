@@ -115,6 +115,11 @@ export const shell = {
     failedTitle: "Não foi possível configurar o componente admin",
     stillDownTitle: "O componente admin continua indisponível",
     stillDownBody: "Tente reiniciar o PC e abrir o AnalystBlaze de novo; se persistir, reinstale o app pelo instalador para todo o computador.",
+    fixAction: "Corrigir agora",
+  },
+  prompts: {
+    updateNotInstalled: "A atualização não foi instalada",
+    remoteRequestReceived: "Pedido do site recebido",
   },
   autoActionsSummary: {
     title: "O que o AnalystBlaze fez sozinho hoje",

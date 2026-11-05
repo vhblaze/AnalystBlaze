@@ -618,6 +618,13 @@ async fn apply_cleanup_category(
 
 const DISK_USAGE_CACHE_TTL_SECONDS: i64 = 10 * 60;
 
+/// Acima deste tamanho um item é apagado de vez, sem quarentena. A tela lê
+/// daqui para avisar antes do clique (doc 13 §6: nunca um número fixo).
+#[tauri::command]
+fn disk_direct_delete_threshold_bytes() -> u64 {
+    optimizations::disk_usage::DIRECT_DELETE_THRESHOLD_BYTES
+}
+
 #[tauri::command]
 async fn disk_usage_summary(
     force_refresh: bool,
@@ -2358,6 +2365,7 @@ pub fn run() {
             scan_cleanup_categories,
             apply_cleanup_category,
             disk_usage_summary,
+            disk_direct_delete_threshold_bytes,
             cancel_disk_usage_scan,
             delete_disk_usage_item,
             list_disk_volumes,

@@ -8,7 +8,7 @@ export const common = {
   common: {
     cancel: "Cancelar",
     close: "Fechar",
-    logout: "Logout",
+    logout: "Sair",
     refresh: "Atualizar",
     refreshing: "Analisando...",
   },
@@ -43,6 +43,155 @@ export const common = {
     releaseMemory: {
       title: "Liberar memória",
       body: "Esvazia a memória em espera do Windows e a memória ociosa dos programas, pelo componente de sistema. Nenhum programa é fechado. Depois mostramos quanto foi liberado.",
+    },
+    restoreGameMode: {
+      title: "Desligar Modo Jogo",
+      body: "Restaura o que a sessão do Modo Jogo mudou: plano de energia, prioridades dos apps e efeitos visuais.",
+    },
+    deepTemp: {
+      title: "Limpeza profunda de temporários",
+      body: "Move para a quarentena os arquivos temporários que não estão em uso há pelo menos 5 minutos. Com o componente de sistema, inclui a pasta temporária do Windows. Dá para desfazer pela quarentena.",
+    },
+    purgeQuarantine: {
+      title: "Esvaziar a quarentena",
+      body: "Apaga de vez tudo o que está na quarentena para liberar o espaço. Depois disso, esses arquivos não voltam.",
+    },
+    enableDefrag: {
+      title: "Religar a otimização automática do disco",
+      body: "Religa a tarefa do Windows que desfragmenta o HD de tempos em tempos e mantém a leitura rápida. Precisa do componente de sistema.",
+    },
+    sfc: {
+      title: "Verificar os arquivos do Windows",
+      body: "Roda a verificação de arquivos do sistema do próprio Windows. Pode levar vários minutos. Não desligue nem reinicie o PC enquanto roda.",
+    },
+    dism: {
+      title: "Reparar os componentes do Windows",
+      body: "Roda o reparo de componentes do próprio Windows. Leva mais tempo que a verificação de arquivos e precisa de internet. Não desligue nem reinicie o PC enquanto roda.",
+    },
+    restartDevice: {
+      title: "Reiniciar o dispositivo",
+      body: "Desliga e religa o dispositivo, como no Gerenciador de Dispositivos. Resolve boa parte dos erros de driver; alguns só somem reiniciando o Windows.",
+    },
+    gameDvr: {
+      title: "Desligar a gravação do Game Bar",
+      body: "Desliga a gravação em segundo plano do Xbox Game Bar. Dá para desfazer: o valor anterior fica no Histórico.",
+    },
+    repairService: {
+      title: "Tentar corrigir o serviço",
+      body: "Para e reinicia o serviço, e depois confere se ele continuou ativo antes de dizer que deu certo. Pode não resolver causas mais profundas.",
+    },
+    disableService: {
+      title: "Desligar o serviço de vez",
+      body: "O serviço deixa de iniciar sozinho. Dá para desfazer pelo Histórico. Use só se tiver certeza de que não precisa dele.",
+    },
+    defenderThrottle: {
+      title: "Limitar as verificações do Defender",
+      body: "Reduz a CPU que as verificações agendadas do Defender podem usar (de 50% para 20%) e deixa que rodem só com o PC parado. A proteção em tempo real não muda. Dá para desfazer pelo próprio card.",
+    },
+    defenderRestore: {
+      title: "Restaurar as verificações do Defender",
+      body: "Devolve as preferências de verificação do Defender exatamente como estavam antes.",
+    },
+    defenderRenew: {
+      title: "Renovar as definições do Defender",
+      body: "Remove o conjunto atual de definições de vírus (que pode estar corrompido) e baixa um novo. O Defender fica alguns minutos sem definições até terminar; não abra arquivos suspeitos nesse intervalo.",
+    },
+    volumeCheck: {
+      title: "Verificar o disco {{drive}}: na próxima reinicialização",
+      body: "Marca a unidade para o Windows verificar e reparar o sistema de arquivos antes de abrir, na próxima vez que você reiniciar. Esse boot pode levar alguns minutos a mais.",
+    },
+    disableStartup: {
+      title: "Tirar {{name}} da inicialização",
+      body: "Remove o app da inicialização do Windows ({{location}}) e guarda como estava para voltar com um clique.",
+      unknownLocation: "registro detectado",
+    },
+    restoreStartup: {
+      title: "Voltar {{name}} para a inicialização",
+      titleAll: "Voltar os apps para a inicialização",
+      body: "Restaura o valor guardado antes da mudança.",
+    },
+    delayStartup: {
+      title: "Atrasar {{name}}",
+      body: "Tira {{name}} da inicialização direta e coloca na fila do AnalystBlaze. Hoje a fila não reabre o app sozinho.",
+    },
+    restoreDelayedStartup: {
+      title: "Voltar {{name}} para a inicialização",
+      titleAll: "Voltar os apps atrasados para a inicialização",
+      body: "Restaura o valor de inicialização guardado antes da mudança.",
+    },
+    stopService: {
+      title: "Parar o serviço {{name}}",
+      body: "Só para se o serviço não estiver na lista de críticos. Antes, guarda se ele estava rodando.",
+    },
+    restoreService: {
+      title: "Religar o serviço {{name}}",
+      titleAll: "Religar os serviços",
+      body: "Religa só os serviços que estavam rodando antes da ação.",
+    },
+    powerPlan: {
+      high: "Ativar alto desempenho",
+      saver: "Ativar economia de energia",
+      balanced: "Ativar plano equilibrado",
+      body: "Troca o plano de energia do Windows e guarda o anterior para voltar depois.",
+    },
+    visualPerformance: {
+      title: "Ativar visual de desempenho",
+      body: "Reduz animações, transparência e efeitos visuais do Windows. Dá para desfazer. Outros programas abertos podem dar um engasgo de um instante na troca; é o Windows avisando a mudança, não um erro.",
+    },
+    restoreVisual: {
+      title: "Restaurar os efeitos visuais",
+      body: "Volta os efeitos visuais do Windows como estavam antes da última mudança.",
+    },
+    restorePerformanceSession: {
+      title: "Desfazer PC limpo e rápido",
+      body: "Volta o que a última sessão de PC limpo e rápido mudou: efeitos visuais, prioridades e inicialização.",
+    },
+    cleanupCategory: {
+      title: "Limpar esta categoria",
+      body: "Move os arquivos desta categoria para a quarentena. Dá para desfazer até esvaziar a quarentena.",
+    },
+    startAgent: {
+      title: "Conectar o agente",
+      body: "Conecta o agente local e começa a medir.",
+    },
+    collectSample: {
+      title: "Medir agora",
+      body: "Faz uma leitura do PC agora.",
+    },
+    login: {
+      title: "Entrar pelo site",
+      body: "Abre o login do AnalystBlaze no navegador.",
+    },
+    flushDns: {
+      title: "Limpar o cache de DNS",
+      body: "Esvazia a lista de endereços que o Windows guardou. Não precisa de administrador e não muda nada que precise ser desfeito.",
+    },
+    setDns: {
+      title: "Trocar o DNS do adaptador",
+      body: "Troca os servidores DNS do adaptador escolhido. A configuração atual fica guardada para voltar depois.",
+    },
+    resetWinsock: {
+      title: "Redefinir a rede do Windows (Winsock)",
+      body: "Redefine a camada de rede do Windows. Exige reiniciar o PC e não dá para desfazer pelo AnalystBlaze.",
+    },
+    adapterInUse: {
+      title: "Atenção: esta interface parece estar em uso",
+    },
+    adapterEnable: {
+      title: "Ligar o adaptador de rede",
+      body: "Liga de novo o adaptador de rede escolhido.",
+    },
+    adapterDisable: {
+      title: "Desligar o adaptador de rede",
+      body: "Desliga o adaptador escolhido para o tráfego sair por outro. O estado atual fica guardado para voltar depois.",
+    },
+    networkTune: {
+      title: "Aplicar o ajuste de rede",
+      body: "Ajusta parâmetros de TCP do Windows. A configuração atual fica guardada; se você não confirmar que ficou bom, volta sozinha.",
+    },
+    restartForNetwork: {
+      title: "Reiniciar o computador",
+      body: "Fecha todos os programas abertos e reinicia o Windows em alguns segundos. É preciso para o ajuste de rede valer.",
     },
   },
   notFound: {

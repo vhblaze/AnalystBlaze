@@ -1465,6 +1465,12 @@ export type DiskOptimizationInsight = {
 
 /** Only meaningful when isHdd is true - an SSD is TRIM'd, not
  * defragmented, so `defrag` is always null for one. */
+/** Acima disto o agente apaga de vez (sem quarentena). Lido do agente, nunca fixo na tela. */
+export async function getDiskDirectDeleteThresholdBytes(): Promise<number> {
+  requireTauriRuntime("Limite de exclusão direta");
+  return invoke<number>("disk_direct_delete_threshold_bytes");
+}
+
 export async function checkDiskOptimizationInsight(): Promise<DiskOptimizationInsight> {
   requireTauriRuntime("Explorador de disco");
   return invoke<DiskOptimizationInsight>("check_disk_optimization_insight");
