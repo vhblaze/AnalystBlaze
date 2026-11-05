@@ -1,0 +1,97 @@
+/*
+ * Paleta D3 (doc 15 §3). Fonte única das cores do app: tailwind.config.ts
+ * lê estas variáveis e src/design/tokens.ts repete os mesmos valores em hex
+ * para o que não passa por classe (gráficos, treemap).
+ *
+ * Cada cor existe como canais RGB ("7 11 20") para o Tailwind aplicar
+ * opacidade (bg-accent/10). Escuro é o padrão; o claro ainda não tem board,
+ * então os valores claros são só o mapeamento do tema claro que já existia.
+ *
+ * Os tons "-soft" (texto claro sobre fundo tingido) e "-strong" (preenchimento)
+ * existem porque as telas atuais usam três intensidades de cada cor.
+ * Contraste: nenhum texto abaixo de --text-4 (#6E7F96, 4,6:1). #5B6B82 é proibido.
+ */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-rgb: 7 11 20;            /* #070B14 */
+  --surface-rgb: 11 17 29;      /* #0B111D */
+  --surface-2-rgb: 12 19 34;    /* #0C1322 */
+  --line-rgb: 23 35 56;         /* #172338 */
+  --line-soft-rgb: 20 28 44;    /* #141C2C */
+
+  --text-rgb: 230 237 246;      /* #E6EDF6 */
+  --text-2-rgb: 169 183 203;    /* #A9B7CB */
+  --text-3-rgb: 143 160 182;    /* #8FA0B6 */
+  --text-4-rgb: 110 127 150;    /* #6E7F96 */
+
+  --accent-rgb: 34 211 238;     /* #22D3EE */
+  --accent-soft-rgb: 165 243 252;
+  --accent-strong-rgb: 6 182 212;
+  --accent-ink-rgb: 6 32 42;    /* #06202A: texto sobre o primário */
+  --accent-2-rgb: 56 189 248;   /* #38BDF8 */
+  --violet-rgb: 196 181 253;    /* #C4B5FD */
+  --violet-soft-rgb: 221 214 254;
+  --violet-strong-rgb: 139 92 246;
+  --brand-violet-rgb: 167 139 250; /* #A78BFA: fim do degradê da marca */
+
+  --ok-rgb: 52 211 153;         /* #34D399 */
+  --ok-soft-rgb: 167 243 208;
+  --ok-strong-rgb: 16 185 129;
+  --warn-rgb: 251 191 36;       /* #FBBF24 */
+  --warn-soft-rgb: 253 230 138;
+  --warn-strong-rgb: 245 158 11;
+  --danger-rgb: 252 165 165;    /* #FCA5A5 */
+  --danger-soft-rgb: 254 205 211;
+  --danger-strong-rgb: 244 63 94;
+  --danger-line-rgb: 127 29 45; /* #7F1D2D */
+
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --radius-pill: 999px;
+
+  --font-sans: "Inter Variable", "Inter", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", monospace;
+
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+:root[data-theme="light"],
+:root.light {
+  color-scheme: light;
+
+  --bg-rgb: 244 247 251;
+  --surface-rgb: 255 255 255;
+  --surface-2-rgb: 238 243 248;
+  --line-rgb: 213 222 233;
+  --line-soft-rgb: 228 234 242;
+
+  --text-rgb: 11 18 32;
+  --text-2-rgb: 51 65 85;
+  --text-3-rgb: 71 85 105;
+  --text-4-rgb: 86 101 122;
+
+  --accent-rgb: 8 145 178;
+  --accent-soft-rgb: 14 116 144;
+  --accent-strong-rgb: 6 182 212;
+  --accent-ink-rgb: 255 255 255;
+  --accent-2-rgb: 2 132 199;
+  --violet-rgb: 109 40 217;
+  --violet-soft-rgb: 91 33 182;
+  --violet-strong-rgb: 139 92 246;
+  --brand-violet-rgb: 124 58 237;
+
+  --ok-rgb: 5 150 105;
+  --ok-soft-rgb: 4 120 87;
+  --ok-strong-rgb: 16 185 129;
+  --warn-rgb: 180 83 9;
+  --warn-soft-rgb: 146 64 14;
+  --warn-strong-rgb: 245 158 11;
+  --danger-rgb: 220 38 38;
+  --danger-soft-rgb: 185 28 28;
+  --danger-strong-rgb: 244 63 94;
+  --danger-line-rgb: 254 202 202;
+}

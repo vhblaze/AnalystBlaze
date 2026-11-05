@@ -12,7 +12,7 @@ import {
   Sparkles,
   Wifi,
 } from "lucide-react";
-import { TiltCard } from "../TiltCard";
+import { cssVar } from "@/design/tokens";
 import type { User } from "@/hooks/useAuth";
 import {
   getActiveGameModeSession,
@@ -145,42 +145,40 @@ export function Dashboard({
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-cyan-400/70">
+        <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-accent/70">
           <Sparkles className="h-3 w-3" />
           {t("dashboard.eyebrow")}
         </div>
-        <h1 className="text-[42px] font-semibold leading-tight tracking-tight text-slate-50">
+        <h1 className="text-[42px] font-semibold leading-tight tracking-tight text-fg">
           {t("dashboard.greetingPrefix")}{" "}
-          <span className="text-gradient-cyber">{user?.name ?? t("dashboard.fallbackPilot")}</span>
+          <span className="text-gradient-brand">{user?.name ?? t("dashboard.fallbackPilot")}</span>
         </h1>
-        <p className="max-w-xl text-sm text-slate-400">
+        <p className="max-w-xl text-sm text-fg-3">
           {telemetry ? t("dashboard.descriptionLive") : t("dashboard.description")}
         </p>
       </header>
 
-      <TiltCard className="h-[320px]" intensity={5}>
+      <div className="glass-panel relative h-[320px]">
         <div className="relative flex h-full flex-col justify-between overflow-hidden p-8">
-          <div className="pointer-events-none absolute -right-16 -top-16 h-64 w-64 rounded-full bg-gradient-to-br from-cyan-500/30 via-violet-500/20 to-transparent blur-3xl" />
-          <div className="pointer-events-none absolute -left-10 bottom-0 h-40 w-40 rounded-full bg-fuchsia-500/10 blur-3xl" />
 
           <div className="relative flex items-start justify-between gap-6">
             <div className="min-w-0">
-              <div className="font-mono text-[11px] uppercase tracking-[0.3em] text-cyan-400/80">
+              <div className="font-mono text-[11px] uppercase tracking-[0.3em] text-accent/80">
                 {t("dashboard.statusLabel")}
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-3">
                 <span className="relative flex h-3 w-3">
-                  <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${isLive ? "bg-cyan-400" : "bg-amber-400"} opacity-60`} />
-                  <span className={`relative inline-flex h-3 w-3 rounded-full ${isLive ? "bg-cyan-400 shadow-[0_0_12px_hsl(187_100%_60%)]" : "bg-amber-400 shadow-[0_0_12px_hsl(40_100%_60%)]"}`} />
+                  <span className={`absolute inline-flex h-full w-full animate-ping rounded-full ${isLive ? "bg-accent" : "bg-warn"} opacity-60`} />
+                  <span className={`relative inline-flex h-3 w-3 rounded-full ${isLive ? "bg-accent ": "bg-warn"}`} />
                 </span>
-                <span className="text-3xl font-semibold tracking-tight text-slate-50">
+                <span className="text-3xl font-semibold tracking-tight text-fg">
                   {statusTitle}
                 </span>
                 <span className={`rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${healthTone(telemetry?.health_level)}`}>
                   {telemetry ? healthLabel : t("common.pending")}
                 </span>
               </div>
-              <p className="mt-2 text-sm text-slate-400">
+              <p className="mt-2 text-sm text-fg-3">
                 {lastCheckSeconds === null
                   ? t("dashboard.noTelemetryDesc")
                   : lastCheckSeconds === 1
@@ -189,10 +187,10 @@ export function Dashboard({
               </p>
             </div>
             <div className="flex shrink-0 flex-col items-end gap-2">
-              <div className="grid h-12 w-12 place-items-center rounded-xl border border-cyan-400/30 bg-cyan-500/10">
-                <ShieldCheck className="h-6 w-6 text-cyan-300" />
+              <div className="grid h-12 w-12 place-items-center rounded-xl border border-accent/30 bg-accent-strong/10">
+                <ShieldCheck className="h-6 w-6 text-accent" />
               </div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500">
+              <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-fg-4">
                 {telemetry?.telemetry_mode ?? status?.mode ?? t("common.stopped")}
               </div>
             </div>
@@ -240,8 +238,8 @@ export function Dashboard({
                   }}
                   className={`group inline-flex items-center gap-2.5 rounded-xl border px-6 py-3 text-sm font-semibold transition-all duration-300 disabled:opacity-70 ${
                     gameModeActive
-                      ? "border-emerald-300/50 bg-emerald-400/15 text-emerald-50 hover:border-amber-300/60 hover:bg-amber-400/15"
-                      : "border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 text-cyan-100 hover:border-cyan-300/60 hover:from-cyan-500/30 hover:shadow-[0_0_30px_-5px_hsl(187_100%_55%/0.7)]"
+                      ? "border-ok/50 bg-ok/15 text-ok-soft hover:border-warn/60 hover:bg-warn/15"
+                      : "border-accent/40 bg-gradient-to-r from-accent-strong/20 to-violet-strong/10 text-accent-soft hover:border-accent/60 hover:from-accent-strong/30"
                   }`}
                 >
                   {gameModeActive ? (
@@ -255,14 +253,14 @@ export function Dashboard({
                 <button
                   disabled={busy || !isReady}
                   onClick={() => void handlePcCleanFastClick()}
-                  className="group inline-flex items-center gap-2.5 rounded-xl border border-emerald-400/40 bg-emerald-400/10 px-5 py-3 text-sm font-semibold text-emerald-100 transition-all duration-300 hover:border-emerald-300/60 hover:bg-emerald-400/15 disabled:opacity-50"
+                  className="group inline-flex items-center gap-2.5 rounded-xl border border-ok/40 bg-ok/10 px-5 py-3 text-sm font-semibold text-ok-soft transition-all duration-300 hover:border-ok/60 hover:bg-ok/15 disabled:opacity-50"
                 >
                   <Sparkles className="h-4 w-4" />
                   PC limpo/rapido
                 </button>
               </div>
               {isReady && !paidGameModeAllowed && gameModeUsage && (
-                <span className={`text-xs ${gameModeUsage.limitReached ? "text-amber-300" : "text-slate-500"}`}>
+                <span className={`text-xs ${gameModeUsage.limitReached ? "text-warn" : "text-fg-4"}`}>
                   {gameModeUsage.limitReached
                     ? "Limite semanal de Modo Gamer atingido. Volta na próxima semana."
                     : `Modo Gamer: ${formatGameModeMinutes(gameModeUsage.remainingSeconds ?? 0)} restantes esta semana (plano gratuito, por PC).`}
@@ -272,7 +270,7 @@ export function Dashboard({
             <Sparkline data={cpuHistory} />
           </div>
         </div>
-      </TiltCard>
+      </div>
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
         <MetricCard icon={Cpu} label={t("dashboard.cpuInfo")} value={shortCpuName(telemetry?.cpu_name)} detail={telemetry ? `${formatPercent(telemetry.cpu_usage)} - ${formatGhz(telemetry.cpu_frequency_mhz)}` : t("common.unavailable")} />
@@ -312,8 +310,8 @@ function Stat({
   tone?: string;
 }) {
   return (
-    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/50 p-4 backdrop-blur-sm">
-      <div className="flex items-center justify-between gap-2 text-slate-500">
+    <div className="rounded-xl border border-line bg-bg/50 p-4">
+      <div className="flex items-center justify-between gap-2 text-fg-4">
         <div className="flex min-w-0 items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest">
           {icon}
           <span className="truncate">{label}</span>
@@ -322,7 +320,7 @@ function Stat({
           {delta}
         </span>
       </div>
-      <div className="mt-2 truncate text-2xl font-semibold tracking-tight text-slate-50">{value}</div>
+      <div className="mt-2 truncate text-2xl font-semibold tracking-tight text-fg">{value}</div>
     </div>
   );
 }
@@ -347,16 +345,16 @@ function MetricCard({
   return (
     <Tag
       onClick={onClick}
-      className={`rounded-2xl border border-cyan-500/10 bg-slate-950/45 p-5 text-left transition-colors ${
-        onClick ? "cursor-pointer hover:border-cyan-400/30 hover:bg-slate-950/70" : ""
+      className={`rounded-2xl border border-line bg-bg/45 p-5 text-left transition-colors ${
+        onClick ? "cursor-pointer hover:border-accent/30 hover:bg-bg/70" : ""
       }`}
     >
-      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-slate-500">
-        <Icon className="h-4 w-4 text-cyan-300" />
+      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-fg-4">
+        <Icon className="h-4 w-4 text-accent" />
         <span className="truncate">{label}</span>
       </div>
-      <div className="mt-3 truncate text-xl font-semibold text-slate-100">{value}</div>
-      <div className="mt-1 truncate text-xs text-slate-500">{detail}</div>
+      <div className="mt-3 truncate text-xl font-semibold text-fg">{value}</div>
+      <div className="mt-1 truncate text-xs text-fg-4">{detail}</div>
     </Tag>
   );
 }
@@ -379,14 +377,14 @@ function Sparkline({ data }: { data: number[] }) {
     <svg viewBox="0 0 120 36" className="h-9 w-32 opacity-90">
       <defs>
         <linearGradient id="sparkGrad" x1="0" x2="1" y1="0" y2="0">
-          <stop offset="0%" stopColor="hsl(187 100% 60%)" />
-          <stop offset="100%" stopColor="hsl(265 90% 70%)" />
+          <stop offset="0%" stopColor={cssVar("accent")} />
+          <stop offset="100%" stopColor={cssVar("violet")} />
         </linearGradient>
       </defs>
       {points ? (
         <polyline points={points} fill="none" stroke="url(#sparkGrad)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
       ) : (
-        <line x1="0" y1="30" x2="120" y2="30" stroke="hsl(215 20% 35%)" strokeDasharray="3 5" strokeWidth="1.2" />
+        <line x1="0" y1="30" x2="120" y2="30" stroke={cssVar("text-4", 0.6)} strokeDasharray="3 5" strokeWidth="1.2" />
       )}
     </svg>
   );
@@ -482,15 +480,15 @@ function formatDuration(seconds: number) {
 }
 
 function healthTone(level?: string) {
-  if (level === "critical") return "border-rose-400/30 bg-rose-400/10 text-rose-300";
-  if (level === "watch") return "border-amber-400/30 bg-amber-400/10 text-amber-300";
-  return "border-emerald-400/30 bg-emerald-400/10 text-emerald-300";
+  if (level === "critical") return "border-danger/30 bg-danger/10 text-danger";
+  if (level === "watch") return "border-warn/30 bg-warn/10 text-warn";
+  return "border-ok/30 bg-ok/10 text-ok";
 }
 
 function textTone(level?: string) {
-  if (level === "critical") return "text-rose-400";
-  if (level === "watch") return "text-amber-400";
-  return "text-emerald-400";
+  if (level === "critical") return "text-danger";
+  if (level === "watch") return "text-warn";
+  return "text-ok";
 }
 
 function healthLevelLabel(level: string | undefined, t: (key: string, params?: Record<string, string | number | boolean>) => string) {

@@ -93,12 +93,12 @@ export function Settings({
           ? t("settings.helperStateRunning")
           : t("settings.helperStateRunningAttention");
   const helperStateStyle = !helperStatus?.installed
-    ? "border-rose-400/30 bg-rose-400/10 text-rose-200"
+    ? "border-danger/30 bg-danger/10 text-danger-soft"
     : !helperStatus.running
-      ? "border-amber-400/30 bg-amber-400/10 text-amber-200"
+      ? "border-warn/30 bg-warn/10 text-warn-soft"
       : helperStatus.available
-        ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-200"
-        : "border-amber-400/30 bg-amber-400/10 text-amber-200";
+        ? "border-ok/30 bg-ok/10 text-ok-soft"
+        : "border-warn/30 bg-warn/10 text-warn-soft";
 
   const runHelperAction = async (action: () => Promise<PrivilegedHelperStatus>, successMessage: string) => {
     setHelperBusy(true);
@@ -230,30 +230,30 @@ export function Settings({
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <div className="font-mono text-[11px] uppercase tracking-[0.3em] text-cyan-400/70">
+        <div className="font-mono text-[11px] uppercase tracking-[0.3em] text-accent/70">
           {t("settings.eyebrow")}
         </div>
-        <h1 className="text-[36px] font-semibold tracking-tight text-slate-50">
+        <h1 className="text-[36px] font-semibold tracking-tight text-fg">
           {t("settings.title")}
         </h1>
-        <p className="max-w-3xl text-sm text-slate-400">{t("settings.description")}</p>
+        <p className="max-w-3xl text-sm text-fg-3">{t("settings.description")}</p>
       </header>
 
       {!onboardingDone && (
-        <section className="glass-panel cyber-glow p-6" role="region" aria-label={t("settings.onboardingTitle")}>
+        <section className="glass-panel p-6"role="region"aria-label={t("settings.onboardingTitle")}>
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="flex items-start gap-3">
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-cyan-400/30 bg-cyan-500/10">
-                <Check className="h-4 w-4 text-cyan-300" />
+              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-accent/30 bg-accent-strong/10">
+                <Check className="h-4 w-4 text-accent" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold text-slate-100">{t("settings.onboardingTitle")}</h2>
-                <p className="mt-1 max-w-2xl text-xs leading-relaxed text-slate-400">
+                <h2 className="text-sm font-semibold text-fg">{t("settings.onboardingTitle")}</h2>
+                <p className="mt-1 max-w-2xl text-xs leading-relaxed text-fg-3">
                   {t("settings.onboardingDesc")}
                 </p>
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   {["login", "telemetry", "restore", "privacy"].map((step) => (
-                    <span key={step} className="rounded-md border border-cyan-500/15 bg-slate-950/60 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-slate-400">
+                    <span key={step} className="rounded-md border border-line bg-bg/60 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-fg-3">
                       {t(`settings.onboardingSteps.${step}`)}
                     </span>
                   ))}
@@ -262,7 +262,7 @@ export function Settings({
             </div>
             <button
               onClick={finishOnboarding}
-              className="rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-medium text-cyan-100 transition-all hover:border-cyan-300/60 hover:bg-cyan-400/15"
+              className="rounded-xl border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm font-medium text-accent-soft transition-all hover:border-accent/60 hover:bg-accent/15"
             >
               {t("settings.onboardingDone")}
             </button>
@@ -270,10 +270,10 @@ export function Settings({
         </section>
       )}
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex items-center gap-2 pb-4">
-          {dark ? <Moon className="h-3.5 w-3.5 text-cyan-300" /> : <Sun className="h-3.5 w-3.5 text-cyan-300" />}
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.appearance")}</h2>
+          {dark ? <Moon className="h-3.5 w-3.5 text-accent" /> : <Sun className="h-3.5 w-3.5 text-accent" />}
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.appearance")}</h2>
         </div>
         <div className="flex flex-col gap-3">
           <Row
@@ -292,8 +292,8 @@ export function Settings({
                 setLocale(value as Locale);
                 track("locale_changed", { locale: value });
               }}>
-                <SelectTrigger className="w-40 border-cyan-500/20 bg-slate-950/60 font-mono text-xs">
-                  <Globe className="mr-2 h-3.5 w-3.5 text-cyan-300" />
+                <SelectTrigger className="w-40 border-line bg-bg/60 font-mono text-xs">
+                  <Globe className="mr-2 h-3.5 w-3.5 text-accent" />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -318,7 +318,7 @@ export function Settings({
             label={t("settings.telemetryDiagnostics")}
             description={t("settings.telemetryDiagnosticsDesc")}
             control={
-              <span className="shrink-0 rounded-md border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-cyan-200">
+              <span className="shrink-0 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-accent-soft">
                 {t("settings.telemetryDiagnosticsAlwaysOn")}
               </span>
             }
@@ -326,31 +326,31 @@ export function Settings({
         </div>
       </section>
 
-      <section className={`glass-panel cyber-glow p-6 transition-all ${adaptive ? "ring-1 ring-cyan-400/40" : ""}`}>
+      <section className={`glass-panel p-6 transition-all ${adaptive ? "ring-1 ring-accent/40": ""}`}>
         <div className="flex items-center gap-2 pb-4">
-          <Brain className="h-3.5 w-3.5 text-cyan-300" />
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.adaptive")}</h2>
+          <Brain className="h-3.5 w-3.5 text-accent" />
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.adaptive")}</h2>
           {adaptive && (
-            <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-cyan-200">
-              <span className="h-1 w-1 animate-pulse rounded-full bg-cyan-300" />
+            <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent-strong/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-accent-soft">
+              <span className="h-1 w-1 animate-pulse rounded-full bg-accent" />
               {t("settings.adaptiveActive")}
             </span>
           )}
         </div>
 
-        <div className="flex items-start justify-between gap-4 rounded-xl border border-cyan-500/15 bg-slate-950/40 p-5">
+        <div className="flex items-start justify-between gap-4 rounded-xl border border-line bg-bg/40 p-5">
           <div className="flex items-start gap-3">
-            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-cyan-400/30 bg-cyan-500/10">
-              <Sparkles className="h-4 w-4 text-cyan-300" />
+            <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-accent/30 bg-accent-strong/10">
+              <Sparkles className="h-4 w-4 text-accent" />
             </div>
             <div>
-              <div className="text-sm font-semibold text-slate-100">{t("settings.adaptiveDecision")}</div>
-              <div className="mt-0.5 max-w-md text-xs text-slate-500">
+              <div className="text-sm font-semibold text-fg">{t("settings.adaptiveDecision")}</div>
+              <div className="mt-0.5 max-w-md text-xs text-fg-4">
                 {t("settings.adaptiveDesc")}
               </div>
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {["energy", "processes", "network", "fans"].map((tag) => (
-                  <span key={tag} className="rounded-md border border-cyan-500/15 bg-slate-950/60 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-slate-400">
+                  <span key={tag} className="rounded-md border border-line bg-bg/60 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-fg-3">
                     {t(`settings.tags.${tag}`)}
                   </span>
                 ))}
@@ -361,19 +361,19 @@ export function Settings({
         </div>
 
         {adaptive && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-[11px] text-amber-200/80">
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-warn/20 bg-warn/5 px-3 py-2 text-[11px] text-warn-soft/80">
             <Zap className="h-3 w-3" />
             {t("settings.adaptiveWarning")}
           </div>
         )}
         {!automaticGameModeAllowed && (
-          <div className="mt-3 flex items-center gap-2 rounded-lg border border-cyan-400/20 bg-cyan-400/5 px-3 py-2 text-[11px] text-cyan-100/80">
+          <div className="mt-3 flex items-center gap-2 rounded-lg border border-line bg-accent/5 px-3 py-2 text-[11px] text-accent-soft/80">
             <Shield className="h-3 w-3" />
             {t("settings.aiAutomationPlanNotice")}
           </div>
         )}
         {weeklyAiUsage && weeklyAiUsage.limitSeconds != null && (
-          <div className={`mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${weeklyAiUsage.limitReached ? "border-amber-400/20 bg-amber-400/5 text-amber-200/80" : "border-cyan-400/20 bg-cyan-400/5 text-cyan-100/80"}`}>
+          <div className={`mt-3 flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] ${weeklyAiUsage.limitReached ? "border-warn/20 bg-warn/5 text-warn-soft/80" : "border-line bg-accent/5 text-accent-soft/80"}`}>
             <Zap className="h-3 w-3" />
             {weeklyAiUsage.limitReached
               ? "Limite semanal de automacao atingido. Volta na próxima semana, ou assine um plano pago para automacao continua."
@@ -444,14 +444,14 @@ export function Settings({
           />
         </div>
 
-        <div className="mt-3 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
+        <div className="mt-3 rounded-xl border border-line bg-bg/40 p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <div className="text-sm font-semibold text-slate-100">{t("settings.aiRisk")}</div>
-              <div className="mt-0.5 text-xs text-slate-500">{t("settings.aiRiskDesc")}</div>
+              <div className="text-sm font-semibold text-fg">{t("settings.aiRisk")}</div>
+              <div className="mt-0.5 text-xs text-fg-4">{t("settings.aiRiskDesc")}</div>
             </div>
             <Select value={aiPolicy.max_risk} onValueChange={(max_risk) => updateAiPolicy({ max_risk })}>
-              <SelectTrigger className="w-40 border-cyan-500/20 bg-slate-950/60 font-mono text-xs">
+              <SelectTrigger className="w-40 border-line bg-bg/60 font-mono text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -464,7 +464,7 @@ export function Settings({
 
         <div className="mt-4 flex flex-col gap-3">
           <PolicyGroup
-            icon={<Trash2 className="h-4 w-4 text-cyan-300" />}
+            icon={<Trash2 className="h-4 w-4 text-accent" />}
             title={t("settings.aiCleanupGroup")}
             description={t("settings.aiCleanupGroupDesc")}
             onOpenHistory={onOpenHistory}
@@ -475,7 +475,7 @@ export function Settings({
           </PolicyGroup>
 
           <PolicyGroup
-            icon={<Battery className="h-4 w-4 text-cyan-300" />}
+            icon={<Battery className="h-4 w-4 text-accent" />}
             title={t("settings.aiEnergyGroup")}
             description={t("settings.aiEnergyGroupDesc")}
             onOpenHistory={onOpenHistory}
@@ -485,10 +485,10 @@ export function Settings({
         </div>
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex items-center gap-2 pb-4">
-          <Eye className="h-3.5 w-3.5 text-cyan-300" />
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.accessibility")}</h2>
+          <Eye className="h-3.5 w-3.5 text-accent" />
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.accessibility")}</h2>
         </div>
         <div className="flex flex-col gap-3">
           <Row
@@ -504,28 +504,28 @@ export function Settings({
         </div>
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex items-center gap-2 pb-4">
-          <Shield className="h-3.5 w-3.5 text-cyan-300" />
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.privacy")}</h2>
+          <Shield className="h-3.5 w-3.5 text-accent" />
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.privacy")}</h2>
         </div>
         <Row
           label={t("settings.uiTelemetry")}
           description={t("settings.uiTelemetryDesc")}
           control={<Switch checked={telem} onCheckedChange={setTelem} />}
         />
-        <div className="mt-3 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4 font-mono text-[11px] uppercase tracking-widest text-slate-500">
+        <div className="mt-3 rounded-xl border border-line bg-bg/40 p-4 font-mono text-[11px] uppercase tracking-widest text-fg-4">
           {t("settings.telemetryBuffer")}: {queueSize}
         </div>
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex items-center gap-2 pb-4">
-          <DownloadCloud className="h-3.5 w-3.5 text-cyan-300" />
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("update.title")}</h2>
+          <DownloadCloud className="h-3.5 w-3.5 text-accent" />
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("update.title")}</h2>
           {updater.status?.available && (
-            <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-cyan-400/40 bg-cyan-500/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-cyan-200">
-              <span className="h-1 w-1 animate-pulse rounded-full bg-cyan-300" />
+            <span className="ml-2 inline-flex items-center gap-1 rounded-md border border-accent/40 bg-accent-strong/10 px-2 py-0.5 font-mono text-[9px] uppercase tracking-widest text-accent-soft">
+              <span className="h-1 w-1 animate-pulse rounded-full bg-accent" />
               {t("update.badgeAvailable")}
             </span>
           )}
@@ -544,28 +544,28 @@ export function Settings({
               <button
                 disabled={checkingUpdate}
                 onClick={checkForUpdatesNow}
-                className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:border-accent/60 disabled:opacity-50"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${checkingUpdate ? "animate-spin" : ""}`} />
                 {checkingUpdate ? t("update.checking") : t("update.checkButton")}
               </button>
             }
           />
-          <div className="rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4 font-mono text-[11px] uppercase tracking-widest text-slate-500">
+          <div className="rounded-xl border border-line bg-bg/40 p-4 font-mono text-[11px] uppercase tracking-widest text-fg-4">
             {updater.status?.currentVersion ?? "-"}
           </div>
         </div>
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex items-center gap-2 pb-4">
-          <Wrench className="h-3.5 w-3.5 text-cyan-300" />
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.privilegedHelper")}</h2>
+          <Wrench className="h-3.5 w-3.5 text-accent" />
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.privilegedHelper")}</h2>
         </div>
-        <p className="text-xs text-slate-500">{t("settings.privilegedHelperDesc")}</p>
+        <p className="text-xs text-fg-4">{t("settings.privilegedHelperDesc")}</p>
 
-        <div className="mt-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-          <p className="text-xs text-slate-500">
+        <div className="mt-4 rounded-xl border border-line bg-bg/40 p-4">
+          <p className="text-xs text-fg-4">
             {helperStatus?.message ?? t("settings.helperUnknown")}
           </p>
           <div className="mt-3 flex items-center gap-2 text-xs">
@@ -574,25 +574,25 @@ export function Settings({
               {helperStateLabel}
             </span>
           </div>
-          <div className="mt-3 grid gap-2 text-xs text-slate-400 sm:grid-cols-3">
-            <span className="rounded-lg border border-cyan-500/10 bg-slate-950/50 px-3 py-2">
+          <div className="mt-3 grid gap-2 text-xs text-fg-3 sm:grid-cols-3">
+            <span className="rounded-lg border border-line bg-bg/50 px-3 py-2">
               {t("settings.helperInstalled")}: {helperStatus?.installed ? t("common.yes") : t("common.no")}
             </span>
-            <span className="rounded-lg border border-cyan-500/10 bg-slate-950/50 px-3 py-2">
+            <span className="rounded-lg border border-line bg-bg/50 px-3 py-2">
               {t("settings.helperRunning")}: {helperStatus?.running ? t("common.yes") : t("common.no")}
             </span>
-            <span className="rounded-lg border border-cyan-500/10 bg-slate-950/50 px-3 py-2">
+            <span className="rounded-lg border border-line bg-bg/50 px-3 py-2">
               {t("settings.helperVersion")}: {helperStatus?.version ?? "--"}
             </span>
           </div>
 
           {helperMessage && (
-            <div className="mt-3 flex items-start gap-2 rounded-xl border border-cyan-400/25 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
+            <div className="mt-3 flex items-start gap-2 rounded-xl border border-line bg-accent/10 px-4 py-3 text-sm text-accent-soft">
               {helperMessage}
             </div>
           )}
           {helperError && (
-            <div className="mt-3 flex items-start gap-2 rounded-xl border border-rose-400/25 bg-rose-400/10 px-4 py-3 text-sm text-rose-100">
+            <div className="mt-3 flex items-start gap-2 rounded-xl border border-danger/25 bg-danger/10 px-4 py-3 text-sm text-danger-soft">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               {helperError}
             </div>
@@ -603,28 +603,28 @@ export function Settings({
               disabled={helperBusy || !runtimeAvailable || helperStatus?.available === true || helperStatus?.canRequestUac === false}
               onClick={() => void runHelperAction(installPrivilegedHelper, helperStatus?.installed ? t("settings.helperRepaired") : t("settings.helperInstalledMsg"))}
               title={helperStatus?.canRequestUac === false ? t("settings.helperNeedsPerMachine") : (helperStatus?.installed ? t("settings.helperRepairHint") : t("settings.helperInstallHint"))}
-              className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
+              className="rounded-lg border border-ok/30 bg-ok/10 px-3 py-2 text-xs font-medium text-ok-soft transition hover:bg-ok/15 disabled:opacity-50"
             >
               {helperStatus?.installed ? t("settings.helperInstallRepair") : t("settings.helperInstallButton")}
             </button>
             <button
               disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed || helperStatus?.running === true}
               onClick={() => void runHelperAction(startPrivilegedHelper, t("settings.helperStarted"))}
-              className="rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
+              className="rounded-lg border border-ok/30 bg-ok/10 px-3 py-2 text-xs font-medium text-ok-soft transition hover:bg-ok/15 disabled:opacity-50"
             >
               {t("settings.helperStart")}
             </button>
             <button
               disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed || helperStatus?.running === false}
               onClick={() => void runHelperAction(stopPrivilegedHelper, t("settings.helperStopped"))}
-              className="rounded-lg border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
+              className="rounded-lg border border-warn/30 bg-warn/10 px-3 py-2 text-xs font-medium text-warn-soft transition hover:bg-warn/15 disabled:opacity-50"
             >
               {t("settings.helperStop")}
             </button>
             <button
               disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed}
               onClick={() => void runHelperAction(restartPrivilegedHelper, t("settings.helperRestarted"))}
-              className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+              className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
             >
               {t("settings.helperRestart")}
             </button>
@@ -632,14 +632,14 @@ export function Settings({
               disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed}
               onClick={() => void runHelperTest()}
               title={t("settings.helperTestHint")}
-              className="rounded-lg border border-sky-400/30 bg-sky-400/10 px-3 py-2 text-xs font-medium text-sky-100 transition hover:bg-sky-400/15 disabled:opacity-50"
+              className="rounded-lg border border-accent-2/30 bg-accent-2/10 px-3 py-2 text-xs font-medium text-accent-2 transition hover:bg-accent-2/15 disabled:opacity-50"
             >
               {t("settings.helperTest")}
             </button>
             <button
               disabled={helperBusy || !runtimeAvailable || !helperStatus?.installed}
               onClick={() => void runHelperAction(uninstallPrivilegedHelper, t("settings.helperRemoved"))}
-              className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
+              className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs font-medium text-danger-soft transition hover:bg-danger/15 disabled:opacity-50"
             >
               {t("settings.helperRemove")}
             </button>
@@ -647,35 +647,35 @@ export function Settings({
         </div>
       </section>
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex items-center gap-2 pb-4">
-          <UserIcon className="h-3.5 w-3.5 text-cyan-300" />
-          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-cyan-400/80">{t("settings.account")}</h2>
+          <UserIcon className="h-3.5 w-3.5 text-accent" />
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.25em] text-accent/80">{t("settings.account")}</h2>
         </div>
 
         {user ? (
-          <div className="flex flex-col gap-4 rounded-xl border border-cyan-500/15 bg-slate-950/40 p-5 md:flex-row md:items-center">
-            <div className="grid h-14 w-14 place-items-center rounded-full border border-cyan-400/30 bg-cyan-500/15 text-lg font-semibold text-cyan-100">
+          <div className="flex flex-col gap-4 rounded-xl border border-line bg-bg/40 p-5 md:flex-row md:items-center">
+            <div className="grid h-14 w-14 place-items-center rounded-full border border-accent/30 bg-accent-strong/15 text-lg font-semibold text-accent-soft">
               {user.name.slice(0, 1).toUpperCase()}
             </div>
             <div className="flex-1">
-              <div className="text-base font-semibold text-slate-50">{user.name}</div>
-              <div className="mt-0.5 font-mono text-[10px] uppercase tracking-widest text-cyan-300">
+              <div className="text-base font-semibold text-fg">{user.name}</div>
+              <div className="mt-0.5 font-mono text-[10px] uppercase tracking-widest text-accent">
                 {t("sidebar.currentPlan")}: {planLabel(user.plan)}
               </div>
-              <div className="mt-0.5 font-mono text-[11px] text-slate-500">
+              <div className="mt-0.5 font-mono text-[11px] text-fg-4">
                 {t("sidebar.session")} - {user.sessionId.slice(0, 8)}...{user.sessionId.slice(-4)}
               </div>
-              <div className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-emerald-300">
-                <span className="h-1 w-1 rounded-full bg-emerald-400" />
+              <div className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-ok/30 bg-ok/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-ok">
+                <span className="h-1 w-1 rounded-full bg-ok" />
                 {isReady ? t("common.online") : t("common.pending")}
               </div>
               <div className="mt-2 flex items-center gap-2">
                 <span
                   className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest ${
                     status?.plan_sync_error
-                      ? "border-amber-400/30 bg-amber-400/10 text-amber-300"
-                      : "border-cyan-500/20 bg-slate-950/60 text-slate-400"
+                      ? "border-warn/30 bg-warn/10 text-warn"
+                      : "border-line bg-bg/60 text-fg-3"
                   }`}
                 >
                   {status?.plan_sync_error
@@ -687,7 +687,7 @@ export function Settings({
                 <button
                   disabled={syncingPlan}
                   onClick={() => void onSyncPlan().catch(() => undefined)}
-                  className="inline-flex items-center gap-1.5 rounded-md border border-cyan-500/20 bg-slate-950/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-cyan-300 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+                  className="inline-flex items-center gap-1.5 rounded-md border border-line bg-bg/60 px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-accent transition-all hover:border-accent/60 disabled:opacity-50"
                 >
                   <RefreshCw className={`h-3 w-3 ${syncingPlan ? "animate-spin" : ""}`} />
                   {syncingPlan ? t("settings.planSyncButtonBusy") : t("settings.planSyncButton")}
@@ -696,7 +696,7 @@ export function Settings({
             </div>
             <button
               onClick={() => void onOpenAccountSettings()}
-              className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-medium text-cyan-100 transition-all hover:border-cyan-300/60 hover:bg-cyan-400/15"
+              className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm font-medium text-accent-soft transition-all hover:border-accent/60 hover:bg-accent/15"
             >
               <ExternalLink className="h-4 w-4" />
               {t("settings.manageDevices")}
@@ -704,7 +704,7 @@ export function Settings({
             {!user.hasPaidPlan && (
               <button
                 onClick={() => void onOpenBilling()}
-                className="inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-medium text-cyan-100 transition-all hover:border-cyan-300/60 hover:bg-cyan-400/15"
+                className="inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm font-medium text-accent-soft transition-all hover:border-accent/60 hover:bg-accent/15"
               >
                 <ExternalLink className="h-4 w-4" />
                 {t("sidebar.becomePro")}
@@ -712,20 +712,20 @@ export function Settings({
             )}
             <button
               onClick={() => void onLogout()}
-              className="inline-flex items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-sm font-medium text-rose-300 transition-all hover:bg-rose-500/20 hover:border-rose-400/50"
+              className="inline-flex items-center gap-2 rounded-xl border border-danger-strong/30 bg-danger-strong/10 px-4 py-2.5 text-sm font-medium text-danger transition-all hover:bg-danger-strong/20 hover:border-danger/50"
             >
               <LogOut className="h-4 w-4" />
               {t("common.logout")}
             </button>
           </div>
         ) : (
-          <div className="flex flex-col items-start gap-4 rounded-xl border border-dashed border-cyan-500/20 bg-slate-950/30 p-5">
-            <p className="text-sm text-slate-400">
+          <div className="flex flex-col items-start gap-4 rounded-xl border border-dashed border-line bg-bg/30 p-5">
+            <p className="text-sm text-fg-3">
               {t("settings.loggedOut")}
             </p>
             <button
               onClick={() => void onLogin()}
-              className="group inline-flex items-center gap-2.5 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-5 py-2.5 text-sm font-semibold text-cyan-100 transition-all duration-300 hover:border-cyan-300/60"
+              className="group inline-flex items-center gap-2.5 rounded-xl border border-accent/40 bg-accent/10 px-5 py-2.5 text-sm font-semibold text-accent-soft transition-all duration-300 hover:border-accent/60"
             >
               {t("settings.webLogin")}
               <ExternalLink className="h-4 w-4 transition-transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
@@ -785,10 +785,10 @@ function Row({
   control: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-line bg-bg/40 p-4">
       <div>
-        <div className="text-sm font-medium text-slate-100">{label}</div>
-        <div className="mt-0.5 text-xs text-slate-500">{description}</div>
+        <div className="text-sm font-medium text-fg">{label}</div>
+        <div className="mt-0.5 text-xs text-fg-4">{description}</div>
       </div>
       {control}
     </div>
@@ -848,31 +848,31 @@ function PolicyGroup({
 }) {
   const { t } = useI18n();
   return (
-    <details className="group rounded-xl border border-cyan-500/10 bg-slate-950/40">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-3 transition hover:bg-cyan-400/5">
+    <details className="group rounded-xl border border-line bg-bg/40">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-xl px-4 py-3 transition hover:bg-accent/5">
         <span className="flex min-w-0 items-center gap-3">
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-cyan-500/20 bg-cyan-400/10">
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-accent/10">
             {icon}
           </span>
           <span className="min-w-0">
-            <span className="block text-sm font-semibold text-slate-100">{title}</span>
-            <span className="mt-0.5 block text-xs leading-relaxed text-slate-500">{description}</span>
+            <span className="block text-sm font-semibold text-fg">{title}</span>
+            <span className="mt-0.5 block text-xs leading-relaxed text-fg-4">{description}</span>
           </span>
         </span>
-        <span className="shrink-0 font-mono text-[10px] uppercase tracking-widest text-cyan-300 group-open:hidden">
+        <span className="shrink-0 font-mono text-[10px] uppercase tracking-widest text-accent group-open:hidden">
           abrir
         </span>
-        <span className="hidden shrink-0 font-mono text-[10px] uppercase tracking-widest text-cyan-300 group-open:block">
+        <span className="hidden shrink-0 font-mono text-[10px] uppercase tracking-widest text-accent group-open:block">
           recolher
         </span>
       </summary>
-      <div className="flex flex-col gap-3 border-t border-cyan-500/10 p-4">
+      <div className="flex flex-col gap-3 border-t border-line p-4">
         {children}
         {onOpenHistory && (
           <button
             type="button"
             onClick={onOpenHistory}
-            className="inline-flex w-fit items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-cyan-300 transition hover:text-cyan-200"
+            className="inline-flex w-fit items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-accent transition hover:text-accent-soft"
           >
             <History className="h-3 w-3" />
             {t("settings.aiViewRestoreHistory")}
@@ -900,34 +900,34 @@ function UpdateCheckPopup({
   const mandatory = Boolean(status?.mandatory);
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-bg/75 px-4">
       <section
         role="dialog"
         aria-modal="true"
         aria-label={t("update.title")}
-        className="w-full max-w-md rounded-2xl border border-cyan-400/20 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)]"
+        className="w-full max-w-md rounded-2xl border border-line bg-bg p-6"
       >
-        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-cyan-300/80">
+        <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-accent/80">
           {t("update.eyebrow")}
         </div>
         {result === "available" ? (
           <>
-            <h2 className="mt-2 text-xl font-semibold text-slate-50">
+            <h2 className="mt-2 text-xl font-semibold text-fg">
               {mandatory
                 ? t("update.availableTitleMandatory", { version: status?.version ?? "" })
                 : t("update.availableTitle", { version: status?.version ?? "" })}
             </h2>
-            <p className="mt-2 text-sm leading-relaxed text-slate-400">
+            <p className="mt-2 text-sm leading-relaxed text-fg-3">
               {status?.notes?.trim() || t("update.notesFallback")}
             </p>
             {mandatory && (
-              <p className="mt-2 text-xs font-medium text-rose-200">{t("update.mandatoryNotice")}</p>
+              <p className="mt-2 text-xs font-medium text-danger-soft">{t("update.mandatoryNotice")}</p>
             )}
             <div className="mt-6 flex justify-end gap-2">
               {!mandatory && (
                 <button
                   onClick={onClose}
-                  className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70"
+                  className="rounded-xl border border-fg-4/60 px-4 py-2 text-sm font-medium text-fg-2 transition hover:border-fg-3/70"
                 >
                   {t("update.later")}
                 </button>
@@ -935,7 +935,7 @@ function UpdateCheckPopup({
               <button
                 disabled={busy}
                 onClick={onUpdateNow}
-                className="rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+                className="rounded-xl border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
               >
                 {busy ? t("update.installing") : t("update.updateNow")}
               </button>
@@ -943,14 +943,14 @@ function UpdateCheckPopup({
           </>
         ) : (
           <>
-            <h2 className="mt-2 text-xl font-semibold text-slate-50">{t("update.upToDate")}</h2>
-            <p className="mt-2 text-sm leading-relaxed text-slate-400">
+            <h2 className="mt-2 text-xl font-semibold text-fg">{t("update.upToDate")}</h2>
+            <p className="mt-2 text-sm leading-relaxed text-fg-3">
               {t("update.currentVersion")}: {status?.currentVersion ?? "-"}
             </p>
             <div className="mt-6 flex justify-end">
               <button
                 onClick={onClose}
-                className="rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15"
+                className="rounded-xl border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent-soft transition hover:bg-accent/15"
               >
                 {t("common.close")}
               </button>
@@ -980,8 +980,8 @@ function NumberRule({
   onChange: (value: number) => void;
 }) {
   return (
-    <label className="flex items-center justify-between gap-3 rounded-lg border border-cyan-500/10 bg-slate-950/40 px-3 py-2">
-      <span className="text-xs text-slate-400">{label}</span>
+    <label className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg/40 px-3 py-2">
+      <span className="text-xs text-fg-3">{label}</span>
       <span className="flex items-center gap-2">
         <input
           type="number"
@@ -993,9 +993,9 @@ function NumberRule({
             const nextValue = Number(event.target.value);
             if (Number.isFinite(nextValue)) onChange(nextValue);
           }}
-          className="h-8 w-24 rounded-md border border-cyan-500/20 bg-slate-950/70 px-2 text-right font-mono text-xs text-slate-100 outline-none focus:border-cyan-300/60"
+          className="h-8 w-24 rounded-md border border-line bg-bg/70 px-2 text-right font-mono text-xs text-fg outline-none focus:border-accent/60"
         />
-        {suffix && <span className="w-7 font-mono text-[10px] uppercase text-slate-500">{suffix}</span>}
+        {suffix && <span className="w-7 font-mono text-[10px] uppercase text-fg-4">{suffix}</span>}
       </span>
     </label>
   );

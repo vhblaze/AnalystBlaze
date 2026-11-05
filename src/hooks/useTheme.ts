@@ -8,6 +8,8 @@ function apply(theme: Theme) {
   const root = document.documentElement;
   root.classList.toggle("light", theme === "light");
   root.classList.toggle("dark", theme === "dark");
+  // design/tokens.css troca a paleta por este atributo.
+  root.dataset.theme = theme;
   root.style.colorScheme = theme;
 }
 

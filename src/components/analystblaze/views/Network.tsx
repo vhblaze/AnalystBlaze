@@ -694,30 +694,29 @@ export function Network({
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-cyan-400/70">
+        <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-accent/70">
           <Wifi className="h-3 w-3" />
           {t("network.eyebrow")}
         </div>
-        <h1 className="text-[36px] font-semibold tracking-tight text-slate-50">{t("network.title")}</h1>
+        <h1 className="text-[36px] font-semibold tracking-tight text-fg">{t("network.title")}</h1>
       </header>
 
       {isInitialLoad ? (
-        <div className="glass-panel cyber-glow flex flex-col items-center justify-center gap-4 py-24 text-center">
+        <div className="glass-panel flex flex-col items-center justify-center gap-4 py-24 text-center">
           <span className="relative flex h-12 w-12 items-center justify-center">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-cyan-400/30" />
-            <RefreshCw className="relative h-8 w-8 animate-spin text-cyan-300" />
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent/30" />
+            <RefreshCw className="relative h-8 w-8 animate-spin text-accent" />
           </span>
           <div>
-            <div className="text-sm font-semibold text-slate-100">{t("network.loadingTitle")}</div>
-            <p className="mt-1 text-xs text-slate-500">{t("network.loadingDesc")}</p>
+            <div className="text-sm font-semibold text-fg">{t("network.loadingTitle")}</div>
+            <p className="mt-1 text-xs text-fg-4">{t("network.loadingDesc")}</p>
           </div>
         </div>
       ) : (
         <>
       {/* Hero: one glance instead of reading every field - status +
           friendly summary + the numbers people actually check first. */}
-      <div className="glass-panel cyber-glow relative overflow-hidden p-6">
-        <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-gradient-to-br from-cyan-500/25 via-violet-500/15 to-transparent blur-3xl" />
+      <div className="glass-panel relative overflow-hidden p-6">
         <div className="relative flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             <span className="relative flex h-3 w-3 shrink-0">
@@ -725,8 +724,8 @@ export function Network({
               <span className={`relative inline-flex h-3 w-3 rounded-full ${healthDotClass(healthSummary.tone)}`} />
             </span>
             <div>
-              <div className="text-lg font-semibold tracking-tight text-slate-50">{healthSummary.headline}</div>
-              {healthSummary.detail && <p className="mt-0.5 text-xs text-slate-400">{healthSummary.detail}</p>}
+              <div className="text-lg font-semibold tracking-tight text-fg">{healthSummary.headline}</div>
+              {healthSummary.detail && <p className="mt-0.5 text-xs text-fg-3">{healthSummary.detail}</p>}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2 self-start md:self-auto">
@@ -735,7 +734,7 @@ export function Network({
                 disabled={heroDisableBusy || diagnosticsBusy || !helperStatus?.available}
                 onClick={() => void disableProblemAdapter()}
                 title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition-all hover:border-amber-300/60 disabled:opacity-50"
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-warn/40 bg-warn/10 px-3 py-2 text-xs font-medium text-warn-soft transition-all hover:border-warn/60 disabled:opacity-50"
               >
                 <Router className={`h-3.5 w-3.5 ${heroDisableBusy ? "animate-pulse" : ""}`} />
                 {t("network.disableProblemAdapter", { adapter: networkDiagnostics?.adapter_name ?? "" })}
@@ -744,7 +743,7 @@ export function Network({
             <button
               disabled={diagnosticsBusy}
               onClick={() => void refreshNetwork()}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition-all hover:border-accent/60 disabled:opacity-50"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${diagnosticsBusy ? "animate-spin" : ""}`} />
               {t("common.refresh")}
@@ -771,16 +770,16 @@ export function Network({
       )}
 
       {dnsSuggestion && (
-        <div className="glass-panel cyber-glow flex flex-col gap-3 border border-cyan-400/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="glass-panel flex flex-col gap-3 border border-line p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-start gap-3">
-            <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-cyan-500/20 bg-cyan-400/10">
-              <Sparkles className="h-4 w-4 text-cyan-300" />
+            <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-accent/10">
+              <Sparkles className="h-4 w-4 text-accent" />
             </span>
             <div>
-              <div className="text-sm font-semibold text-slate-100">
+              <div className="text-sm font-semibold text-fg">
                 {t("network.dnsSuggestionTitle", { server: dnsSuggestion.dnsLabel })}
               </div>
-              <p className="mt-0.5 text-xs text-slate-500">
+              <p className="mt-0.5 text-xs text-fg-4">
                 {t("network.dnsSuggestionDesc", {
                   previous: dnsSuggestion.previousLatencyMs != null ? `${Math.round(dnsSuggestion.previousLatencyMs)} ms` : "--",
                   candidate: `${Math.round(dnsSuggestion.candidateLatencyMs)} ms`,
@@ -791,14 +790,14 @@ export function Network({
           <div className="flex shrink-0 items-center gap-2 self-end sm:self-auto">
             <button
               onClick={() => setDnsSuggestion(null)}
-              className="rounded-lg border border-slate-500/20 bg-slate-950/40 px-3 py-2 text-xs font-medium text-slate-300 transition hover:bg-slate-900/60"
+              className="rounded-lg border border-fg-4/20 bg-bg/40 px-3 py-2 text-xs font-medium text-fg-2 transition hover:bg-surface/60"
             >
               {t("common.close")}
             </button>
             <button
               disabled={dnsSuggestionBusy || !runtimeAvailable || !helperStatus?.available}
               onClick={() => void applyDnsSuggestion()}
-              className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-semibold text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
               title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
             >
               {t("network.dnsSuggestionApply")}
@@ -808,16 +807,16 @@ export function Network({
       )}
 
       {/* One card, tabs instead of five stacked sections. */}
-      <section className="glass-panel cyber-glow p-6">
-        <div className="flex flex-wrap items-center gap-1 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-1">
+      <section className="glass-panel p-6">
+        <div className="flex flex-wrap items-center gap-1 rounded-xl border border-line bg-bg/40 p-1">
           {tabs.map(({ key, labelKey, icon: Icon }) => (
             <button
               key={key}
               onClick={() => setActiveTab(key)}
               className={`inline-flex flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs font-medium transition-all ${
                 activeTab === key
-                  ? "bg-cyan-400/15 text-cyan-100 shadow-[0_0_20px_-10px_hsl(187_100%_55%/0.8)]"
-                  : "text-slate-400 hover:bg-slate-900/60 hover:text-slate-200"
+                  ? "bg-accent/15 text-accent-soft"
+                  : "text-fg-3 hover:bg-surface/60 hover:text-fg"
               }`}
             >
               <Icon className="h-3.5 w-3.5" />
@@ -843,9 +842,9 @@ export function Network({
                       : "--",
                   ],
                 ] as Array<[string, string]>).map(([label, value]) => (
-                  <div key={label} className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
-                    <div className="font-mono text-[9px] uppercase tracking-widest text-slate-500">{label}</div>
-                    <div className="mt-1 truncate text-sm font-semibold text-slate-100" title={value}>
+                  <div key={label} className="rounded-lg border border-line bg-bg/50 p-3">
+                    <div className="font-mono text-[9px] uppercase tracking-widest text-fg-4">{label}</div>
+                    <div className="mt-1 truncate text-sm font-semibold text-fg" title={value}>
                       {value}
                     </div>
                   </div>
@@ -857,47 +856,47 @@ export function Network({
                   <button
                     disabled={gatewayIdentityBusy}
                     onClick={() => void identifyGateway()}
-                    className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+                    className="inline-flex items-center gap-2 rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
                   >
                     <Router className={`h-3.5 w-3.5 ${gatewayIdentityBusy ? "animate-pulse" : ""}`} />
                     {t("network.identifyGateway")}
                   </button>
                   {gatewayIdentity && (
-                    <span className="text-xs text-slate-400" title={gatewayIdentity}>
+                    <span className="text-xs text-fg-3" title={gatewayIdentity}>
                       {gatewayIdentity}
                     </span>
                   )}
                 </div>
               )}
 
-              <div className="rounded-lg border border-cyan-500/10 bg-slate-950/50 p-3">
-                <div className="font-mono text-[9px] uppercase tracking-widest text-slate-500">
+              <div className="rounded-lg border border-line bg-bg/50 p-3">
+                <div className="font-mono text-[9px] uppercase tracking-widest text-fg-4">
                   {t("network.gameServerTitle")}
                 </div>
                 {gameServer?.latency_ms != null ? (
                   <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-semibold text-slate-100">
+                      <div className="truncate text-sm font-semibold text-fg">
                         {gameServer.process_name ?? t("network.gameServerUnknownProcess")}
-                        <span className="ml-2 font-mono text-xs text-slate-400">
+                        <span className="ml-2 font-mono text-xs text-fg-3">
                           {gameServer.remote_ip}:{gameServer.remote_port}
                         </span>
                       </div>
-                      <div className="text-xs text-slate-500">
+                      <div className="text-xs text-fg-4">
                         {Math.round(gameServer.latency_ms)} ms
                         {networkDiagnostics?.external_latency_ms != null &&
                           ` (${t("network.gameServerVsInternet")} ${Math.round(networkDiagnostics.external_latency_ms)} ms)`}
                       </div>
                       {gameServer.best_guess && (
-                        <div className="mt-0.5 text-[11px] text-slate-500">{t("network.gameServerBestGuess")}</div>
+                        <div className="mt-0.5 text-[11px] text-fg-4">{t("network.gameServerBestGuess")}</div>
                       )}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       <span
                         className={`rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-widest ${
                           gameServerIsHigh
-                            ? "border-amber-400/40 bg-amber-400/10 text-amber-300"
-                            : "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                            ? "border-warn/40 bg-warn/10 text-warn"
+                            : "border-ok/30 bg-ok/10 text-ok"
                         }`}
                       >
                         {gameServerIsHigh ? t("network.gameServerHigh") : t("network.gameServerNormal")}
@@ -910,7 +909,7 @@ export function Network({
                             setTracerouteTarget(gameServer.remote_ip);
                             void runTraceroute(gameServer.remote_ip);
                           }}
-                          className="inline-flex items-center gap-1 rounded-lg border border-amber-400/40 bg-amber-400/10 px-2.5 py-1.5 text-xs font-medium text-amber-100 transition hover:bg-amber-400/15 disabled:opacity-50"
+                          className="inline-flex items-center gap-1 rounded-lg border border-warn/40 bg-warn/10 px-2.5 py-1.5 text-xs font-medium text-warn-soft transition hover:bg-warn/15 disabled:opacity-50"
                         >
                           {t("network.diagnoseCause")}
                         </button>
@@ -918,7 +917,7 @@ export function Network({
                     </div>
                   </div>
                 ) : (
-                  <div className="mt-1 text-sm text-slate-500">{t("network.gameServerNone")}</div>
+                  <div className="mt-1 text-sm text-fg-4">{t("network.gameServerNone")}</div>
                 )}
               </div>
             </div>
@@ -931,17 +930,17 @@ export function Network({
                   value={tracerouteTarget}
                   onChange={(event) => setTracerouteTarget(event.target.value)}
                   placeholder="1.1.1.1"
-                  className="min-h-9 w-40 rounded-lg border border-cyan-500/20 bg-slate-950/60 px-3 text-xs text-slate-100 outline-none transition focus:border-cyan-300/60"
+                  className="min-h-9 w-40 rounded-lg border border-line bg-bg/60 px-3 text-xs text-fg outline-none transition focus:border-accent/60"
                 />
                 <button
                   disabled={tracerouteBusy || !runtimeAvailable}
                   onClick={() => void runTraceroute()}
-                  className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${tracerouteBusy ? "animate-spin" : ""}`} />
                   {tracerouteBusy ? t("network.tracing") : t("network.traceRoute")}
                 </button>
-                <span className="text-xs text-slate-500">{t("network.routeDesc")}</span>
+                <span className="text-xs text-fg-4">{t("network.routeDesc")}</span>
               </div>
               {tracerouteError && <Notice tone="danger" message={tracerouteError} />}
 
@@ -949,14 +948,14 @@ export function Network({
                 <div
                   className={`rounded-xl border p-3 text-xs ${
                     routeVerdict.kind === "normal"
-                      ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100"
+                      ? "border-ok/30 bg-ok/10 text-ok-soft"
                       : routeVerdict.kind === "inconclusive"
-                        ? "border-slate-500/30 bg-slate-500/10 text-slate-300"
-                        : "border-amber-400/30 bg-amber-400/10 text-amber-100"
+                        ? "border-fg-4/30 bg-fg-4/10 text-fg-2"
+                        : "border-warn/30 bg-warn/10 text-warn-soft"
                   }`}
                 >
                   <div className="font-semibold">{t(`network.verdict${verdictKeySuffix(routeVerdict.kind)}Title`)}</div>
-                  <div className="mt-1 text-slate-300">
+                  <div className="mt-1 text-fg-2">
                     {t(`network.verdict${verdictKeySuffix(routeVerdict.kind)}Body`)}
                     {routeVerdict.culpritHop != null &&
                       ` (${t("network.verdictCulpritHop")} ${routeVerdict.culpritHop}${
@@ -967,19 +966,19 @@ export function Network({
               )}
 
               {tracerouteResult && (
-                <div className="flex flex-col divide-y divide-cyan-500/5 overflow-hidden rounded-xl border border-cyan-500/10">
+                <div className="flex flex-col divide-y divide-line overflow-hidden rounded-xl border border-line">
                   {tracerouteResult.hops.map((hop) => (
-                    <div key={hop.hop} className="flex items-center gap-3 bg-slate-950/30 px-3 py-2 text-xs">
-                      <span className="w-6 shrink-0 text-right font-mono text-slate-500">{hop.hop}</span>
-                      <span className={`min-w-0 flex-1 truncate font-mono ${hop.timedOut ? "text-slate-600" : "text-slate-200"}`}>
+                    <div key={hop.hop} className="flex items-center gap-3 bg-bg/30 px-3 py-2 text-xs">
+                      <span className="w-6 shrink-0 text-right font-mono text-fg-4">{hop.hop}</span>
+                      <span className={`min-w-0 flex-1 truncate font-mono ${hop.timedOut ? "text-fg-4" : "text-fg"}`}>
                         {hop.timedOut ? t("network.hopTimedOut") : hop.ip}
                         {!hop.timedOut && hop.ip === tracerouteResult.target && (
-                          <span className="ml-2 rounded border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-emerald-300">
+                          <span className="ml-2 rounded border border-ok/30 bg-ok/10 px-1.5 py-0.5 text-[9px] uppercase tracking-widest text-ok">
                             {t("network.destination")}
                           </span>
                         )}
                       </span>
-                      <span className="flex shrink-0 gap-2 font-mono text-slate-400">
+                      <span className="flex shrink-0 gap-2 font-mono text-fg-3">
                         {hop.rttMs.map((value, index) => (
                           <span key={index} className="w-12 text-right">
                             {value == null ? "*" : `${Math.round(value)}ms`}
@@ -989,7 +988,7 @@ export function Network({
                     </div>
                   ))}
                   {!tracerouteResult.reachedTarget && (
-                    <p className="bg-slate-950/30 px-3 py-2 text-xs text-amber-300">{t("network.routeIncomplete")}</p>
+                    <p className="bg-bg/30 px-3 py-2 text-xs text-warn">{t("network.routeIncomplete")}</p>
                   )}
                 </div>
               )}
@@ -1002,40 +1001,40 @@ export function Network({
                 <button
                   disabled={dnsBenchmarkBusy || !runtimeAvailable}
                   onClick={() => void runDnsBenchmark()}
-                  className="inline-flex items-center gap-2 rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+                  className="inline-flex items-center gap-2 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
                 >
                   <RefreshCw className={`h-3.5 w-3.5 ${dnsBenchmarkBusy ? "animate-spin" : ""}`} />
                   {dnsBenchmarkBusy ? t("network.testing") : t("network.testDns")}
                 </button>
-                <span className="text-xs text-slate-500">{t("network.dnsBenchmarkDesc")}</span>
+                <span className="text-xs text-fg-4">{t("network.dnsBenchmarkDesc")}</span>
               </div>
               {dnsBenchmarkError && <Notice tone="danger" message={dnsBenchmarkError} />}
 
               {dnsBenchmarkResults && (
-                <div className="flex flex-col divide-y divide-cyan-500/5 overflow-hidden rounded-xl border border-cyan-500/10">
+                <div className="flex flex-col divide-y divide-line overflow-hidden rounded-xl border border-line">
                   {[...dnsBenchmarkResults]
                     .sort((a, b) => (a.latencyMs ?? Infinity) - (b.latencyMs ?? Infinity))
                     .map((result, index) => (
-                      <div key={result.server} className="flex items-center gap-3 bg-slate-950/30 px-3 py-2.5 text-sm">
+                      <div key={result.server} className="flex items-center gap-3 bg-bg/30 px-3 py-2.5 text-sm">
                         {index === 0 && result.latencyMs != null && (
-                          <span className="shrink-0 rounded-md border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-emerald-300">
+                          <span className="shrink-0 rounded-md border border-ok/30 bg-ok/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-ok">
                             {t("network.fastest")}
                           </span>
                         )}
-                        <span className="min-w-0 flex-1 truncate text-slate-100">
-                          {result.label} <span className="text-slate-500">({result.server})</span>
+                        <span className="min-w-0 flex-1 truncate text-fg">
+                          {result.label} <span className="text-fg-4">({result.server})</span>
                           {result.isCurrent && (
-                            <span className="ml-2 text-[10px] uppercase tracking-widest text-cyan-400">{t("network.currentDns")}</span>
+                            <span className="ml-2 text-[10px] uppercase tracking-widest text-accent">{t("network.currentDns")}</span>
                           )}
                         </span>
-                        <span className="w-16 shrink-0 text-right font-mono text-xs text-slate-400">
+                        <span className="w-16 shrink-0 text-right font-mono text-xs text-fg-3">
                           {result.latencyMs == null ? "--" : `${Math.round(result.latencyMs)} ms`}
                         </span>
                         {!result.isCurrent && (
                           <button
                             disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available}
                             onClick={() => void useBenchmarkedDns(result.server)}
-                            className="shrink-0 rounded-md border border-cyan-400/30 bg-cyan-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+                            className="shrink-0 rounded-md border border-accent/30 bg-accent/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
                             title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
                           >
                             {t("network.useThis")}
@@ -1051,7 +1050,7 @@ export function Network({
           {activeTab === "live" && (
             <div className="flex flex-col gap-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="text-xs text-slate-500">{t("network.liveModeDesc")}</span>
+                <span className="text-xs text-fg-4">{t("network.liveModeDesc")}</span>
                 <button
                   role="switch"
                   aria-checked={liveModeActive}
@@ -1059,8 +1058,8 @@ export function Network({
                   onClick={() => void toggleLiveMode()}
                   className={`inline-flex min-h-11 items-center gap-2 rounded-xl border px-4 py-2 text-sm font-semibold transition-all disabled:opacity-50 ${
                     liveModeActive
-                      ? "border-emerald-300/50 bg-emerald-400/15 text-emerald-100"
-                      : "border-cyan-400/40 bg-cyan-400/10 text-cyan-100 hover:border-cyan-300/60"
+                      ? "border-ok/50 bg-ok/15 text-ok-soft"
+                      : "border-accent/40 bg-accent/10 text-accent-soft hover:border-accent/60"
                   }`}
                 >
                   <Radio className="h-4 w-4" />
@@ -1069,7 +1068,7 @@ export function Network({
               </div>
 
               {streamingAppDetected && !liveModeActive && (
-                <div className="flex items-center gap-3 rounded-xl border border-cyan-400/20 bg-cyan-400/5 px-4 py-3 text-sm text-cyan-100">
+                <div className="flex items-center gap-3 rounded-xl border border-line bg-accent/5 px-4 py-3 text-sm text-accent-soft">
                   <Video className="h-4 w-4 shrink-0" />
                   Detectamos {streamingAppDetected} em primeiro plano. O Modo Live amostra a rede com mais frequencia e avisa de instabilidades durante a transmissao.
                 </div>
@@ -1084,28 +1083,28 @@ export function Network({
                   </div>
 
                   {bitrateRecommendation && (
-                    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/45 p-4">
+                    <div className="rounded-xl border border-line bg-bg/45 p-4">
                       <div className="flex items-center justify-between gap-2">
-                        <div className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                        <div className="font-mono text-[10px] uppercase tracking-widest text-fg-4">
                           Recomendacao de bitrate (estimativa local)
                         </div>
-                        <span className="font-mono text-[10px] text-slate-500">
+                        <span className="font-mono text-[10px] text-fg-4">
                           {Math.round(bitrateRecommendation.confidence * 100)}% confianca
                         </span>
                       </div>
-                      <div className="mt-1 text-2xl font-semibold tracking-tight text-slate-50 tabular-nums">
+                      <div className="mt-1 text-2xl font-semibold tracking-tight text-fg tabular-nums">
                         {bitrateRecommendation.recommendedKbps} kbps
                       </div>
-                      <p className="mt-1 text-xs leading-relaxed text-slate-500">{bitrateRecommendation.reason}</p>
+                      <p className="mt-1 text-xs leading-relaxed text-fg-4">{bitrateRecommendation.reason}</p>
                     </div>
                   )}
 
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <span className="text-xs text-slate-500">{liveModeSamples.length} amostras nesta sessao</span>
+                    <span className="text-xs text-fg-4">{liveModeSamples.length} amostras nesta sessao</span>
                     <button
                       disabled={incidentReportBusy}
                       onClick={() => void generateIncidentReport()}
-                      className="inline-flex items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs font-medium text-amber-100 transition-all hover:border-amber-300/50 disabled:opacity-50"
+                      className="inline-flex items-center gap-2 rounded-xl border border-warn/30 bg-warn/10 px-3 py-2 text-xs font-medium text-warn-soft transition-all hover:border-warn/50 disabled:opacity-50"
                     >
                       <FileWarning className="h-3.5 w-3.5" />
                       Gerar relatorio de incidente
@@ -1113,17 +1112,17 @@ export function Network({
                   </div>
 
                   {lastIncident && (
-                    <div className="rounded-xl border border-amber-400/15 bg-amber-400/5 p-4">
-                      <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-amber-200">
+                    <div className="rounded-xl border border-warn/15 bg-warn/5 p-4">
+                      <div className="mb-2 flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-warn-soft">
                         <AlertTriangle className="h-3.5 w-3.5" />
                         Causas provaveis (baseado em {lastIncident.sampleCount} amostras)
                       </div>
                       <ul className="flex flex-col gap-2">
                         {lastIncident.causes.map((cause) => (
-                          <li key={cause.label} className="text-xs leading-relaxed text-amber-100/85">
-                            <span className="font-semibold text-amber-100">{cause.label}</span>
+                          <li key={cause.label} className="text-xs leading-relaxed text-warn-soft/85">
+                            <span className="font-semibold text-warn-soft">{cause.label}</span>
                             {" "}
-                            <span className="font-mono text-amber-200/70">({Math.round(cause.confidence * 100)}%)</span>
+                            <span className="font-mono text-warn-soft/70">({Math.round(cause.confidence * 100)}%)</span>
                             {" - "}
                             {cause.evidence}
                           </li>
@@ -1141,7 +1140,7 @@ export function Network({
       {/* Admin actions - technical, used rarely, so they're collapsed
           instead of another always-open block. */}
       <AdvancedSection
-        icon={<ListChecks className="h-4 w-4 text-cyan-300" />}
+        icon={<ListChecks className="h-4 w-4 text-accent" />}
         title={t("network.adminActions")}
         description={t("network.adminActionsDesc")}
       >
@@ -1149,7 +1148,7 @@ export function Network({
           <button
             disabled={busy || diagnosticsBusy || !runtimeAvailable}
             onClick={() => void runNetworkAction(onFlushDnsCache, "Cache de DNS limpo.")}
-            className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+            className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
           >
             Limpar cache DNS
           </button>
@@ -1159,7 +1158,7 @@ export function Network({
               onResetWinsockCatalog,
               "Catálogo Winsock resetado. Reinicie o computador para concluir.",
             )}
-            className="rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
+            className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs font-medium text-danger-soft transition hover:bg-danger/15 disabled:opacity-50"
             title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : "Exige reinicialização do computador."}
           >
             Resetar Winsock
@@ -1167,7 +1166,7 @@ export function Network({
           <button
             disabled={busy || diagnosticsBusy || !runtimeAvailable}
             onClick={() => void runNetworkAction(() => renewDhcpLease(), t("network.dhcpRenewed"))}
-            className="rounded-lg border border-cyan-400/30 bg-cyan-400/10 px-3 py-2 text-xs font-medium text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+            className="rounded-lg border border-accent/30 bg-accent/10 px-3 py-2 text-xs font-medium text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
           >
             {t("network.renewDhcp")}
           </button>
@@ -1178,7 +1177,7 @@ export function Network({
             value={dnsAdapterName}
             onChange={(event) => setDnsAdapterName(event.target.value)}
             disabled={busy || diagnosticsBusy || !runtimeAvailable || networkAdapters.length === 0}
-            className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60 sm:col-span-2 disabled:opacity-50"
+            className="min-h-11 rounded-xl border border-line bg-bg/60 px-3 text-sm text-fg outline-none transition focus:border-accent/60 sm:col-span-2 disabled:opacity-50"
           >
             {networkAdapters.length === 0 ? (
               <option value="">{t("controls.noActiveAdapter")}</option>
@@ -1194,30 +1193,30 @@ export function Network({
             value={dnsPrimary}
             onChange={(event) => setDnsPrimary(event.target.value)}
             placeholder="DNS primario (ex: 1.1.1.1)"
-            className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60"
+            className="min-h-11 rounded-xl border border-line bg-bg/60 px-3 text-sm text-fg outline-none transition focus:border-accent/60"
           />
           <input
             value={dnsSecondary}
             onChange={(event) => setDnsSecondary(event.target.value)}
             placeholder="DNS secundario (opcional)"
-            className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60"
+            className="min-h-11 rounded-xl border border-line bg-bg/60 px-3 text-sm text-fg outline-none transition focus:border-accent/60"
           />
         </div>
         <button
           disabled={busy || diagnosticsBusy || !runtimeAvailable || !helperStatus?.available || !dnsAdapterName}
           onClick={() => void applyDnsServers()}
-          className="mt-3 inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
+          className="mt-3 inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm font-semibold text-accent-soft transition-all hover:bg-accent/15 disabled:opacity-50"
           title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
         >
           Aplicar DNS
         </button>
 
-        <div className="mt-5 border-t border-cyan-500/10 pt-4">
-          <div className="text-sm font-semibold text-slate-100">{t("network.adapterEnable")}</div>
-          <p className="mt-1 text-xs leading-relaxed text-slate-500">{t("network.adapterEnableDesc")}</p>
+        <div className="mt-5 border-t border-line pt-4">
+          <div className="text-sm font-semibold text-fg">{t("network.adapterEnable")}</div>
+          <p className="mt-1 text-xs leading-relaxed text-fg-4">{t("network.adapterEnableDesc")}</p>
           <div className="mt-3 flex flex-col gap-2">
             {allNetworkAdapters.length === 0 ? (
-              <span className="text-xs text-slate-500">{t("controls.noActiveAdapter")}</span>
+              <span className="text-xs text-fg-4">{t("controls.noActiveAdapter")}</span>
             ) : (
               allNetworkAdapters.map((adapter) => {
                 // Status is "Up", "Disconnected", "Degraded" etc. for an
@@ -1235,12 +1234,12 @@ export function Network({
                 return (
                   <div
                     key={adapter.name}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-cyan-500/10 bg-slate-950/40 px-3 py-2"
+                    className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg/40 px-3 py-2"
                   >
-                    <div className="flex items-center gap-2 text-xs text-slate-200">
-                      <Router className="h-3.5 w-3.5 text-cyan-300" />
+                    <div className="flex items-center gap-2 text-xs text-fg">
+                      <Router className="h-3.5 w-3.5 text-accent" />
                       <span className="font-medium">{adapter.name}</span>
-                      <span className={isEnabled ? "text-emerald-300" : "text-slate-500"}>
+                      <span className={isEnabled ? "text-ok" : "text-fg-4"}>
                         {statusLabel}
                       </span>
                     </div>
@@ -1249,8 +1248,8 @@ export function Network({
                       onClick={() => void toggleAdapterEnabled(adapter.name, !isEnabled)}
                       className={
                         isEnabled
-                          ? "inline-flex items-center gap-2 rounded-lg border border-rose-400/30 bg-rose-400/10 px-3 py-2 text-xs font-medium text-rose-100 transition hover:bg-rose-400/15 disabled:opacity-50"
-                          : "inline-flex items-center gap-2 rounded-lg border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs font-medium text-emerald-100 transition hover:bg-emerald-400/15 disabled:opacity-50"
+                          ? "inline-flex items-center gap-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs font-medium text-danger-soft transition hover:bg-danger/15 disabled:opacity-50"
+                          : "inline-flex items-center gap-2 rounded-lg border border-ok/30 bg-ok/10 px-3 py-2 text-xs font-medium text-ok-soft transition hover:bg-ok/15 disabled:opacity-50"
                       }
                       title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
                     >
@@ -1263,18 +1262,18 @@ export function Network({
           </div>
         </div>
 
-        <div className="mt-5 border-t border-cyan-500/10 pt-4">
+        <div className="mt-5 border-t border-line pt-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2 text-sm font-semibold text-slate-100">
-                <Wrench className="h-3.5 w-3.5 text-cyan-300" />
+              <div className="flex items-center gap-2 text-sm font-semibold text-fg">
+                <Wrench className="h-3.5 w-3.5 text-accent" />
                 {t("network.tcpOptimizer")}
               </div>
-              <p className="mt-1 text-xs leading-relaxed text-slate-500">{t("network.tcpOptimizerDesc")}</p>
+              <p className="mt-1 text-xs leading-relaxed text-fg-4">{t("network.tcpOptimizerDesc")}</p>
             </div>
             <button
               onClick={() => window.open("https://www.waveform.com/tools/bufferbloat", "_blank", "noopener,noreferrer")}
-              className="shrink-0 rounded-lg border border-cyan-500/20 bg-slate-950/50 px-3 py-2 text-xs font-medium text-cyan-200 transition hover:border-cyan-400/40"
+              className="shrink-0 rounded-lg border border-line bg-bg/50 px-3 py-2 text-xs font-medium text-accent-soft transition hover:border-accent/40"
             >
               {t("network.testBufferbloat")}
             </button>
@@ -1282,15 +1281,15 @@ export function Network({
 
           {tuneError && <div className="mt-3"><Notice tone="danger" message={tuneError} /></div>}
 
-          <div className="mt-4 rounded-xl border border-cyan-500/10 bg-slate-950/40 p-4">
-            <div className="text-xs font-semibold uppercase tracking-widest text-slate-400">{t("network.tuneLiveTitle")}</div>
-            <p className="mt-1 text-xs text-slate-500">{t("network.tuneLiveDesc")}</p>
+          <div className="mt-4 rounded-xl border border-line bg-bg/40 p-4">
+            <div className="text-xs font-semibold uppercase tracking-widest text-fg-3">{t("network.tuneLiveTitle")}</div>
+            <p className="mt-1 text-xs text-fg-4">{t("network.tuneLiveDesc")}</p>
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <select
                 value={tcpAutoTuning}
                 onChange={(event) => setTcpAutoTuning(event.target.value)}
                 disabled={tuneBusy || !runtimeAvailable || !helperStatus?.available}
-                className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60 disabled:opacity-50"
+                className="min-h-11 rounded-xl border border-line bg-bg/60 px-3 text-sm text-fg outline-none transition focus:border-accent/60 disabled:opacity-50"
               >
                 <option value="Normal">{t("network.autoTuningNormal")}</option>
                 <option value="Disabled">{t("network.autoTuningDisabled")}</option>
@@ -1299,7 +1298,7 @@ export function Network({
                 value={tcpEcn}
                 onChange={(event) => setTcpEcn(event.target.value)}
                 disabled={tuneBusy || !runtimeAvailable || !helperStatus?.available}
-                className="min-h-11 rounded-xl border border-cyan-500/20 bg-slate-950/60 px-3 text-sm text-slate-100 outline-none transition focus:border-cyan-300/60 disabled:opacity-50"
+                className="min-h-11 rounded-xl border border-line bg-bg/60 px-3 text-sm text-fg outline-none transition focus:border-accent/60 disabled:opacity-50"
               >
                 <option value="Enabled">ECN: {t("common.enabled")}</option>
                 <option value="Disabled">ECN: {t("common.disabled")}</option>
@@ -1308,24 +1307,24 @@ export function Network({
             <button
               disabled={tuneBusy || !runtimeAvailable || !helperStatus?.available || Boolean(tuneSession)}
               onClick={() => void applyLiveTune()}
-              className="mt-3 inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:bg-cyan-400/15 disabled:opacity-50"
+              className="mt-3 inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-accent/10 px-4 py-2.5 text-sm font-semibold text-accent-soft transition-all hover:bg-accent/15 disabled:opacity-50"
               title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
             >
               {t("network.tuneApplyLive")}
             </button>
           </div>
 
-          <div className="mt-3 rounded-xl border border-amber-400/15 bg-amber-400/5 p-4">
-            <div className="text-xs font-semibold uppercase tracking-widest text-amber-200">{t("network.tuneRebootTitle")}</div>
-            <p className="mt-1 text-xs text-amber-100/70">{t("network.tuneRebootDesc")}</p>
+          <div className="mt-3 rounded-xl border border-warn/15 bg-warn/5 p-4">
+            <div className="text-xs font-semibold uppercase tracking-widest text-warn-soft">{t("network.tuneRebootTitle")}</div>
+            <p className="mt-1 text-xs text-warn-soft/70">{t("network.tuneRebootDesc")}</p>
             <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-              <label className="flex items-center gap-2 text-xs text-slate-300">
+              <label className="flex items-center gap-2 text-xs text-fg-2">
                 <input
                   type="checkbox"
                   checked={nagleEnabled}
                   onChange={(event) => setNagleEnabled(event.target.checked)}
                   disabled={tuneBusy || !runtimeAvailable || !helperStatus?.available}
-                  className="h-4 w-4 accent-cyan-400"
+                  className="h-4 w-4 accent-accent"
                 />
                 {t("network.tuneNagle")}
               </label>
@@ -1334,7 +1333,7 @@ export function Network({
                   value={tuneAdapterName}
                   onChange={(event) => setTuneAdapterName(event.target.value)}
                   disabled={tuneBusy || !runtimeAvailable || networkAdapters.length === 0}
-                  className="min-h-9 rounded-lg border border-cyan-500/20 bg-slate-950/60 px-2 text-xs text-slate-100 outline-none transition focus:border-cyan-300/60"
+                  className="min-h-9 rounded-lg border border-line bg-bg/60 px-2 text-xs text-fg outline-none transition focus:border-accent/60"
                 >
                   {networkAdapters.map((adapter) => (
                     <option key={adapter.name} value={adapter.name}>
@@ -1343,13 +1342,13 @@ export function Network({
                   ))}
                 </select>
               )}
-              <label className="flex items-center gap-2 text-xs text-slate-300">
+              <label className="flex items-center gap-2 text-xs text-fg-2">
                 <input
                   type="checkbox"
                   checked={throttlingEnabled}
                   onChange={(event) => setThrottlingEnabled(event.target.checked)}
                   disabled={tuneBusy || !runtimeAvailable || !helperStatus?.available}
-                  className="h-4 w-4 accent-cyan-400"
+                  className="h-4 w-4 accent-accent"
                 />
                 {t("network.tuneThrottling")}
               </label>
@@ -1364,7 +1363,7 @@ export function Network({
                 (nagleEnabled && !tuneAdapterName)
               }
               onClick={() => void applyRebootTune()}
-              className="mt-3 inline-flex items-center gap-2 rounded-xl border border-amber-400/40 bg-amber-400/10 px-4 py-2.5 text-sm font-semibold text-amber-100 transition-all hover:bg-amber-400/15 disabled:opacity-50"
+              className="mt-3 inline-flex items-center gap-2 rounded-xl border border-warn/40 bg-warn/10 px-4 py-2.5 text-sm font-semibold text-warn-soft transition-all hover:bg-warn/15 disabled:opacity-50"
               title={!helperStatus?.available ? "Instale o helper privilegiado (Controles > Avançado) para liberar esta ação." : undefined}
             >
               {t("network.tuneApplyReboot")}
@@ -1500,16 +1499,16 @@ function summarizeHealth(recommendations: string[], t: (key: string) => string):
 }
 
 function healthDotClass(tone: "good" | "watch" | "critical") {
-  if (tone === "critical") return "bg-rose-400 shadow-[0_0_12px_hsl(350_90%_60%)]";
-  if (tone === "watch") return "bg-amber-400 shadow-[0_0_12px_hsl(40_100%_60%)]";
-  return "bg-cyan-400 shadow-[0_0_12px_hsl(187_100%_60%)]";
+  if (tone === "critical") return "bg-danger";
+  if (tone === "watch") return "bg-warn";
+  return "bg-accent";
 }
 
 function HeroStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl border border-cyan-500/10 bg-slate-950/45 p-3">
-      <div className="truncate font-mono text-[9px] uppercase tracking-widest text-slate-500">{label}</div>
-      <div className="mt-1 truncate text-lg font-semibold text-slate-100">{value}</div>
+    <div className="rounded-xl border border-line bg-bg/45 p-3">
+      <div className="truncate font-mono text-[9px] uppercase tracking-widest text-fg-4">{label}</div>
+      <div className="mt-1 truncate text-lg font-semibold text-fg">{value}</div>
     </div>
   );
 }
@@ -1526,20 +1525,20 @@ function AdvancedSection({
   children: ReactNode;
 }) {
   return (
-    <details className="group rounded-2xl border border-cyan-500/15 bg-slate-950/30">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-4 transition hover:bg-cyan-400/5">
+    <details className="group rounded-2xl border border-line bg-bg/30">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-4 transition hover:bg-accent/5">
         <span className="flex min-w-0 items-start gap-3">
-          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-cyan-500/20 bg-cyan-400/10">
+          <span className="mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-accent/10">
             {icon}
           </span>
           <span className="min-w-0">
-            <span className="block text-sm font-semibold text-slate-100">{title}</span>
-            <span className="mt-1 block text-xs leading-relaxed text-slate-500">{description}</span>
+            <span className="block text-sm font-semibold text-fg">{title}</span>
+            <span className="mt-1 block text-xs leading-relaxed text-fg-4">{description}</span>
           </span>
         </span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-cyan-300 transition-transform group-open:rotate-180" />
+        <ChevronDown className="h-4 w-4 shrink-0 text-accent transition-transform group-open:rotate-180" />
       </summary>
-      <div className="flex flex-col gap-4 border-t border-cyan-500/10 p-4 md:p-6">{children}</div>
+      <div className="flex flex-col gap-4 border-t border-line p-4 md:p-6">{children}</div>
     </details>
   );
 }
@@ -1563,26 +1562,26 @@ function NetworkTuneDialog({
 }) {
   const awaitingReboot = session.requiresReboot && !session.countdownStarted;
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-bg/75 px-4">
       <section
         role="alertdialog"
         aria-modal="true"
         aria-label={t("network.tuneDialogTitle")}
-        className="w-full max-w-md rounded-2xl border border-cyan-400/30 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.5)]"
+        className="w-full max-w-md rounded-2xl border border-accent/30 bg-bg p-6"
       >
-        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-cyan-300">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-accent">
           <Wrench className="h-3.5 w-3.5" />
           {session.label}
         </div>
 
         {awaitingReboot ? (
           <>
-            <p className="mt-3 text-sm leading-relaxed text-slate-200">{t("network.tuneAwaitingReboot")}</p>
+            <p className="mt-3 text-sm leading-relaxed text-fg">{t("network.tuneAwaitingReboot")}</p>
             <div className="mt-6 flex justify-end gap-2">
               <button
                 disabled={busy}
                 onClick={onRestart}
-                className="rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+                className="rounded-xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
               >
                 {t("network.tuneRestartNow")}
               </button>
@@ -1590,12 +1589,12 @@ function NetworkTuneDialog({
           </>
         ) : (
           <>
-            <p className="mt-3 text-sm leading-relaxed text-slate-200">
+            <p className="mt-3 text-sm leading-relaxed text-fg">
               {t("network.tuneConfirmPrompt", { seconds: secondsLeft ?? 0 })}
             </p>
-            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-slate-800">
+            <div className="mt-4 h-1.5 overflow-hidden rounded-full bg-surface-2">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-rose-400 transition-[width] duration-1000 ease-linear"
+                className="h-full rounded-full bg-gradient-to-r from-accent to-danger transition-[width] duration-1000 ease-linear"
                 style={{ width: `${Math.max(0, Math.min(100, ((secondsLeft ?? 0) / 30) * 100))}%` }}
               />
             </div>
@@ -1603,14 +1602,14 @@ function NetworkTuneDialog({
               <button
                 disabled={busy}
                 onClick={onUndo}
-                className="rounded-xl border border-slate-600/40 px-4 py-2 text-sm font-medium text-slate-300 transition hover:text-slate-100 disabled:opacity-50"
+                className="rounded-xl border border-fg-4/40 px-4 py-2 text-sm font-medium text-fg-2 transition hover:text-fg disabled:opacity-50"
               >
                 {t("network.tuneUndo")}
               </button>
               <button
                 disabled={busy}
                 onClick={onKeep}
-                className="rounded-xl border border-cyan-400/40 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+                className="rounded-xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
               >
                 {t("network.tuneKeep")}
               </button>
@@ -1636,19 +1635,19 @@ function NetworkTuneRestartPrompt({
   t: (key: string) => string;
 }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/25 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warn/25 bg-warn/10 px-4 py-3 text-sm text-warn-soft">
       <span>{message}</span>
       <div className="flex items-center gap-2">
         <button
           onClick={onDismiss}
-          className="rounded-lg border border-amber-400/20 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:text-amber-100"
+          className="rounded-lg border border-warn/20 px-3 py-1.5 text-xs font-medium text-warn-soft transition hover:text-warn-soft"
         >
           {t("common.close")}
         </button>
         <button
           disabled={busy}
           onClick={onRestart}
-          className="rounded-lg border border-amber-400/40 bg-amber-400/15 px-3 py-1.5 text-xs font-semibold text-amber-100 transition hover:bg-amber-400/25 disabled:opacity-50"
+          className="rounded-lg border border-warn/40 bg-warn/15 px-3 py-1.5 text-xs font-semibold text-warn-soft transition hover:bg-warn/25 disabled:opacity-50"
         >
           {t("network.tuneRestartNow")}
         </button>
@@ -1659,9 +1658,9 @@ function NetworkTuneRestartPrompt({
 
 function MiniStat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-cyan-500/10 bg-slate-950/45 px-3 py-2">
-      <div className="font-mono text-[9px] uppercase tracking-widest text-slate-600">{label}</div>
-      <div className="mt-0.5 text-sm font-semibold text-slate-200 tabular-nums">{value}</div>
+    <div className="rounded-lg border border-line bg-bg/45 px-3 py-2">
+      <div className="font-mono text-[9px] uppercase tracking-widest text-fg-4">{label}</div>
+      <div className="mt-0.5 text-sm font-semibold text-fg tabular-nums">{value}</div>
     </div>
   );
 }
@@ -1674,10 +1673,10 @@ function formatLiveMetric(value: number | null | undefined, unit: "ms" | "%") {
 function Notice({ message, tone }: { message: string; tone: "danger" | "info" | "warning" }) {
   const toneClass =
     tone === "danger"
-      ? "border-rose-400/25 bg-rose-400/10 text-rose-100"
+      ? "border-danger/25 bg-danger/10 text-danger-soft"
       : tone === "warning"
-        ? "border-amber-400/25 bg-amber-400/10 text-amber-100"
-        : "border-cyan-400/25 bg-cyan-400/10 text-cyan-100";
+        ? "border-warn/25 bg-warn/10 text-warn-soft"
+        : "border-line bg-accent/10 text-accent-soft";
   return (
     <div className={`rounded-xl border px-4 py-3 text-sm ${toneClass}`}>
       {message}

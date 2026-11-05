@@ -481,32 +481,32 @@ export function DiskExplorer({
   return (
     <div className="flex flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-cyan-400/70">
+        <div className="flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.3em] text-accent/70">
           <HardDrive className="h-3 w-3" />
           {t("diskExplorer.eyebrow")}
         </div>
-        <h1 className="text-[36px] font-semibold tracking-tight text-slate-50">{t("diskExplorer.title")}</h1>
+        <h1 className="text-[36px] font-semibold tracking-tight text-fg">{t("diskExplorer.title")}</h1>
       </header>
 
       {diskOptimizationInsight?.isHdd && diskOptimizationInsight.defrag?.enabled === false && (
-        <div className="glass-panel flex flex-col gap-2 rounded-2xl border border-amber-400/25 bg-amber-400/5 p-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="glass-panel flex flex-col gap-2 rounded-2xl border border-warn/25 bg-warn/5 p-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex items-start gap-3">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warn" />
             <div>
-              <div className="text-sm font-semibold text-amber-100">{t("diskExplorer.defragDisabledTitle")}</div>
-              <p className="mt-1 text-xs leading-relaxed text-amber-100/70">{t("diskExplorer.defragDisabledDesc")}</p>
+              <div className="text-sm font-semibold text-warn-soft">{t("diskExplorer.defragDisabledTitle")}</div>
+              <p className="mt-1 text-xs leading-relaxed text-warn-soft/70">{t("diskExplorer.defragDisabledDesc")}</p>
             </div>
           </div>
           <button
             onClick={() => setDiskOptimizationInsight(null)}
-            className="shrink-0 self-end rounded-lg border border-amber-400/20 px-3 py-1.5 text-xs font-medium text-amber-200 transition hover:text-amber-100 sm:self-auto"
+            className="shrink-0 self-end rounded-lg border border-warn/20 px-3 py-1.5 text-xs font-medium text-warn-soft transition hover:text-warn-soft sm:self-auto"
           >
             {t("common.close")}
           </button>
         </div>
       )}
 
-      <section className="glass-panel cyber-glow p-6">
+      <section className="glass-panel p-6">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div className="flex flex-wrap items-center gap-2">
             {volumesError && <Notice tone="danger" message={volumesError} />}
@@ -520,21 +520,21 @@ export function DiskExplorer({
                   disabled={browseBusy}
                   className={`flex min-w-[180px] flex-col gap-1.5 rounded-xl border px-3.5 py-2.5 text-left text-xs transition-all disabled:opacity-50 ${
                     selected
-                      ? "border-cyan-300/50 bg-cyan-400/10 text-cyan-100"
-                      : "border-cyan-500/10 bg-slate-950/40 text-slate-300 hover:border-cyan-400/30"
+                      ? "border-accent/50 bg-accent/10 text-accent-soft"
+                      : "border-line bg-bg/40 text-fg-2 hover:border-accent/30"
                   }`}
                 >
                   <span className="flex items-center justify-between font-semibold">
                     <span className="truncate">{volume.label}</span>
-                    <span className="font-mono text-[10px] text-slate-500">{volume.fileSystem || "--"}</span>
+                    <span className="font-mono text-[10px] text-fg-4">{volume.fileSystem || "--"}</span>
                   </span>
-                  <span className="h-1.5 overflow-hidden rounded-full bg-slate-800">
+                  <span className="h-1.5 overflow-hidden rounded-full bg-surface-2">
                     <span
-                      className="block h-full rounded-full bg-gradient-to-r from-cyan-400 to-violet-400"
+                      className="block h-full rounded-full bg-gradient-to-r from-accent to-violet"
                       style={{ width: `${Math.max(2, Math.min(100, usedRatio * 100))}%` }}
                     />
                   </span>
-                  <span className="font-mono text-[10px] text-slate-500">
+                  <span className="font-mono text-[10px] text-fg-4">
                     {formatBytes(volume.totalBytes - volume.availableBytes)} / {formatBytes(volume.totalBytes)}
                   </span>
                 </button>
@@ -546,7 +546,7 @@ export function DiskExplorer({
             {browseBusy && (
               <button
                 onClick={() => void cancelBrowse()}
-                className="inline-flex items-center gap-2 rounded-xl border border-rose-400/30 bg-rose-400/10 px-3 py-2.5 text-xs font-semibold text-rose-100 transition-all hover:border-rose-300/50"
+                className="inline-flex items-center gap-2 rounded-xl border border-danger/30 bg-danger/10 px-3 py-2.5 text-xs font-semibold text-danger-soft transition-all hover:border-danger/50"
               >
                 <X className="h-3.5 w-3.5" />
                 {t("common.cancel")}
@@ -555,7 +555,7 @@ export function DiskExplorer({
             <button
               disabled={browseBusy || !selectedVolume}
               onClick={() => void loadRoot()}
-              className="group inline-flex items-center gap-2 rounded-xl border border-cyan-400/40 bg-gradient-to-r from-cyan-500/20 to-violet-500/10 px-4 py-2.5 text-sm font-semibold text-cyan-100 transition-all hover:border-cyan-300/60 disabled:opacity-50"
+              className="group inline-flex items-center gap-2 rounded-xl border border-accent/40 bg-gradient-to-r from-accent-strong/20 to-violet-strong/10 px-4 py-2.5 text-sm font-semibold text-accent-soft transition-all hover:border-accent/60 disabled:opacity-50"
             >
               <RefreshCw className={`h-4 w-4 ${browseBusy ? "animate-spin" : "transition-transform group-hover:rotate-180"}`} />
               {browseBusy ? t("diskExplorer.scanning") : rootPath ? t("diskExplorer.rescan") : t("diskExplorer.scan")}
@@ -564,9 +564,9 @@ export function DiskExplorer({
         </div>
 
         {browseBusy && (
-          <div className="mt-4 flex items-center gap-3 text-xs text-slate-400">
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-800">
-              <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-r from-cyan-400 to-violet-400" />
+          <div className="mt-4 flex items-center gap-3 text-xs text-fg-3">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-gradient-to-r from-accent to-violet" />
             </div>
             <span className="font-mono">
               {t("diskExplorer.scannedNodes", { count: browseProgress?.scannedNodes ?? 0 })}
@@ -577,28 +577,28 @@ export function DiskExplorer({
       </section>
 
       {!rootPath && !browseBusy && (
-        <div className="glass-panel flex flex-col items-center gap-2 rounded-2xl border border-cyan-500/10 p-10 text-center">
-          <HardDrive className="h-8 w-8 text-cyan-300/60" />
-          <h3 className="text-lg font-semibold text-slate-100">{t("diskExplorer.emptyTitle")}</h3>
-          <p className="max-w-sm text-sm text-slate-400">{t("diskExplorer.emptyDescription")}</p>
+        <div className="glass-panel flex flex-col items-center gap-2 rounded-2xl border border-line p-10 text-center">
+          <HardDrive className="h-8 w-8 text-accent/60" />
+          <h3 className="text-lg font-semibold text-fg">{t("diskExplorer.emptyTitle")}</h3>
+          <p className="max-w-sm text-sm text-fg-3">{t("diskExplorer.emptyDescription")}</p>
         </div>
       )}
 
       {rootPath && (
-        <section className="glass-panel cyber-glow p-6">
-          <div className="flex flex-wrap items-center gap-1 pb-4 font-mono text-xs text-slate-400">
+        <section className="glass-panel p-6">
+          <div className="flex flex-wrap items-center gap-1 pb-4 font-mono text-xs text-fg-3">
             {breadcrumbSegments(rootPath, currentPath).map((segment, index, all) => (
               <span key={segment.path} className="flex items-center gap-1">
                 <button
                   onClick={() => void openPath(segment.path)}
                   disabled={segment.path === currentPath}
                   className={`rounded px-1.5 py-0.5 transition ${
-                    segment.path === currentPath ? "text-cyan-200" : "text-slate-400 hover:text-cyan-200"
+                    segment.path === currentPath ? "text-accent-soft" : "text-fg-3 hover:text-accent-soft"
                   }`}
                 >
                   {segment.label}
                 </button>
-                {index < all.length - 1 && <ChevronRight className="h-3 w-3 text-slate-600" />}
+                {index < all.length - 1 && <ChevronRight className="h-3 w-3 text-fg-4" />}
               </span>
             ))}
           </div>
@@ -611,17 +611,17 @@ export function DiskExplorer({
                 <button
                   onClick={goUp}
                   disabled={currentPath === rootPath}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-cyan-500/20 bg-slate-950/50 px-2.5 py-1.5 text-xs font-medium text-cyan-200 transition hover:border-cyan-400/40 disabled:opacity-40"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-bg/50 px-2.5 py-1.5 text-xs font-medium text-accent-soft transition hover:border-accent/40 disabled:opacity-40"
                 >
                   <ChevronRight className="h-3.5 w-3.5 rotate-180" />
                   {t("diskExplorer.up")}
                 </button>
-                <span className="text-sm text-slate-300">
+                <span className="text-sm text-fg-2">
                   {t("diskExplorer.folderTotal", { size: formatBytes(folderTotalBytes) })}
                 </span>
                 {pendingSizePaths.size > 0 && (
                   <span
-                    className="inline-flex items-center gap-1.5 rounded-md border border-cyan-400/20 bg-cyan-400/5 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-cyan-200/80"
+                    className="inline-flex items-center gap-1.5 rounded-md border border-line bg-accent/5 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-accent-soft/80"
                     title={t("diskExplorer.calculatingSizesHint")}
                   >
                     <RefreshCw className="h-3 w-3 animate-spin" />
@@ -637,9 +637,9 @@ export function DiskExplorer({
           )}
 
           {browseBusy ? (
-            <div className="h-[300px] animate-pulse rounded-xl bg-slate-900/40" />
+            <div className="h-[300px] animate-pulse rounded-xl bg-surface/40" />
           ) : sortedChildren.length === 0 ? (
-            <p className="py-8 text-center text-sm text-slate-500">{t("diskExplorer.folderEmpty")}</p>
+            <p className="py-8 text-center text-sm text-fg-4">{t("diskExplorer.folderEmpty")}</p>
           ) : (
             <>
               <DiskTreemap items={treemapItems} onOpen={(item) => void openPath(item.path)} />
@@ -652,22 +652,22 @@ export function DiskExplorer({
                     onChange={toggleSelectAll}
                     disabled={bulkDeleteBusy || selectableChildren.length === 0}
                     aria-label={t("diskExplorer.selectAll")}
-                    className="h-4 w-4 accent-cyan-400"
+                    className="h-4 w-4 accent-accent"
                   />
-                  <h3 className="font-mono text-[10px] uppercase tracking-widest text-slate-500">
+                  <h3 className="font-mono text-[10px] uppercase tracking-widest text-fg-4">
                     {t("diskExplorer.listTitle")}
                   </h3>
                 </div>
-                <div className="flex items-center gap-1 rounded-lg border border-cyan-500/10 bg-slate-950/40 p-0.5 text-[10px] font-mono uppercase tracking-widest">
+                <div className="flex items-center gap-1 rounded-lg border border-line bg-bg/40 p-0.5 text-[10px] font-mono uppercase tracking-widest">
                   <button
                     onClick={() => setSortBy("size")}
-                    className={`rounded px-2 py-1 ${sortBy === "size" ? "bg-cyan-400/15 text-cyan-100" : "text-slate-500"}`}
+                    className={`rounded px-2 py-1 ${sortBy === "size" ? "bg-accent/15 text-accent-soft" : "text-fg-4"}`}
                   >
                     {t("diskExplorer.sortSize")}
                   </button>
                   <button
                     onClick={() => setSortBy("name")}
-                    className={`rounded px-2 py-1 ${sortBy === "name" ? "bg-cyan-400/15 text-cyan-100" : "text-slate-500"}`}
+                    className={`rounded px-2 py-1 ${sortBy === "name" ? "bg-accent/15 text-accent-soft" : "text-fg-4"}`}
                   >
                     {t("diskExplorer.sortName")}
                   </button>
@@ -675,8 +675,8 @@ export function DiskExplorer({
               </div>
 
               {selectedPaths.size > 0 && (
-                <div className="sticky top-0 z-10 mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border-2 border-rose-400/50 bg-rose-500/15 px-4 py-3 shadow-[0_10px_40px_-15px_hsl(350_90%_55%/0.6)] backdrop-blur">
-                  <span className="flex items-center gap-2 text-sm font-semibold text-rose-100">
+                <div className="sticky top-0 z-10 mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border-2 border-danger/50 bg-danger-strong/15 px-4 py-3">
+                  <span className="flex items-center gap-2 text-sm font-semibold text-danger-soft">
                     <Trash2 className="h-4 w-4 shrink-0" />
                     {bulkProgress
                       ? t("diskExplorer.bulkDeleting", { done: bulkProgress.done + 1, total: bulkProgress.total })
@@ -686,14 +686,14 @@ export function DiskExplorer({
                     <button
                       disabled={bulkDeleteBusy}
                       onClick={() => setSelectedPaths(new Map())}
-                      className="rounded-lg border border-white/15 bg-slate-950/40 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:text-white disabled:opacity-40"
+                      className="rounded-lg border border-white/15 bg-bg/40 px-3 py-1.5 text-xs font-medium text-fg transition hover:text-white disabled:opacity-40"
                     >
                       {t("diskExplorer.clearSelection")}
                     </button>
                     <button
                       disabled={bulkDeleteBusy}
                       onClick={() => setConfirmingBulkDelete(true)}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-rose-300/60 bg-rose-500 px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-rose-400 disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-danger/60 bg-danger-strong px-3.5 py-1.5 text-xs font-semibold text-white transition hover:bg-danger disabled:opacity-50"
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                       {t("diskExplorer.deleteSelected")}
@@ -702,7 +702,7 @@ export function DiskExplorer({
                 </div>
               )}
 
-              <div className="mt-2 flex flex-col divide-y divide-cyan-500/5 overflow-hidden rounded-xl border border-cyan-500/10">
+              <div className="mt-2 flex flex-col divide-y divide-line overflow-hidden rounded-xl border border-line">
                 {sortedChildren.map((item) => {
                   const permanent = item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES;
                   const deleting = deletingPaths.has(item.path);
@@ -710,7 +710,7 @@ export function DiskExplorer({
                   return (
                   <div
                     key={item.path}
-                    className={`flex flex-col gap-2 bg-slate-950/30 px-3 py-2.5 text-sm transition-all duration-200 ease-in ${
+                    className={`flex flex-col gap-2 bg-bg/30 px-3 py-2.5 text-sm transition-all duration-200 ease-in ${
                       deleting
                         ? "-translate-x-2 scale-[0.98] opacity-0"
                         : pending
@@ -727,43 +727,43 @@ export function DiskExplorer({
                         onChange={() => toggleSelected(item)}
                         disabled={bulkDeleteBusy || pending || deleting}
                         aria-label={t("diskExplorer.selectItem", { name: item.name })}
-                        className="h-4 w-4 shrink-0 accent-cyan-400"
+                        className="h-4 w-4 shrink-0 accent-accent"
                       />
                     ) : (
                       <span className="h-4 w-4 shrink-0" />
                     )}
                     {item.isDir ? (
-                      <Folder className="h-4 w-4 shrink-0 text-cyan-300" />
+                      <Folder className="h-4 w-4 shrink-0 text-accent" />
                     ) : (
-                      <File className="h-4 w-4 shrink-0 text-violet-300" />
+                      <File className="h-4 w-4 shrink-0 text-violet" />
                     )}
                     <button
                       disabled={!item.isDir}
                       onClick={() => item.isDir && void openPath(item.path)}
-                      className={`min-w-0 flex-1 truncate text-left ${item.isDir ? "text-slate-100 hover:text-cyan-200" : "text-slate-300"}`}
+                      className={`min-w-0 flex-1 truncate text-left ${item.isDir ? "text-fg hover:text-accent-soft" : "text-fg-2"}`}
                       title={item.path}
                     >
                       {item.name}
                     </button>
                     {!item.actionable && (
                       <span
-                        className="inline-flex items-center gap-1 rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-amber-200"
+                        className="inline-flex items-center gap-1 rounded-md border border-warn/30 bg-warn/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-warn-soft"
                         title={item.protected ? t("diskExplorer.protectedHint") : t("diskExplorer.systemHint")}
                       >
                         {item.protected ? <Shield className="h-3 w-3" /> : <Lock className="h-3 w-3" />}
                         {t("diskExplorer.locked")}
                       </span>
                     )}
-                    <span className="flex w-20 shrink-0 items-center justify-end gap-1 text-right font-mono text-xs text-slate-400">
+                    <span className="flex w-20 shrink-0 items-center justify-end gap-1 text-right font-mono text-xs text-fg-3">
                       {pendingSizePaths.has(item.path) ? (
-                        <RefreshCw className="h-3 w-3 shrink-0 animate-spin text-slate-500" />
+                        <RefreshCw className="h-3 w-3 shrink-0 animate-spin text-fg-4" />
                       ) : (
                         formatBytes(item.sizeBytes)
                       )}
                     </span>
                     {item.actionable &&
                       (pending ? (
-                        <span className="flex shrink-0 items-center gap-1.5 rounded-md border border-rose-400/30 bg-rose-400/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-rose-200">
+                        <span className="flex shrink-0 items-center gap-1.5 rounded-md border border-danger/30 bg-danger/10 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-danger-soft">
                           <RefreshCw className="h-3 w-3 animate-spin" />
                           {t("diskExplorer.deleting")}
                         </span>
@@ -771,13 +771,13 @@ export function DiskExplorer({
                         <div className="flex shrink-0 items-center gap-1">
                           <button
                             onClick={() => void deleteItem(item)}
-                            className="rounded-md border border-rose-400/40 bg-rose-400/15 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-rose-100 hover:bg-rose-400/25"
+                            className="rounded-md border border-danger/40 bg-danger/15 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-danger-soft hover:bg-danger/25"
                           >
                             {permanent ? t("diskExplorer.confirmDeletePermanent") : t("diskExplorer.confirmDelete")}
                           </button>
                           <button
                             onClick={() => setConfirmingDeletePath(null)}
-                            className="rounded-md border border-slate-600/40 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-slate-400 hover:text-slate-200"
+                            className="rounded-md border border-fg-4/40 px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-fg-3 hover:text-fg"
                           >
                             {t("common.cancel")}
                           </button>
@@ -787,14 +787,14 @@ export function DiskExplorer({
                           disabled={bulkDeleteBusy}
                           onClick={() => setConfirmingDeletePath(item.path)}
                           title={permanent ? t("diskExplorer.deleteHintPermanent") : t("diskExplorer.deleteHint")}
-                          className="shrink-0 rounded-md border border-white/10 bg-slate-950/60 p-1.5 text-slate-500 transition hover:border-rose-400/40 hover:text-rose-200 disabled:opacity-40"
+                          className="shrink-0 rounded-md border border-white/10 bg-bg/60 p-1.5 text-fg-4 transition hover:border-danger/40 hover:text-danger-soft disabled:opacity-40"
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </button>
                       ))}
                   </div>
                   {confirmingDeletePath === item.path && permanent && (
-                    <div className="flex items-center gap-2 rounded-md border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs text-rose-200">
+                    <div className="flex items-center gap-2 rounded-md border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs text-danger-soft">
                       <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                       {t("diskExplorer.permanentWarning", { size: formatBytes(item.sizeBytes) })}
                     </div>
@@ -858,28 +858,28 @@ function BulkDeleteConfirmDialog({
   const permanentCount = items.filter((item) => item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES).length;
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-bg/75 px-4">
       <section
         role="alertdialog"
         aria-modal="true"
         aria-label={t("diskExplorer.bulkConfirmTitle", { count: items.length })}
-        className="flex w-full max-w-lg flex-col rounded-2xl border border-rose-400/30 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(350_90%_55%/0.6)]"
+        className="flex w-full max-w-lg flex-col rounded-2xl border border-danger/30 bg-bg p-6"
       >
-        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-rose-300">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-danger">
           <AlertTriangle className="h-3.5 w-3.5" />
           {t("diskExplorer.bulkConfirmTitle", { count: items.length })}
         </div>
-        <p className="mt-3 text-sm leading-relaxed text-slate-200">
+        <p className="mt-3 text-sm leading-relaxed text-fg">
           {t("diskExplorer.bulkConfirmSummary", { folders: folderCount, files: fileCount, size: formatBytes(totalBytes) })}
         </p>
         {permanentCount > 0 && (
-          <div className="mt-3 flex items-center gap-2 rounded-md border border-rose-400/30 bg-rose-400/10 px-2.5 py-1.5 text-xs text-rose-200">
+          <div className="mt-3 flex items-center gap-2 rounded-md border border-danger/30 bg-danger/10 px-2.5 py-1.5 text-xs text-danger-soft">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
             {t("diskExplorer.bulkPermanentWarning", { count: permanentCount })}
           </div>
         )}
 
-        <ul className="mt-4 max-h-64 overflow-y-auto rounded-xl border border-white/10 bg-slate-900/40">
+        <ul className="mt-4 max-h-64 overflow-y-auto rounded-xl border border-white/10 bg-surface/40">
           {items.map((item) => {
             const permanent = item.sizeBytes >= DIRECT_DELETE_THRESHOLD_BYTES;
             const parent = parentPath(item.path);
@@ -889,24 +889,24 @@ function BulkDeleteConfirmDialog({
                 className="flex items-center gap-2.5 border-b border-white/5 px-3 py-2 text-sm last:border-b-0"
               >
                 {item.isDir ? (
-                  <Folder className="h-3.5 w-3.5 shrink-0 text-cyan-300" />
+                  <Folder className="h-3.5 w-3.5 shrink-0 text-accent" />
                 ) : (
-                  <File className="h-3.5 w-3.5 shrink-0 text-violet-300" />
+                  <File className="h-3.5 w-3.5 shrink-0 text-violet" />
                 )}
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-slate-100" title={item.path}>
+                  <div className="truncate text-fg" title={item.path}>
                     {item.name}
                   </div>
-                  {parent && <div className="truncate font-mono text-[10px] text-slate-500">{parent}</div>}
+                  {parent && <div className="truncate font-mono text-[10px] text-fg-4">{parent}</div>}
                 </div>
-                {permanent && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-rose-300" />}
-                <span className="w-16 shrink-0 text-right font-mono text-xs text-slate-400">
+                {permanent && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-danger" />}
+                <span className="w-16 shrink-0 text-right font-mono text-xs text-fg-3">
                   {formatBytes(item.sizeBytes)}
                 </span>
                 <button
                   onClick={() => onRemoveItem(item.path)}
                   title={t("diskExplorer.removeFromSelection")}
-                  className="shrink-0 rounded-md p-1 text-slate-500 transition hover:text-rose-200"
+                  className="shrink-0 rounded-md p-1 text-fg-4 transition hover:text-danger-soft"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -918,13 +918,13 @@ function BulkDeleteConfirmDialog({
         <div className="mt-6 flex justify-end gap-2">
           <button
             onClick={onCancel}
-            className="rounded-xl border border-slate-600/40 px-4 py-2 text-sm font-medium text-slate-300 transition hover:text-slate-100"
+            className="rounded-xl border border-fg-4/40 px-4 py-2 text-sm font-medium text-fg-2 transition hover:text-fg"
           >
             {t("common.cancel")}
           </button>
           <button
             onClick={onConfirm}
-            className="rounded-xl border border-rose-400/40 bg-rose-400/15 px-4 py-2 text-sm font-semibold text-rose-100 transition hover:bg-rose-400/25"
+            className="rounded-xl border border-danger/40 bg-danger/15 px-4 py-2 text-sm font-semibold text-danger-soft transition hover:bg-danger/25"
           >
             {t("diskExplorer.deleteSelected")}
           </button>
@@ -936,22 +936,22 @@ function BulkDeleteConfirmDialog({
 
 function ErrorDialog({ message, onClose, t }: { message: string; onClose: () => void; t: (key: string) => string }) {
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-bg/75 px-4">
       <section
         role="alertdialog"
         aria-modal="true"
         aria-label={t("diskExplorer.errorDialogTitle")}
-        className="w-full max-w-md rounded-2xl border border-rose-400/30 bg-slate-950 p-6 shadow-[0_25px_80px_-30px_hsl(350_90%_55%/0.6)]"
+        className="w-full max-w-md rounded-2xl border border-danger/30 bg-bg p-6"
       >
-        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-rose-300">
+        <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.25em] text-danger">
           <AlertTriangle className="h-3.5 w-3.5" />
           {t("diskExplorer.errorDialogTitle")}
         </div>
-        <p className="mt-3 text-sm leading-relaxed text-slate-200">{message}</p>
+        <p className="mt-3 text-sm leading-relaxed text-fg">{message}</p>
         <div className="mt-6 flex justify-end">
           <button
             onClick={onClose}
-            className="rounded-xl border border-rose-400/40 bg-rose-400/10 px-4 py-2 text-sm font-semibold text-rose-100 transition hover:bg-rose-400/15"
+            className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm font-semibold text-danger-soft transition hover:bg-danger/15"
           >
             {t("common.close")}
           </button>
@@ -964,10 +964,10 @@ function ErrorDialog({ message, onClose, t }: { message: string; onClose: () => 
 function Notice({ message, tone }: { message: string; tone: "danger" | "info" | "warning" }) {
   const toneClass =
     tone === "danger"
-      ? "border-rose-400/25 bg-rose-400/10 text-rose-100"
+      ? "border-danger/25 bg-danger/10 text-danger-soft"
       : tone === "warning"
-        ? "border-amber-400/25 bg-amber-400/10 text-amber-100"
-        : "border-cyan-400/25 bg-cyan-400/10 text-cyan-100";
+        ? "border-warn/25 bg-warn/10 text-warn-soft"
+        : "border-line bg-accent/10 text-accent-soft";
   return (
     <div className={`flex items-start gap-2 rounded-xl border px-4 py-3 text-sm ${toneClass}`}>
       {tone === "danger" && <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />}

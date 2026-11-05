@@ -24,7 +24,7 @@ export function UpdateNotice({
     : t("update.availableTitle", { version: status.version ?? "" });
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 py-8 backdrop-blur-sm">
+    <div className="fixed inset-0 z-50 grid place-items-center bg-bg/75 px-4 py-8">
       <section
         role="dialog"
         aria-modal="true"
@@ -36,7 +36,7 @@ export function UpdateNotice({
         // all. The header/notes area scrolls on its own; the button row sits
         // outside that scroll region so it's always visible, never something
         // you have to scroll past a wall of text to reach.
-        className="relative flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl border border-cyan-400/20 bg-slate-950 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)]"
+        className="relative flex max-h-[85vh] w-full max-w-md flex-col rounded-2xl border border-line bg-bg"
       >
         {/* Closing (like "Depois") only ever snoozes this popup - it never
             skips a mandatory update. The backend re-surfaces a mandatory one
@@ -49,30 +49,30 @@ export function UpdateNotice({
           onClick={onLater}
           disabled={busy}
           aria-label={t("update.close")}
-          className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-slate-400 transition hover:bg-white/5 hover:text-slate-100 disabled:opacity-40"
+          className="absolute right-3 top-3 z-10 rounded-lg p-1.5 text-fg-3 transition hover:bg-white/5 hover:text-fg disabled:opacity-40"
         >
           <X className="h-4 w-4" />
         </button>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-6 pb-4 pr-10">
-          <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-cyan-300/80">
+          <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-accent/80">
             {t("update.eyebrow")}
           </div>
-          <h2 className="mt-2 text-xl font-semibold text-slate-50">{title}</h2>
-          <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-400">
+          <h2 className="mt-2 text-xl font-semibold text-fg">{title}</h2>
+          <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-fg-3">
             {status.notes?.trim() || t("update.notesFallback")}
           </p>
           {mandatory && (
-            <p className="mt-2 text-xs font-medium text-rose-200">{t("update.mandatoryNotice")}</p>
+            <p className="mt-2 text-xs font-medium text-danger-soft">{t("update.mandatoryNotice")}</p>
           )}
           {!status.downloaded && !status.installing && (
-            <p className="mt-2 text-xs text-slate-500">{t("update.downloading")}</p>
+            <p className="mt-2 text-xs text-fg-4">{t("update.downloading")}</p>
           )}
           {status.lastError && (
-            <p className="mt-2 text-xs font-medium text-rose-300">{status.lastError}</p>
+            <p className="mt-2 text-xs font-medium text-danger">{status.lastError}</p>
           )}
           {!status.installing && (
-            <p className="mt-2 text-xs text-slate-500">{t("update.elevationNotice")}</p>
+            <p className="mt-2 text-xs text-fg-4">{t("update.elevationNotice")}</p>
           )}
         </div>
 
@@ -81,7 +81,7 @@ export function UpdateNotice({
             <button
               disabled={busy}
               onClick={onLater}
-              className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70 disabled:opacity-40"
+              className="rounded-xl border border-fg-4/60 px-4 py-2 text-sm font-medium text-fg-2 transition hover:border-fg-3/70 disabled:opacity-40"
             >
               {t("update.later")}
             </button>
@@ -89,7 +89,7 @@ export function UpdateNotice({
           <button
             disabled={busy || status.installing}
             onClick={onUpdateNow}
-            className="rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15 disabled:opacity-50"
+            className="rounded-xl border border-accent/50 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent-soft transition hover:bg-accent/15 disabled:opacity-50"
           >
             {status.installing ? t("update.installing") : t("update.updateNow")}
           </button>
