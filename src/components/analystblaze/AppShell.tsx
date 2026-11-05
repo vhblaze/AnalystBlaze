@@ -1,4 +1,6 @@
 import { useCallback, useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { LoggedOutNotice } from "./LoggedOutNotice";
 import { UpdateNotice } from "./UpdateNotice";
 import { useAgentTelemetry } from "@/hooks/useAgentTelemetry";
@@ -91,6 +93,12 @@ export function AppShell() {
           right={
             <>
               {current.screen === "history" && <RestoreToDateButton />}
+              {current.screen === "controls" && current.section && (
+                <Button size="sm" variant="link" onClick={() => navigate(route("controls"))}>
+                  <ArrowLeft />
+                  {t("nav.controls")}
+                </Button>
+              )}
               <CommandPalette items={commandItems} />
               <Notifications items={notificationItems} onItemClick={onNotificationClick} />
             </>

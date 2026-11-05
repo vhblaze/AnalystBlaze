@@ -1760,6 +1760,35 @@ fn upsert_delayed_startup_record(record: DelayedStartupRecord) -> Result<(), Str
     write_delayed_startup_records(&records)
 }
 
+/// O que a tela de Inicialização precisa saber de um app adiado (sem o
+/// comando completo).
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DelayedStartupSummary {
+    pub name: String,
+    pub location: String,
+    pub delay_seconds: u64,
+    pub created_at: i64,
+}
+
+fn summarize_delayed_records(records: Vec<DelayedStartupRecord>) -> Vec<DelayedStartupSummary> {
+    records
+        .into_iter()
+        .map(|record| DelayedStartupSummary {
+            name: record.name,
+            location: record.location,
+            delay_seconds: record.delay_seconds,
+            created_at: record.created_at,
+        })
+        .collect()
+}
+
+/// Apps que o AnalystBlaze tirou da inicialização direta e abre depois
+/// (o "Adia" da tela de Inicialização).
+pub fn list_delayed_startup_apps() -> Result<Vec<DelayedStartupSummary>, String> {
+    read_delayed_startup_records().map(summarize_delayed_records)
+}
+
 fn read_delayed_startup_records() -> Result<Vec<DelayedStartupRecord>, String> {
     read_json_file(&delayed_startup_path()).or_else(|error| {
         if delayed_startup_path().exists() {
@@ -2167,6 +2196,32 @@ mod tests {
         assert!(
             hardware_context_for("disk", &scores).is_none(),
             "no disk_score reading means nothing to compare against"
+        );
+    }
+}
+
+#[cfg(test)]
+mod delayed_summary_tests {
+    use super::*;
+
+    #[test]
+    fn delayed_summary_keeps_name_location_and_delay_only() {
+        let summaries = summarize_delayed_records(vec![DelayedStartupRecord {
+            name: "Spotify".to_string(),
+            location: r"HKCU\Run".to_string(),
+            command: r"C:\Users\x\Spotify.exe --autostart".to_string(),
+            delay_seconds: 120,
+            created_at: 1_700_000_000,
+            disabled_snapshot_id: Some("snap".to_string()),
+        }]);
+        assert_eq!(
+            summaries,
+            vec![DelayedStartupSummary {
+                name: "Spotify".to_string(),
+                location: r"HKCU\Run".to_string(),
+                delay_seconds: 120,
+                created_at: 1_700_000_000,
+            }]
         );
     }
 }
