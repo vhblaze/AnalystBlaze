@@ -20,6 +20,7 @@ import { useAgentPrompts } from "@/components/shell/useAgentPrompts";
 import { useAppNotifications } from "@/features/notifications/useAppNotifications";
 import { useConfirmation } from "@/components/shell/useConfirmation";
 import { ConfirmationDialog } from "@/components/shell/dialogs/ConfirmationDialog";
+import { PcCleanFastProgress } from "@/components/shell/dialogs/PcCleanFastProgress";
 import { DeviceLimitDialog } from "@/components/shell/dialogs/DeviceLimitDialog";
 import { EmailVerificationNotice } from "@/components/shell/dialogs/EmailVerificationNotice";
 import { RemoteConfirmationNotice } from "@/components/shell/dialogs/RemoteConfirmationNotice";
@@ -151,6 +152,19 @@ export function AppShell() {
         </div>
       </main>
 
+      <PcCleanFastProgress
+        onUndo={(sessionId) =>
+          void runConfirmed(
+            {
+              title: t("confirm.restorePerformanceSession.title"),
+              description: t("confirm.restorePerformanceSession.body"),
+              risk: "seguro",
+              snapshot: false,
+            },
+            () => auth.restorePerformance(sessionId),
+          ).catch(() => undefined)
+        }
+      />
       {confirmRequest && (
         <ConfirmationDialog
           request={confirmRequest}

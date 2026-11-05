@@ -109,14 +109,21 @@ export async function fetchInsights(_t: TFunction, locale: Locale): Promise<Insi
 
   try {
     const payload = await fetchAuthenticatedInsights(locale);
-    return { insights: normalizeServerInsights(payload), source: "remote" };
+    return { insights: normalizeServerInsights(payload, locale), source: "remote" };
   } catch (error) {
     const message = error instanceof Error && error.message ? error.message : serverOnlyInsightsMessage(locale);
     throw new Error(message);
   }
 }
 
-function normalizeServerInsights(payload: unknown): Insight[] {
+const PERFORMANCE_SCORE_CARD_ID = "performance_score_measured";
+const PC_CLEAN_FAST_ACTION = "APPLY_PC_CLEAN_FAST_PROFILE";
+
+function pcCleanFastLabel(locale: Locale) {
+  return textFor(locale, "Aplicar PC limpo e rápido", "Apply clean and fast PC");
+}
+
+function normalizeServerInsights(payload: unknown, locale: Locale): Insight[] {
   if (!isRecord(payload)) return [];
   const response = payload as ServerInsightsResponse;
   const cards = Array.isArray(response.cards) ? response.cards : [];
@@ -133,9 +140,11 @@ function normalizeServerInsights(payload: unknown): Insight[] {
       // always wins over the legacy positional pairing below - that pairing
       // was only ever meant for the always-present first card + the one
       // generic APPLY_GAME_MODE/EMPTY_TEMP suggestion.
-      actionName: card.actionName ?? pairedAction?.actionName,
+      // O servidor recomenda "aplicar PC limpo/rápido" neste card sem nomear a
+      // ação; aqui ela vira um botão que roda o perfil local.
+      actionName: card.actionName ?? (card.id === PERFORMANCE_SCORE_CARD_ID ? PC_CLEAN_FAST_ACTION : pairedAction?.actionName),
       actionContext: card.actionContext,
-      actionLabel: card.actionLabel,
+      actionLabel: card.actionLabel ?? (card.id === PERFORMANCE_SCORE_CARD_ID && !card.actionName ? pcCleanFastLabel(locale) : undefined),
       secondaryActionName: card.secondaryActionName,
       secondaryActionContext: card.secondaryActionContext,
       secondaryActionLabel: card.secondaryActionLabel,

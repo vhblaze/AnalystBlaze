@@ -57,6 +57,7 @@ const LOCALLY_EXECUTABLE_ACTIONS = new Set([
   "RESTORE_DEFENDER_SCAN_SETTINGS",
   "RENEW_DEFENDER_DEFINITIONS",
   "SCHEDULE_VOLUME_CHECK",
+  "APPLY_PC_CLEAN_FAST_PROFILE",
 ]);
 /** Actions that only ever run on the user's own machine, never queued to
  * the server - either because the action isn't (yet) registered in the
@@ -78,6 +79,8 @@ const LOCAL_ONLY_ACTIONS = new Set([
   "RENEW_DEFENDER_DEFINITIONS",
   "SCHEDULE_VOLUME_CHECK",
 ]);
+/** Só rodam aqui, com um botão só (sem "deixar o agente fazer" pelo servidor). */
+const SINGLE_LOCAL_BUTTON_ACTIONS = new Set(["APPLY_PC_CLEAN_FAST_PROFILE"]);
 /** Actions whose useAuth wrapper resolves with the real outcome instead of
  * throwing on failure (see restartPnpDevice's comment in useAuth.ts) -
  * "didn't fix it" is legitimate information to show, not an exception, so
@@ -986,6 +989,7 @@ export function Insights({
               );
               const canRequestAgent = Boolean(
                 ins.actionName &&
+                  !SINGLE_LOCAL_BUTTON_ACTIONS.has(ins.actionName) &&
                   (LOCAL_ONLY_ACTIONS.has(ins.actionName) ? onApplyInsightActionLocally : onRequestAgentApplyInsight),
               );
               const secondaryBusy = actionBusyKey === `${key}:secondary`;
