@@ -1,7 +1,9 @@
 import { useMemo } from "react";
 import {
   getDelayedStartupApps,
+  readBootPerformance,
   scanStartupImpact,
+  type BootPerformance,
   type DelayedStartupApp,
   type OptimizationSnapshot,
   type StartupImpact,
@@ -20,6 +22,36 @@ export const delayedStartupApps = createAgentResource<DelayedStartupApp[]>({
   name: "startup.delayed",
   fetch: getDelayedStartupApps,
 });
+
+/**
+ * L2: quanto o boot levou e quais apps o atrasaram, segundo o próprio
+ * Windows. O log só abre como administrador, então a leitura passa pelo
+ * componente de sistema; sem ele, a tela fica no alto/médio/baixo.
+ */
+export const bootPerformance = createAgentResource<BootPerformance>({
+  name: "startup.boot",
+  fetch: readBootPerformance,
+  staleMs: 10 * 60_000,
+});
+
+function exeName(text: string | null | undefined): string | null {
+  if (!text) return null;
+  const match = text.match(/([^\\/"]+\.exe)/i);
+  return match ? match[1].toLowerCase() : null;
+}
+
+/** Quanto o Windows mediu que este app atrasou o boot, em ms (ou null). */
+export function bootDelayFor(row: { name: string; location: string | null }, boot: BootPerformance | null | undefined): number | null {
+  if (!boot?.slowApps.length) return null;
+  const exe = exeName(row.location);
+  const name = row.name.toLowerCase();
+  const hit = boot.slowApps.find((app) => {
+    const appExe = app.name.toLowerCase();
+    if (exe && appExe === exe) return true;
+    return appExe.replace(/\.exe$/, "") === name || app.friendlyName?.toLowerCase() === name;
+  });
+  return hit ? hit.degradationMs : null;
+}
 
 /** Aberto há menos que isso = em uso: nunca sugerimos tirar. */
 const RECENT_USE_DAYS = 7;

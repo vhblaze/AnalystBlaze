@@ -1995,6 +1995,7 @@ fn supported_actions() -> &'static [&'static str] {
         "EMPTY_TEMP",
         "PURGE_CLEANUP_QUARANTINE",
         "CLEAR_STANDBY_LIST",
+        "READ_BOOT_PERFORMANCE",
         "STOP_SERVICE",
         "RESTORE_SERVICE",
         "SET_DNS_SERVERS",

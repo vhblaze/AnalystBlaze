@@ -79,6 +79,17 @@ export function formatMs(value: number | null | undefined, empty = MISSING): str
   return `${formatNumber(value)} ms`;
 }
 
+/** Duração medida em ms, em segundos: "4,1 s", "34 s", "1 min 32 s". */
+export function formatSecondsFromMs(ms: number | null | undefined, empty = MISSING): string {
+  if (!isNumber(ms) || ms <= 0) return empty;
+  const seconds = ms / 1000;
+  if (seconds < 10) return `${decimal(seconds, 1)} s`;
+  if (seconds < 60) return `${Math.round(seconds)} s`;
+  const whole = Math.round(seconds);
+  const rest = whole % 60;
+  return rest ? `${Math.floor(whole / 60)} min ${rest} s` : `${whole / 60} min`;
+}
+
 /** Só o número da latência (o "ms" fica em outro elemento). */
 export function formatMsValue(value: number | null | undefined, empty = MISSING): string {
   if (!isNumber(value)) return empty;

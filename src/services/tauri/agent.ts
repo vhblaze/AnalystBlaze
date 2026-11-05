@@ -900,6 +900,36 @@ export async function releaseMemory(): Promise<OptimizationResult> {
   return invoke<OptimizationResult>("release_memory");
 }
 
+/** L2: tempo de boot que o próprio Windows mediu (Diagnostics-Performance). */
+export type BootRecord = {
+  bootMs: number;
+  mainPathMs: number | null;
+  postBootMs: number | null;
+  recordedAt: string;
+};
+
+export type SlowStartupApp = {
+  name: string;
+  friendlyName: string | null;
+  degradationMs: number;
+  recordedAt: string;
+};
+
+export type BootPerformance = {
+  status: "ok" | "no_events" | "unavailable";
+  lastBoot: BootRecord | null;
+  recentBoots: BootRecord[];
+  slowApps: SlowStartupApp[];
+};
+
+/** Lê o log de boot pelo componente de sistema. Só lê; não muda nada. */
+export async function readBootPerformance(): Promise<BootPerformance> {
+  requireTauriRuntime("Tempo de boot");
+  const result = await invoke<OptimizationResult>("boot_performance");
+  if (!result.success) throw new Error(result.message);
+  return result.details as BootPerformance;
+}
+
 export async function getOptimizationSnapshots(limit = 80): Promise<OptimizationSnapshot[]> {
   requireTauriRuntime("Histórico de snapshots");
   return invoke<OptimizationSnapshot[]>("optimization_snapshots", { limit });
