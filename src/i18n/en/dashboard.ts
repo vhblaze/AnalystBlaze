@@ -6,6 +6,25 @@ import type { dashboard as pt } from "../pt/dashboard";
 export const dashboard: Mirror<typeof pt> = {
   dashboard: {
     d3: {
+      factorMeasured: "measured {{value}}, limit {{limit}}",
+      factorTotal: "Health now (100 minus the points above)",
+      factors: {
+        cpu_critical: "Processor under very high load",
+        cpu_sustained_load: "Processor under load",
+        ram_pressure_critical: "Memory almost full",
+        ram_pressure: "High memory use",
+        gpu_thermal_critical: "GPU very hot",
+        gpu_thermal_watch: "GPU warming up",
+        cpu_thermal_critical: "CPU very hot",
+        cpu_thermal_watch: "CPU warming up",
+        disk_space_low: "Disk almost full",
+        background_process_load: "Many programs running",
+        disk_smart_predict_failure: "The disk warns it may fail (SMART)",
+        defender_attention: "Defender off or unavailable",
+        system_event_errors: "Many critical Windows errors in 24 h",
+        network_packet_loss: "Network packet loss",
+        network_jitter: "Unstable ping",
+      },
       subtitleNotConnected: "The agent is not connected on this PC yet.",
       subtitleWaiting: "Waiting for the first reading of the PC.",
       subtitleGood: "Your PC is fine.",
