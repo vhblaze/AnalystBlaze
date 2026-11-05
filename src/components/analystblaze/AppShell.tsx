@@ -11,8 +11,11 @@ import { useTelemetry } from "@/hooks/useTelemetry";
 import { isUpdateDismissedNow, useUpdater } from "@/hooks/useUpdater";
 import { useI18n } from "@/i18n";
 import {
+  cancelDeviceReplacement,
   cancelDeviceTransfer,
   confirmDeviceTransfer,
+  replaceDevice,
+  type DeviceChoice,
   getActiveAnnouncements,
   getPrivilegedHelperStatus,
   getTodaysAutomaticActions,
@@ -105,9 +108,39 @@ export function AppShell() {
   }, [updater]);
 
   const loggedOutError = useMemo(() => {
+    // Bloco 5.4: the server ended the session and said why - show that.
+    if (auth.message.key.startsWith("agent.messages.sessionEnded.")) {
+      return { code: null, message: t(auth.message.key) };
+    }
     if (auth.message.key !== "agent.messages.error") return null;
     return splitBackendErrorCode(t(auth.message.key, auth.message.params));
   }, [auth.message, t]);
+
+  const deviceLimitChoices = auth.status?.device_limit_choices ?? [];
+  const [replacingDevice, setReplacingDevice] = useState(false);
+  const handleReplaceDevice = useCallback(
+    async (hwId: string) => {
+      setReplacingDevice(true);
+      try {
+        await replaceDevice(hwId);
+      } catch (error) {
+        await cancelDeviceReplacement().catch(() => undefined);
+        toast({
+          title: t("deviceLimit.failedTitle"),
+          description: splitBackendErrorCode(String(error)).message,
+          variant: "destructive",
+        });
+      } finally {
+        setReplacingDevice(false);
+        await auth.refreshStatus().catch(() => undefined);
+      }
+    },
+    [auth, t],
+  );
+  const handleCancelDeviceLimit = useCallback(async () => {
+    await cancelDeviceReplacement().catch(() => undefined);
+    await auth.refreshStatus().catch(() => undefined);
+  }, [auth]);
 
   const titles = useMemo<Record<ViewKey, string>>(
     () => ({
@@ -1400,8 +1433,16 @@ export function AppShell() {
           onLater={() => setEmailNoticeDismissed(true)}
         />
       )}
+      {deviceLimitChoices.length > 0 && (
+        <DeviceLimitDialog
+          devices={deviceLimitChoices}
+          busy={replacingDevice}
+          onReplace={(hwId) => void handleReplaceDevice(hwId)}
+          onCancel={() => void handleCancelDeviceLimit()}
+        />
+      )}
       <LoggedOutNotice
-        visible={auth.ready && !auth.status?.authenticated}
+        visible={auth.ready && !auth.status?.authenticated && deviceLimitChoices.length === 0}
         busy={auth.busy}
         onLogin={() => void auth.login()}
         errorMessage={loggedOutError?.message ?? null}
@@ -1511,6 +1552,87 @@ function EmailVerificationNotice({
             className="rounded-xl border border-cyan-400/50 bg-cyan-400/10 px-4 py-2 text-sm font-semibold text-cyan-100 transition hover:bg-cyan-400/15"
           >
             {t("emailVerification.verifyAction")}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/** Bloco 5.4: the account already has its 2 active PCs. The server no longer
+ * switches one off on its own, so the person at this PC picks which one it
+ * replaces. Same frame as ConfirmationDialog. */
+function DeviceLimitDialog({
+  devices,
+  busy,
+  onReplace,
+  onCancel,
+}: {
+  devices: DeviceChoice[];
+  busy: boolean;
+  onReplace: (hwId: string) => void;
+  onCancel: () => void;
+}) {
+  const { t, locale } = useI18n();
+  const describe = (device: DeviceChoice) =>
+    [device.machine_type, device.os_version].filter(Boolean).join(" · ");
+  const lastSeen = (value?: string | null) => {
+    if (!value) return null;
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    return t("deviceLimit.lastSeen", {
+      date: date.toLocaleString(locale, { dateStyle: "short", timeStyle: "short" }),
+    });
+  };
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/75 px-4 py-8 backdrop-blur-sm">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-label={t("deviceLimit.title")}
+        className="relative flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border border-cyan-400/20 bg-slate-950 shadow-[0_25px_80px_-30px_hsl(187_100%_55%/0.7)]"
+      >
+        <div className="min-h-0 flex-1 overflow-y-auto p-6 pb-4">
+          <div className="font-mono text-[10px] uppercase tracking-[0.25em] text-amber-300">
+            {t("deviceLimit.eyebrow")}
+          </div>
+          <h2 className="mt-2 text-xl font-semibold text-slate-50">{t("deviceLimit.title")}</h2>
+          <p className="mt-2 text-sm leading-relaxed text-slate-400">{t("deviceLimit.body")}</p>
+          <ul className="mt-4 grid gap-2">
+            {devices.map((device) => (
+              <li
+                key={device.id}
+                className="flex items-center justify-between gap-3 rounded-xl border border-cyan-500/10 bg-slate-900/70 p-3"
+              >
+                <div className="min-w-0">
+                  <strong className="block truncate text-sm text-slate-100">
+                    {device.name || t("deviceLimit.unnamed")}
+                  </strong>
+                  <span className="block truncate text-xs text-slate-500">{describe(device)}</span>
+                  {lastSeen(device.last_ping) && (
+                    <span className="block text-xs text-slate-500">{lastSeen(device.last_ping)}</span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => onReplace(device.id)}
+                  className="shrink-0 rounded-xl border border-slate-600/60 px-3 py-1.5 text-sm font-medium text-slate-200 transition hover:border-slate-400/70 disabled:opacity-50"
+                >
+                  {t("deviceLimit.replace")}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-white/5 p-4">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onCancel}
+            className="rounded-xl border border-slate-600/60 px-4 py-2 text-sm font-medium text-slate-300 transition hover:border-slate-400/70 disabled:opacity-50"
+          >
+            {t("deviceLimit.cancel")}
           </button>
         </div>
       </section>

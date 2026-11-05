@@ -54,6 +54,27 @@ pub struct CommandResponse {
 }
 
 #[derive(Debug, Clone)]
+pub enum RefreshOutcome {
+    Refreshed {
+        access_token: String,
+        refresh_token: Option<String>,
+    },
+    /// The server ended the session; the string is its reason.
+    Refused(String),
+    /// Could not ask (offline, server down): keep the session, try later.
+    Unavailable(String),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeviceChoice {
+    pub id: String,
+    pub name: Option<String>,
+    pub machine_type: Option<String>,
+    pub os_version: Option<String>,
+    pub last_ping: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct CommandAcknowledgement {
     pub command_id: Uuid,
     pub success: bool,
@@ -329,6 +350,101 @@ impl ApiClient {
         }
 
         Ok(None)
+    }
+
+    /// Bloco 5.4: renews the desktop session in the background. A refusal
+    /// carries the server's reason (device_removed, password_changed, ...);
+    /// anything else - no network, server down, timeout - is "try later",
+    /// never a reason to log the user out.
+    pub async fn refresh_session(&self, refresh_token: &str) -> RefreshOutcome {
+        let response = match self
+            .http
+            .post(self.url("/api/v1/auth/refresh"))
+            .json(&json!({ "refresh_token": refresh_token }))
+            .send()
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => return RefreshOutcome::Unavailable(error.to_string()),
+        };
+        let status = response.status();
+        let body = response.json::<Value>().await.unwrap_or(Value::Null);
+        if status.is_success() {
+            let access_token = body
+                .get("access_token")
+                .and_then(Value::as_str)
+                .filter(|token| !token.trim().is_empty());
+            return match access_token {
+                Some(access_token) => RefreshOutcome::Refreshed {
+                    access_token: access_token.to_string(),
+                    refresh_token: body
+                        .get("refresh_token")
+                        .and_then(Value::as_str)
+                        .filter(|token| !token.trim().is_empty())
+                        .map(ToString::to_string),
+                },
+                None => RefreshOutcome::Unavailable("refresh sem token de acesso".to_string()),
+            };
+        }
+        if status == StatusCode::UNAUTHORIZED {
+            return RefreshOutcome::Refused(
+                body.get("reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("invalid")
+                    .to_string(),
+            );
+        }
+        RefreshOutcome::Unavailable(format!("status {status}"))
+    }
+
+    /// Active devices of the account, for the "which PC do you want to
+    /// replace?" prompt when pairing hits the device limit.
+    pub async fn active_devices(&self, access_token: &str) -> Result<Vec<DeviceChoice>, String> {
+        let response = self
+            .http
+            .get(self.url("/api/v1/hardware"))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        let payload = ok_json::<Value>(response).await?;
+        Ok(payload
+            .get("devices")
+            .and_then(Value::as_array)
+            .map(|devices| {
+                devices
+                    .iter()
+                    .filter(|device| device.get("is_active").and_then(Value::as_bool).unwrap_or(false))
+                    .filter_map(|device| {
+                        let text = |key: &str| {
+                            device
+                                .get(key)
+                                .and_then(Value::as_str)
+                                .filter(|value| !value.trim().is_empty())
+                                .map(ToString::to_string)
+                        };
+                        Some(DeviceChoice {
+                            id: text("id")?,
+                            name: text("name"),
+                            machine_type: text("machine_type"),
+                            os_version: text("os_version"),
+                            last_ping: text("last_ping"),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    pub async fn remove_device(&self, access_token: &str, hw_id: &str) -> Result<(), String> {
+        let response = self
+            .http
+            .delete(self.url(&format!("/api/v1/hardware/{hw_id}")))
+            .bearer_auth(access_token)
+            .send()
+            .await
+            .map_err(|error| error.to_string())?;
+        ok_empty(response).await
     }
 
     pub async fn exchange_desktop_pairing_code(&self, code: &str) -> Result<AuthTokens, String> {
