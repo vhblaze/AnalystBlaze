@@ -15,7 +15,8 @@ import type { User } from "@/hooks/useAuth";
 import { localeLabels, type Locale, useI18n } from "@/i18n";
 import { formatAgo, formatMinutes } from "@/lib/format";
 import type { AgentStatus, LocalAiPolicy, UpdateStatus } from "@/services/tauri/agent";
-import { getTelemetryQueueSize, isTelemetryEnabled, setTelemetryEnabled } from "@/services/telemetry";
+import { isTelemetryEnabled, setTelemetryEnabled } from "@/services/telemetry";
+import { useUiTelemetryQueue } from "@/features/telemetry/useUiTelemetryQueue";
 import {
   automationPolicy,
   saveAutomationPolicy,
@@ -275,22 +276,19 @@ function PrivacyCard({
   const { t } = useI18n();
   const [showAll, setShowAll] = useState(false);
   const [uiTelemetry, setUiTelemetry] = useState(isTelemetryEnabled);
-  const [queueSize, setQueueSize] = useState(getTelemetryQueueSize);
+  const queue = useUiTelemetryQueue();
+  const queueSize = queue.size;
   const didMount = useRef(false);
 
   useEffect(() => {
     setTelemetryEnabled(uiTelemetry);
     if (didMount.current) {
       track("ui_telemetry_preference_changed", { enabled: uiTelemetry });
-      setQueueSize(getTelemetryQueueSize());
+      queue.refresh();
     }
     didMount.current = true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uiTelemetry, track]);
-
-  useEffect(() => {
-    const id = window.setInterval(() => setQueueSize(getTelemetryQueueSize()), 10_000);
-    return () => window.clearInterval(id);
-  }, []);
 
   return (
     <Card label={t("settingsD3.privacy.label")}>

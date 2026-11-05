@@ -31,6 +31,12 @@ export const todaysAutomaticActions = createAgentResource<AutomaticActionEntry[]
   staleMs: 60_000,
 });
 
+/** Auditoria completa para exportar (não é lida em tela). */
+export const EXPORT_LIMIT = 1000;
+export function exportAuditLog() {
+  return getAuditLog(EXPORT_LIMIT);
+}
+
 /** Auditoria + snapshots: a mesma linha do tempo em Controles e no Histórico. */
 export function useHistory(options?: { auto?: boolean }) {
   const audit = auditLog.use(options);

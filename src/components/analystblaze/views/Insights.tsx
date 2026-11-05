@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertCircle, ArrowRight, Bot, Brain, Cpu, Droplets, ExternalLink, RefreshCw, Sparkles, User, Wind, X, Zap } from "lucide-react";
 import { fetchInsights, type DiskNearFullInfo, type Insight } from "@/services/insights";
+import { diskOptimizationInsight as diskOptimizationInsightResource } from "@/features/disk/useDiskUsage";
 import { useI18n } from "@/i18n";
 import { useTelemetry } from "@/hooks/useTelemetry";
 import {
-  checkDiskOptimizationInsight,
   isTauriRuntime,
   openAgentInsights,
   openWindowsSecurity,
@@ -878,9 +878,7 @@ export function Insights({
       // just means the local VPN+latency insight stays silent, not that the
       // whole insights screen errors out.
       networkDiagnosticsResource.refresh().catch(() => undefined);
-      checkDiskOptimizationInsight()
-        .then(setDiskOptimizationInsightData)
-        .catch(() => undefined);
+      diskOptimizationInsightResource.refresh().then(setDiskOptimizationInsightData).catch(() => undefined);
     }
     try {
       const result = await fetchInsights(t, locale);

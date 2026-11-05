@@ -8,7 +8,6 @@ import { formatMs, formatNumber, formatPercent } from "@/lib/format";
 import {
   detectLiveModeStreamingApp,
   generateLiveModeIncidentReport,
-  getLiveModeStatus,
   listenToLiveModeIncident,
   listenToLiveModeSample,
   startLiveMode,
@@ -17,6 +16,8 @@ import {
   type IncidentReport,
   type LiveModeSample,
 } from "@/services/tauri/agent";
+
+import { liveModeStatus } from "@/features/network/useLiveMode";
 
 const LIVE_MODE_SAMPLE_HISTORY = 60;
 const STREAMING_APP_POLL_MS = 15_000;
@@ -58,7 +59,8 @@ export function LiveMode({ isReady }: { isReady: boolean }) {
 
   useEffect(() => {
     if (!isReady) return;
-    getLiveModeStatus()
+    liveModeStatus
+      .refresh()
       .then((status) => {
         setActive(status.active);
         setSamples(status.samples.slice(-LIVE_MODE_SAMPLE_HISTORY));
@@ -92,7 +94,8 @@ export function LiveMode({ isReady }: { isReady: boolean }) {
   useEffect(() => {
     if (!active) return;
     const id = window.setInterval(() => {
-      getLiveModeStatus()
+      liveModeStatus
+        .refresh()
         .then((status) => {
           setBitrate(status.bitrateRecommendation ?? null);
           setIncident(status.lastIncident ?? null);

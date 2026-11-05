@@ -97,8 +97,8 @@ export function useCommandItems({
       },
       {
         id: "action-start-agent",
-        title: "Iniciar agente",
-        description: "Conecta o agente local e inicia a telemetria.",
+        title: t("confirm.startAgent.title"),
+        description: t("confirm.startAgent.body"),
         keywords: ["start", "telemetria", "conectar"],
         hint: "action",
         disabled: auth.busy || !auth.status?.registered,
@@ -106,8 +106,8 @@ export function useCommandItems({
       },
       {
         id: "action-collect-sample",
-        title: "Coletar amostra agora",
-        description: "Atualiza a leitura local de telemetria uma vez.",
+        title: t("confirm.collectSample.title"),
+        description: t("confirm.collectSample.body"),
         keywords: ["sample", "amostra", "metricas"],
         hint: "action",
         disabled: auth.busy,
@@ -115,16 +115,16 @@ export function useCommandItems({
       },
       {
         id: "action-pc-clean-fast",
-        title: "Aplicar PC limpo/rapido",
-        description: "Executa baseline, limpeza segura, visual de desempenho, apps de fundo e score medido.",
+        title: t("confirm.pcCleanFast.title"),
+        description: t("confirm.pcCleanFast.body"),
         keywords: ["performance", "limpo", "rapido", "score"],
         hint: "action",
         disabled: auth.busy || !auth.status?.registered,
         onSelect: () =>
           void runConfirmed(
             {
-              title: "Aplicar PC limpo/rapido",
-              description: "O agente mede antes/depois, aplica somente ações allowlisted com snapshots locais e mostra o ganho real deste computador.",
+              title: t("confirm.pcCleanFast.title"),
+              description: t("confirm.pcCleanFast.body"),
               risk: "sensivel",
               snapshot: true,
             },
@@ -133,16 +133,16 @@ export function useCommandItems({
       },
       {
         id: "action-game-mode",
-        title: "Ativar Modo Gamer",
-        description: "Aplica perfil completo: jogo em alta prioridade, fundo reduzido, limpeza segura, energia, visual e rede.",
+        title: t("confirm.gameMode.title"),
+        description: t("confirm.gameMode.body"),
         keywords: ["jogo", "game", "prioridade", "otimizacao"],
         hint: "action",
         disabled: auth.busy || !auth.status?.registered,
         onSelect: () =>
           void runConfirmed(
             {
-              title: "Ativar Modo Gamer",
-              description: "O agente aplica um pacote seguro: prioriza jogo/app ativo, reduz apps de fundo, usa limpeza TEMP reversível, ajusta energia/visual e mede rede. Deep clean e purge não entram neste fluxo.",
+              title: t("confirm.gameMode.title"),
+              description: t("confirm.gameMode.body"),
               risk: "sensivel",
               snapshot: true,
             },
@@ -151,16 +151,16 @@ export function useCommandItems({
       },
       {
         id: "action-restore-game-mode",
-        title: "Restaurar Modo Gamer",
-        description: "Restaura a sessão ativa do Modo Gamer e seus snapshots.",
+        title: t("confirm.restoreGameMode.title"),
+        description: t("confirm.restoreGameMode.body"),
         keywords: ["restaurar", "restore", "jogo"],
         hint: "action",
         disabled: auth.busy,
         onSelect: () =>
           void runConfirmed(
             {
-              title: "Restaurar Modo Gamer",
-              description: "Restaura snapshots da sessão ativa de Modo Gamer, incluindo plano de energia e prioridades de processos quando disponíveis.",
+              title: t("confirm.restoreGameMode.title"),
+              description: t("confirm.restoreGameMode.body"),
               risk: "seguro",
               snapshot: false,
             },
@@ -169,16 +169,16 @@ export function useCommandItems({
       },
       {
         id: "action-restore-snapshots",
-        title: "Restaurar snapshots",
-        description: "Desfaz alterações pendentes salvas pelo agente local.",
+        title: t("confirm.restoreAll.title"),
+        description: t("confirm.restoreAll.body"),
         keywords: ["rollback", "restore", "snapshot"],
         hint: "action",
         disabled: auth.busy,
         onSelect: () =>
           void runConfirmed(
             {
-              title: "Restaurar snapshots",
-              description: "O agente vai tentar desfazer alterações pendentes de energia, limpeza, apps de inicialização e serviços.",
+              title: t("confirm.restoreAll.title"),
+              description: t("confirm.restoreAll.body"),
               risk: "seguro",
               snapshot: false,
             },
@@ -187,16 +187,16 @@ export function useCommandItems({
       },
       {
         id: "action-deep-temp",
-        title: "Limpeza profunda TEMP",
-        description: "Move arquivos TEMP destravados com pelo menos 5 minutos para quarentena.",
+        title: t("confirm.deepTemp.title"),
+        description: t("confirm.deepTemp.body"),
         keywords: ["temp", "limpeza", "cleanup"],
         hint: "action",
         disabled: auth.busy,
         onSelect: () =>
           void runConfirmed(
             {
-              title: "Limpeza profunda TEMP",
-              description: "Move arquivos temporários destravados com pelo menos 5 minutos para quarentena e tenta incluir a TEMP do Windows quando o helper permitir.",
+              title: t("confirm.deepTemp.title"),
+              description: t("confirm.deepTemp.body"),
               risk: "sensivel",
               snapshot: true,
             },
@@ -205,16 +205,16 @@ export function useCommandItems({
       },
       {
         id: "action-purge-cleanup",
-        title: "Purgar quarentena",
-        description: "Apaga permanentemente arquivos em quarentena para liberar espaço real.",
+        title: t("confirm.purgeQuarantine.title"),
+        description: t("confirm.purgeQuarantine.body"),
         keywords: ["purge", "quarentena", "espaco", "disco"],
         hint: "action",
         disabled: auth.busy,
         onSelect: () =>
           void runConfirmed(
             {
-              title: "Purgar quarentena",
-              description: "Apaga permanentemente a quarentena de limpeza. Depois disso esses arquivos não poderão ser restaurados.",
+              title: t("confirm.purgeQuarantine.title"),
+              description: t("confirm.purgeQuarantine.body"),
               risk: "sensivel",
               snapshot: false,
             },
@@ -223,8 +223,8 @@ export function useCommandItems({
       },
       {
         id: "action-login",
-        title: "Fazer login pela Web",
-        description: "Abre o pareamento/login do agente desktop.",
+        title: t("confirm.login.title"),
+        description: t("confirm.login.body"),
         keywords: ["login", "conta", "pareamento"],
         hint: "auth",
         disabled: auth.busy || Boolean(auth.status?.authenticated),

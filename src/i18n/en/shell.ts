@@ -118,6 +118,11 @@ export const shell: Mirror<typeof pt> = {
     failedTitle: "Couldn't set up the admin component",
     stillDownTitle: "The admin component is still unavailable",
     stillDownBody: "Try restarting the PC and opening AnalystBlaze again; if it persists, reinstall the app with the machine-wide installer.",
+    fixAction: "Fix now",
+  },
+  prompts: {
+    updateNotInstalled: "The update was not installed",
+    remoteRequestReceived: "Request from the site received",
   },
   autoActionsSummary: {
     title: "What AnalystBlaze did on its own today",

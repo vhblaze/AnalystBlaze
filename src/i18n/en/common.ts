@@ -11,7 +11,7 @@ export const common: Mirror<typeof pt> = {
   common: {
     cancel: "Cancel",
     close: "Close",
-    logout: "Logout",
+    logout: "Sign out",
     refresh: "Refresh",
     refreshing: "Analyzing...",
   },
@@ -46,6 +46,155 @@ export const common: Mirror<typeof pt> = {
     releaseMemory: {
       title: "Release memory",
       body: "Empties Windows standby memory and programs' idle memory, through the system component. No program is closed. Then we show how much was freed.",
+    },
+    restoreGameMode: {
+      title: "Turn off Game Mode",
+      body: "Restores what the Game Mode session changed: power plan, app priorities and visual effects.",
+    },
+    deepTemp: {
+      title: "Deep cleanup of temporary files",
+      body: "Moves temporary files unused for at least 5 minutes to quarantine. With the system component, includes the Windows temp folder. Can be undone from the quarantine.",
+    },
+    purgeQuarantine: {
+      title: "Empty the quarantine",
+      body: "Permanently deletes everything in the quarantine to free the space. After that, those files do not come back.",
+    },
+    enableDefrag: {
+      title: "Turn automatic disk optimization back on",
+      body: "Turns the Windows task that defragments the HDD from time to time back on, keeping reads fast. Needs the system component.",
+    },
+    sfc: {
+      title: "Check Windows files",
+      body: "Runs Windows' own system file check. It can take several minutes. Do not shut down or restart the PC while it runs.",
+    },
+    dism: {
+      title: "Repair Windows components",
+      body: "Runs Windows' own component repair. Takes longer than the file check and needs internet. Do not shut down or restart the PC while it runs.",
+    },
+    restartDevice: {
+      title: "Restart the device",
+      body: "Turns the device off and on again, like in Device Manager. Fixes a good share of driver errors; some only go away by restarting Windows.",
+    },
+    gameDvr: {
+      title: "Turn off Game Bar recording",
+      body: "Turns off Xbox Game Bar background recording. Can be undone: the previous value stays in History.",
+    },
+    repairService: {
+      title: "Try to fix the service",
+      body: "Stops and restarts the service, then checks it stayed up before calling it fixed. May not fix deeper causes.",
+    },
+    disableService: {
+      title: "Turn the service off for good",
+      body: "The service stops starting on its own. Can be undone from History. Only use it if you are sure you do not need it.",
+    },
+    defenderThrottle: {
+      title: "Limit Defender scans",
+      body: "Lowers the CPU scheduled Defender scans may use (from 50% to 20%) and lets them run only while the PC is idle. Real-time protection does not change. Can be undone from the same card.",
+    },
+    defenderRestore: {
+      title: "Restore Defender scans",
+      body: "Puts Defender's scan preferences back exactly as they were.",
+    },
+    defenderRenew: {
+      title: "Renew Defender definitions",
+      body: "Removes the current virus definition set (which may be corrupt) and downloads a fresh one. Defender runs without definitions for a few minutes; do not open suspicious files meanwhile.",
+    },
+    volumeCheck: {
+      title: "Check drive {{drive}}: on the next restart",
+      body: "Marks the drive so Windows checks and repairs the file system before it opens, next time you restart. That boot can take a few minutes longer.",
+    },
+    disableStartup: {
+      title: "Remove {{name}} from startup",
+      body: "Removes the app from Windows startup ({{location}}) and keeps how it was so it comes back with one click.",
+      unknownLocation: "detected registry entry",
+    },
+    restoreStartup: {
+      title: "Put {{name}} back in startup",
+      titleAll: "Put the apps back in startup",
+      body: "Restores the value kept before the change.",
+    },
+    delayStartup: {
+      title: "Delay {{name}}",
+      body: "Takes {{name}} out of direct startup and puts it in the AnalystBlaze queue. Today the queue does not reopen the app on its own.",
+    },
+    restoreDelayedStartup: {
+      title: "Put {{name}} back in startup",
+      titleAll: "Put delayed apps back in startup",
+      body: "Restores the startup value kept before the change.",
+    },
+    stopService: {
+      title: "Stop the {{name}} service",
+      body: "Only stops if the service is not on the critical list. Before that, it records whether it was running.",
+    },
+    restoreService: {
+      title: "Start the {{name}} service again",
+      titleAll: "Start the services again",
+      body: "Only starts services that were running before the action.",
+    },
+    powerPlan: {
+      high: "Turn on high performance",
+      saver: "Turn on power saver",
+      balanced: "Turn on the balanced plan",
+      body: "Switches the Windows power plan and keeps the previous one to go back later.",
+    },
+    visualPerformance: {
+      title: "Turn on performance visuals",
+      body: "Reduces Windows animations, transparency and visual effects. Can be undone. Other open programs may hitch for an instant at the switch; that is Windows announcing the change, not an error.",
+    },
+    restoreVisual: {
+      title: "Restore visual effects",
+      body: "Puts Windows visual effects back as they were before the last change.",
+    },
+    restorePerformanceSession: {
+      title: "Undo Clean and fast PC",
+      body: "Reverts what the last Clean and fast PC session changed: visual effects, priorities and startup.",
+    },
+    cleanupCategory: {
+      title: "Clean this category",
+      body: "Moves this category's files to quarantine. Can be undone until the quarantine is emptied.",
+    },
+    startAgent: {
+      title: "Connect the agent",
+      body: "Connects the local agent and starts measuring.",
+    },
+    collectSample: {
+      title: "Measure now",
+      body: "Takes a reading of the PC now.",
+    },
+    login: {
+      title: "Sign in on the site",
+      body: "Opens the AnalystBlaze sign-in in the browser.",
+    },
+    flushDns: {
+      title: "Clear the DNS cache",
+      body: "Empties the list of addresses Windows kept. Needs no administrator and changes nothing that would need undoing.",
+    },
+    setDns: {
+      title: "Change the adapter's DNS",
+      body: "Switches the chosen adapter's DNS servers. The current setting is kept to go back later.",
+    },
+    resetWinsock: {
+      title: "Reset Windows networking (Winsock)",
+      body: "Resets the Windows network layer. Requires a PC restart and cannot be undone by AnalystBlaze.",
+    },
+    adapterInUse: {
+      title: "Warning: this interface seems to be in use",
+    },
+    adapterEnable: {
+      title: "Turn the network adapter on",
+      body: "Turns the chosen network adapter back on.",
+    },
+    adapterDisable: {
+      title: "Turn the network adapter off",
+      body: "Turns the chosen adapter off so traffic leaves through another one. The current state is kept to go back later.",
+    },
+    networkTune: {
+      title: "Apply the network tune",
+      body: "Adjusts Windows TCP parameters. The current setting is kept; if you do not confirm it got better, it reverts on its own.",
+    },
+    restartForNetwork: {
+      title: "Restart the computer",
+      body: "Closes all open programs and restarts Windows in a few seconds. Needed for the network change to take effect.",
     },
   },
   notFound: {

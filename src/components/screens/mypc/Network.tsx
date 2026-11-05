@@ -16,8 +16,6 @@ import {
   confirmNetworkTune,
   getPendingNetworkTune,
   isTauriRuntime,
-  listAllNetworkAdapters,
-  listNetworkAdapters,
   listenToDnsOptimizationSuggested,
   revertNetworkTune,
   runNetworkTraceroute,
@@ -30,6 +28,7 @@ import {
   type TracerouteResult,
 } from "@/services/tauri/agent";
 import { networkDiagnostics as networkDiagnosticsResource, useNetwork } from "@/features/network/useNetwork";
+import { allNetworkAdapters, networkAdapters } from "@/features/network/useAdapters";
 import { privilegedHelperStatus, useHelper } from "@/features/helper/useHelper";
 import { auditLog, optimizationSnapshots } from "@/features/history/useHistory";
 import {
@@ -142,8 +141,8 @@ export function Network({
     try {
       const [nextNetwork, nextAdapters, nextAllAdapters] = await Promise.all([
         networkDiagnosticsResource.refresh(),
-        listNetworkAdapters(),
-        listAllNetworkAdapters(),
+        networkAdapters.refresh(),
+        allNetworkAdapters.refresh(),
         privilegedHelperStatus.refresh(),
       ]);
       setAdapters(nextAdapters);
@@ -261,7 +260,7 @@ export function Network({
   };
 
   const adapterIsEnabled = async (adapterName: string): Promise<boolean | null> => {
-    const adapter = (await listAllNetworkAdapters()).find((item) => item.name === adapterName);
+    const adapter = (await allNetworkAdapters.refresh()).find((item) => item.name === adapterName);
     if (!adapter) return null;
     return (adapter.status ?? "").toLowerCase() !== "disabled";
   };
