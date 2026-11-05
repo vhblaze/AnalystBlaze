@@ -10,12 +10,15 @@ export const mypc: Mirror<typeof pt> = {
       ok: "ok",
       noReading: "No Windows reading yet. It arrives with the agent's next sample.",
       noAdvanced: "The agent has not sent the Windows diagnostics yet.",
-      foot: "Warnings stay here, without notifications. Defender and the USB modem still show up in Insights.",
+      foot: "Notices stay here, without notifications. The 4G/5G USB modem still shows up in Insights.",
       openInsights: "Open Insights",
       actions: {
         restart: "Restart now",
         sfc: "Check system files",
         restartDevice: "Restart device",
+        repairService: "Try to fix",
+        openSecurity: "Open Windows Security",
+        openEnergy: "See power",
       },
       items: {
         reboot: {
@@ -29,14 +32,48 @@ export const mypc: Mirror<typeof pt> = {
           detail: "The reserved space hit its limit and Windows deletes old points. You decide whether AnalystBlaze may raise the limit.",
         },
         services: {
-          title: "Windows services failing: {{count}}",
-          detail: "{{names}}. May point to corrupted system files; the check confirms it.",
-          detailWithCrashes: "{{names}}. Plus {{crashes}} Windows crashes. May point to corrupted system files; the check confirms it.",
           okTitle: "Windows services and events",
           okDetail: "No service failing. {{events}} critical errors in the last 24 h.",
         },
+        defender: {
+          okTitle: "Defender",
+          okDetail: "Real-time protection on.",
+          attentionTitle: "Defender needs attention",
+          attentionDetail: "The service or the antivirus is partly off, according to Windows itself.",
+          offTitle: "Defender real-time protection off",
+          offDetail: "Without it, Windows does not block dangerous files on the spot. Turn it on in Windows Security.",
+        },
+        driver: {
+          okTitle: "GPU driver: {{name}} {{version}}",
+          okDetail: "Released {{days}} days ago.",
+          okDetailNoAge: "Version read from Windows.",
+          oldTitle: "Old GPU driver: {{name}} {{version}}",
+          oldDetail: "Released {{days}} days ago. New drivers bring fixes for recent games; update from the manufacturer's site.",
+        },
+        temperature: {
+          okTitle: "Temperature",
+          okBoth: "CPU at {{cpu}} °C and GPU at {{gpu}} °C now, within your limit.",
+          okCpu: "CPU at {{cpu}} °C now, within your limit.",
+          okGpu: "GPU at {{gpu}} °C now, within your limit.",
+          hotCpuTitle: "CPU at {{cpu}} °C",
+          hotGpuTitle: "GPU at {{gpu}} °C",
+          hotBothTitle: "CPU at {{cpu}} °C and GPU at {{gpu}} °C",
+          hotDetail: "Above the limit you set ({{cpuLimit}} °C CPU, {{gpuLimit}} °C GPU). With heat like this the processor lowers its clock to protect itself.",
+        },
+        energy: {
+          okTitle: "Power",
+          okDetail: "{{plan}} plan, the one indicated for now.",
+          mismatchTitle: "Power plan not the indicated one",
+          mismatchDetail: "The active plan is not the one AnalystBlaze indicates for the current power source. You can switch it in Controls › Power.",
+        },
+        service: {
+          title: "Service {{name}} failing",
+          detail: "Windows recorded failures of this service in the last 24 h. Try to fix stops and restarts the service and checks it stayed up.",
+        },
         events: {
           title: "Critical errors in the last 24 h: {{count}}",
+          detail: "Many critical errors in the Windows log. May point to corrupted system files; the check confirms.",
+          detailWithCrashes: "Many critical errors in the Windows log, plus {{crashes}} crashes. May point to corrupted system files; the check confirms.",
         },
         device: {
           title: "{{name}} has a problem",
