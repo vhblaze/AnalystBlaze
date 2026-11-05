@@ -2,6 +2,8 @@ import { healthStrings, specsStrings } from "@/components/screens/mypc/strings/h
 import { diskStrings } from "@/components/screens/mypc/strings/disk";
 import { networkStrings } from "@/components/screens/mypc/strings/network";
 import { performanceStrings } from "@/components/screens/mypc/strings/performance";
+import { insightsStrings } from "@/components/screens/insights/strings";
+import { settingsStrings } from "@/components/screens/settings/strings";
 
 export type Locale = "pt-BR" | "en-US";
 
@@ -74,6 +76,8 @@ export const translations = {
       session: "sessão",
       viewAccount: "Ver conta",
     },
+    insightsD3: insightsStrings["pt-BR"],
+    settingsD3: settingsStrings["pt-BR"],
     mypc: {
       health: healthStrings["pt-BR"],
       disk: diskStrings["pt-BR"],
@@ -1370,6 +1374,8 @@ export const translations = {
       session: "session",
       viewAccount: "View account",
     },
+    insightsD3: insightsStrings["en-US"],
+    settingsD3: settingsStrings["en-US"],
     mypc: {
       health: healthStrings["en-US"],
       disk: diskStrings["en-US"],
