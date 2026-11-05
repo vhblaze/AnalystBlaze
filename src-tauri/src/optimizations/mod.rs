@@ -13,6 +13,7 @@ pub mod disk_usage;
 pub mod energy;
 pub mod focus;
 pub mod frame_capture_control;
+pub mod frame_measurements;
 pub mod game_launch;
 pub mod latency;
 pub mod local_ai_policy;
@@ -559,6 +560,16 @@ async fn apply_game_mode(payload: Option<Value>, source: CommandSource) -> Execu
         (Some(Err(reason)), _) => json!({ "skipped": format!("baseline_{reason}") }),
         _ => Value::Null,
     };
+    // Local copy, with the game's name, for the Dashboard (L4). Skipped
+    // windows are kept too, so the screen can say why there is no number.
+    if let Err(error) = frame_measurements::record(detected_game.process_name.as_deref(), &frame_measurement) {
+        let _ = audit::record_event(
+            "warn",
+            "frame_measurement.store_failed",
+            "Nao foi possivel guardar a medicao de FPS no PC.",
+            json!({ "error": error }),
+        );
+    }
 
     // A session is saved whenever there's something to restore, even without
     // a detected game process - otherwise a manual activation (no game
@@ -893,6 +904,16 @@ const FRAME_MEASUREMENT_SETTLE: Duration = Duration::from_secs(3);
 /// ~6 fps over the window. Fewer frames than this is a loading screen, a
 /// minimised game or a process on its way out - not a measurement.
 const MIN_MEASURED_FRAMES: u64 = 120;
+/// How often the window checks that the game is still the foreground app.
+const FOREGROUND_POLL: Duration = Duration::from_millis(250);
+/// The game must be in front for at least this share of the window. An
+/// alt-tab to Discord or the desktop drops the game to a few fps (or to
+/// none), and a 1% low computed over that is a low of the alt-tab, not of
+/// the game - doc 11 section 4 calls this out as the measurement's main flaw.
+const MIN_FOREGROUND_SHARE: f64 = 0.9;
+/// Smallest 1% low difference ever called a change, whatever the windows'
+/// own spread says (doc 11 section 4: "Sem diferenca mensuravel (+-3 fps)").
+const MIN_MEASURABLE_FPS: f64 = 3.0;
 
 /// LocalPolicy, or a server command dispatched unattended (`learned_auto`).
 /// An Insights-originated command the user just confirmed is not automatic -
@@ -936,23 +957,34 @@ async fn measure_frame_window(target_pid: u32, window: Duration) -> Result<Value
         return Err("capture_start_returned_no_id".to_string());
     };
 
-    tokio::time::sleep(window).await;
+    // Sampled here, in the app process, not in the helper: the helper is a
+    // service in session 0 and can't see the user's foreground window.
+    let deadline = tokio::time::Instant::now() + window;
+    let (mut polls, mut in_front) = (0_u32, 0_u32);
+    while tokio::time::Instant::now() < deadline {
+        polls += 1;
+        if detection::foreground_pid() == Some(target_pid) {
+            in_front += 1;
+        }
+        tokio::time::sleep(FOREGROUND_POLL).await;
+    }
+    let foreground_share = (polls > 0).then(|| f64::from(in_front) / f64::from(polls));
 
     let stopped = Box::pin(execute_frame_capture_action_with_retry(
         "STOP_FRAME_CAPTURE",
-        json!({ "captureId": capture_id }),
+        json!({ "captureId": capture_id, "chunks": true }),
     ))
     .await;
     if !stopped.success {
         return Err("capture_stop_failed".to_string());
     }
-    frame_window_stats(&stopped.details)
+    frame_window_stats(&stopped.details, foreground_share)
 }
 
 /// The fields of a STOP_FRAME_CAPTURE result worth keeping, or Err when the
 /// window held too few frames to mean anything. Pure, so it is testable
 /// without a helper or a running game.
-fn frame_window_stats(stop_details: &Value) -> Result<Value, String> {
+fn frame_window_stats(stop_details: &Value, foreground_share: Option<f64>) -> Result<Value, String> {
     let sample_count = stop_details
         .get("sampleCount")
         .and_then(Value::as_u64)
@@ -960,14 +992,41 @@ fn frame_window_stats(stop_details: &Value) -> Result<Value, String> {
     if sample_count < MIN_MEASURED_FRAMES {
         return Err("too_few_frames".to_string());
     }
+    if foreground_share.is_some_and(|share| share < MIN_FOREGROUND_SHARE) {
+        return Err("game_not_in_foreground".to_string());
+    }
     let field = |key: &str| stop_details.get(key).and_then(Value::as_f64);
+    let chunks: Vec<f64> = stop_details
+        .get("chunkLow1PctFps")
+        .and_then(Value::as_array)
+        .map(|values| values.iter().filter_map(Value::as_f64).collect())
+        .unwrap_or_default();
     Ok(json!({
         "sampleCount": sample_count,
         "avgFps": field("avgFps"),
         "low1PctFps": field("low1PctFps"),
         "low0_1PctFps": field("low0_1PctFps"),
         "stutterCount": stop_details.get("stutterCount").and_then(Value::as_u64),
+        "foregroundShare": foreground_share.map(|share| (share * 100.0).round() / 100.0),
+        "chunkLow1PctFps": chunks,
     }))
+}
+
+/// Half the range of a window's per-block 1% lows: how far the game moved
+/// on its own inside 20 s. None with fewer than two blocks.
+fn window_spread(window: &Value) -> Option<f64> {
+    let chunks: Vec<f64> = window
+        .get("chunkLow1PctFps")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(Value::as_f64)
+        .collect();
+    if chunks.len() < 2 {
+        return None;
+    }
+    let max = chunks.iter().copied().fold(f64::MIN, f64::max);
+    let min = chunks.iter().copied().fold(f64::MAX, f64::min);
+    Some((max - min) / 2.0)
 }
 
 /// Baseline vs optimized, with the deltas precomputed so the server and the
@@ -984,13 +1043,32 @@ fn frame_measurement_summary(baseline: &Value, optimized: &Value) -> Value {
         }
         _ => None,
     };
+    // A change only counts when it beats both the fixed floor and the
+    // spread each window showed on its own: if the 1% low already swings
+    // +-8 fps inside 20 s untouched, a +5 fps delta is noise, not Game Mode.
+    let spreads = (window_spread(baseline), window_spread(optimized));
+    let noise = [Some(MIN_MEASURABLE_FPS), spreads.0, spreads.1]
+        .into_iter()
+        .flatten()
+        .fold(0.0_f64, f64::max);
+    let noise = (noise * 10.0).round() / 10.0;
+    let delta_low = delta("low1PctFps");
+    let verdict = match delta_low {
+        None => "incomplete",
+        Some(value) if value.abs() <= noise => "no_measurable_difference",
+        Some(value) if value > 0.0 => "better",
+        Some(_) => "worse",
+    };
     json!({
         "windowSeconds": FRAME_MEASUREMENT_WINDOW.as_secs(),
         "baseline": baseline,
         "optimized": optimized,
         "deltaAvgFps": delta("avgFps"),
         "deltaAvgFpsPercent": delta_percent,
-        "deltaLow1PctFps": delta("low1PctFps"),
+        "deltaLow1PctFps": delta_low,
+        "noiseFps": noise,
+        "noiseFromWindows": spreads.0.is_some() && spreads.1.is_some(),
+        "verdict": verdict,
     })
 }
 
@@ -1401,18 +1479,53 @@ mod tests {
     #[test]
     fn a_window_with_too_few_frames_is_not_a_measurement() {
         let thin = json!({ "sampleCount": 40, "avgFps": 2.0 });
-        assert_eq!(frame_window_stats(&thin), Err("too_few_frames".to_string()));
+        assert_eq!(frame_window_stats(&thin, None), Err("too_few_frames".to_string()));
         let missing = json!({});
-        assert!(frame_window_stats(&missing).is_err());
+        assert!(frame_window_stats(&missing, None).is_err());
 
         let real = json!({
             "sampleCount": 2900, "avgFps": 145.2, "low1PctFps": 61.0,
             "low0_1PctFps": 30.5, "stutterCount": 12, "avgFrameTimeMs": 6.88,
         });
-        let stats = frame_window_stats(&real).unwrap();
+        let stats = frame_window_stats(&real, Some(1.0)).unwrap();
         assert_eq!(stats["avgFps"], json!(145.2));
         assert_eq!(stats["low1PctFps"], json!(61.0));
         assert_eq!(stats["sampleCount"], json!(2900));
+    }
+
+    #[test]
+    fn a_window_where_the_game_lost_focus_is_not_a_measurement() {
+        let real = json!({ "sampleCount": 2900, "avgFps": 145.2, "low1PctFps": 61.0 });
+        assert_eq!(frame_window_stats(&real, Some(0.6)), Err("game_not_in_foreground".to_string()));
+        assert!(frame_window_stats(&real, Some(0.95)).is_ok());
+        // Unknown share (no samples taken) does not invent a failure.
+        assert!(frame_window_stats(&real, None).is_ok());
+    }
+
+    #[test]
+    fn a_delta_inside_the_windows_own_swing_is_no_measurable_difference() {
+        // Each window swings +-8 fps on its own; +5 fps is noise.
+        let before = json!({ "low1PctFps": 100.0, "chunkLow1PctFps": [92.0, 100.0, 108.0, 100.0] });
+        let after = json!({ "low1PctFps": 105.0, "chunkLow1PctFps": [98.0, 105.0, 110.0, 104.0] });
+        let summary = frame_measurement_summary(&before, &after);
+        assert_eq!(summary["noiseFps"], json!(8.0));
+        assert_eq!(summary["verdict"], json!("no_measurable_difference"));
+        assert_eq!(summary["noiseFromWindows"], json!(true));
+
+        // +30 fps clears it, either way round.
+        let after = json!({ "low1PctFps": 130.0, "chunkLow1PctFps": [126.0, 130.0, 134.0, 129.0] });
+        assert_eq!(frame_measurement_summary(&before, &after)["verdict"], json!("better"));
+        assert_eq!(frame_measurement_summary(&after, &before)["verdict"], json!("worse"));
+    }
+
+    #[test]
+    fn without_blocks_the_floor_still_applies() {
+        let before = json!({ "low1PctFps": 100.0 });
+        let summary = frame_measurement_summary(&before, &json!({ "low1PctFps": 102.0 }));
+        assert_eq!(summary["noiseFps"], json!(3.0));
+        assert_eq!(summary["noiseFromWindows"], json!(false));
+        assert_eq!(summary["verdict"], json!("no_measurable_difference"));
+        assert_eq!(frame_measurement_summary(&before, &json!({}))["verdict"], json!("incomplete"));
     }
 
     #[test]

@@ -1135,6 +1135,13 @@ async fn boot_performance() -> Result<optimizations::ExecutionResult, String> {
     Ok(optimizations::execute_command("READ_BOOT_PERFORMANCE", None).await)
 }
 
+/// L4: medições de FPS antes/depois do Modo Jogo automático, guardadas só
+/// no PC (com o nome do jogo, que nunca vai para o servidor).
+#[tauri::command]
+fn frame_measurements(limit: Option<usize>) -> Vec<serde_json::Value> {
+    optimizations::frame_measurements::recent(limit.unwrap_or(10))
+}
+
 #[tauri::command]
 async fn set_dns_servers(
     adapter_name: String,
@@ -2309,6 +2316,7 @@ pub fn run() {
             flush_dns_cache,
             release_memory,
             boot_performance,
+            frame_measurements,
             renew_dhcp_lease,
             apply_network_tune,
             confirm_network_tune,

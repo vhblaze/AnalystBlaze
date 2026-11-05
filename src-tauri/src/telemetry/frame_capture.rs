@@ -219,6 +219,48 @@ pub fn parse_presentmon_csv_by_process(csv: &str) -> HashMap<String, Vec<FrameSa
     grouped
 }
 
+/// Block length used to judge how steady a measurement window is.
+pub const CHUNK_MS: f64 = 5_000.0;
+/// A block with fewer frames than this is a hitch or a loading screen, not
+/// a reading - it is left out of the per-block list rather than skewing it.
+const MIN_FRAMES_PER_CHUNK: usize = 30;
+
+/// 1% low of each consecutive `chunk_ms` block of the capture, in order.
+///
+/// A 20 s window is split by the game's own frame clock (the running sum of
+/// `MsBetweenPresents`), so no wall-clock timestamp is needed and the split
+/// is exact. The spread across blocks says how much the game moved on its
+/// own inside one window - the floor any before/after delta has to beat to
+/// mean something. A trailing block shorter than half of `chunk_ms` is
+/// dropped: a 1 s scrap is too short to compare with the 5 s ones.
+pub fn chunk_low_1pct_fps(samples: &[FrameSample], chunk_ms: f64) -> Vec<f64> {
+    if chunk_ms <= 0.0 {
+        return Vec::new();
+    }
+    let mut lows = Vec::new();
+    let mut current: Vec<f64> = Vec::new();
+    let mut elapsed = 0.0;
+    let push = |frames: &mut Vec<f64>, lows: &mut Vec<f64>| {
+        if frames.len() >= MIN_FRAMES_PER_CHUNK {
+            frames.sort_by(f64::total_cmp);
+            lows.push(fps_from_ms(tail_average(frames, 0.01)));
+        }
+        frames.clear();
+    };
+    for sample in samples {
+        current.push(sample.ms_between_presents);
+        elapsed += sample.ms_between_presents;
+        if elapsed >= chunk_ms {
+            push(&mut current, &mut lows);
+            elapsed = 0.0;
+        }
+    }
+    if elapsed >= chunk_ms / 2.0 {
+        push(&mut current, &mut lows);
+    }
+    lows
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +271,36 @@ mod tests {
             csv.push_str(&format!("game.exe,1234,{ms},0\n"));
         }
         csv
+    }
+
+    fn steady(fps: f64, seconds: f64) -> Vec<FrameSample> {
+        let ms = 1000.0 / fps;
+        let count = (seconds * fps).round() as usize;
+        vec![FrameSample { ms_between_presents: ms, dropped: false }; count]
+    }
+
+    #[test]
+    fn chunks_follow_the_games_own_frame_clock() {
+        let mut samples = steady(100.0, 10.0);
+        samples.extend(steady(50.0, 10.0));
+        let lows = chunk_low_1pct_fps(&samples, CHUNK_MS);
+        assert_eq!(lows.len(), 4);
+        assert!((lows[0] - 100.0).abs() < 0.5, "{lows:?}");
+        assert!((lows[3] - 50.0).abs() < 0.5, "{lows:?}");
+    }
+
+    #[test]
+    fn a_short_trailing_scrap_is_not_a_block() {
+        let samples = steady(100.0, 11.0);
+        assert_eq!(chunk_low_1pct_fps(&samples, CHUNK_MS).len(), 2);
+        let samples = steady(100.0, 13.0);
+        assert_eq!(chunk_low_1pct_fps(&samples, CHUNK_MS).len(), 3);
+    }
+
+    #[test]
+    fn blocks_with_too_few_frames_are_left_out() {
+        // 4 fps for 10 s: 20 frames per 5 s block - a loading screen.
+        assert!(chunk_low_1pct_fps(&steady(4.0, 10.0), CHUNK_MS).is_empty());
     }
 
     #[test]
