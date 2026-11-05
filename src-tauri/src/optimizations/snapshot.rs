@@ -375,6 +375,32 @@ pub fn discard_snapshot(snapshot_id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A pasta deste snapshot saiu da quarentena pelos limites automáticos
+/// (5 GB / 7 dias): ele não tem mais volta.
+pub fn mark_snapshot_purged(snapshot_id: &str) -> Result<(), String> {
+    let _guard = lock_snapshot_file();
+    let mut snapshots = read_snapshots()?;
+    let now = chrono::Utc::now().timestamp();
+    let mut changed = false;
+    for snapshot in &mut snapshots {
+        if snapshot.id != snapshot_id || snapshot.restored_at.is_some() {
+            continue;
+        }
+        snapshot.restored_at = Some(now);
+        if let Some(details) = snapshot.details.as_object_mut() {
+            details.insert("purged".to_string(), Value::Bool(true));
+            details.insert("purged_at".to_string(), Value::Number(now.into()));
+            details.insert("purged_by".to_string(), Value::String("quarantine_limits".to_string()));
+            details.insert("reversible".to_string(), Value::Bool(false));
+        }
+        changed = true;
+    }
+    if changed {
+        write_snapshots(&snapshots)?;
+    }
+    Ok(())
+}
+
 pub fn mark_cleanup_snapshots_purged() -> Result<usize, String> {
     let _guard = lock_snapshot_file();
     let mut snapshots = read_snapshots()?;

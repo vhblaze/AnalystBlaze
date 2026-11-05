@@ -354,12 +354,12 @@ export const controls: Mirror<typeof pt> = {
       quarantine: {
         label: "Quarantine",
         title: "Empty the quarantine",
-        size: "{{size}} kept until you empty it",
+        size: "{{size}} kept · up to 5 GB and 7 days",
         empty: "The quarantine is empty",
         purge: "Empty",
         confirm: "Deletes {{size}} for good. AnalystBlaze cannot undo it.",
         done: "Quarantine emptied",
-        foot: "What cleanup removes stays here and can come back. Nothing leaves on its own; emptying cannot be undone.",
+        foot: "What cleanup removes stays here and can come back for up to 7 days. Past 7 days, or once the quarantine exceeds 5 GB, the oldest items leave on their own and that goes to History. Emptying cannot be undone.",
       },
       revert: {
         label: "Undo and logs",

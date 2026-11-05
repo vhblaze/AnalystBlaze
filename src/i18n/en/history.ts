@@ -120,6 +120,7 @@ export const history: Mirror<typeof pt> = {
       SCHEDULE_VOLUME_CHECK: "Disk check scheduled",
       SHADOW_STORAGE_AUTO_RESIZED: "Restore point storage adjusted",
       SERVICE_AUTO_RESTORED: "Windows service turned back on",
+      QUARANTINE_AUTO_PRUNED: "Quarantine: old items deleted (5 GB and 7-day limit)",
       GAME_MODE_RESTORED_AFTER_EXIT: "Game Mode ended, everything restored",
       FOCUS_RESTORED_AFTER_TTL: "Focus Mode ended, everything restored",
       NETWORK_TUNE_REVERTED_TIMEOUT: "TCP tuning undone, it was not confirmed",

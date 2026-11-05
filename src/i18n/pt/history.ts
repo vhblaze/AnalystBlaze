@@ -117,6 +117,7 @@ export const history = {
       SCHEDULE_VOLUME_CHECK: "Verificação de disco agendada",
       SHADOW_STORAGE_AUTO_RESIZED: "Espaço dos pontos de restauração ajustado",
       SERVICE_AUTO_RESTORED: "Serviço do Windows religado",
+      QUARANTINE_AUTO_PRUNED: "Quarentena: itens antigos apagados (limite de 5 GB e 7 dias)",
       GAME_MODE_RESTORED_AFTER_EXIT: "Modo Jogo encerrado, tudo restaurado",
       FOCUS_RESTORED_AFTER_TTL: "Modo Foco encerrado, tudo restaurado",
       NETWORK_TUNE_REVERTED_TIMEOUT: "Ajuste de TCP desfeito por falta de confirmação",

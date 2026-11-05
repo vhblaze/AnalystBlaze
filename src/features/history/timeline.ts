@@ -42,6 +42,7 @@ const SOURCE_BY_AUDIT: Record<string, TimelineSource> = {
 const AUTOMATIC_EVENTS: Record<string, string> = {
   "shadow_storage.auto_resized": "history.actions.SHADOW_STORAGE_AUTO_RESIZED",
   "service_usage.auto_restored": "history.actions.SERVICE_AUTO_RESTORED",
+  "quarantine.auto_pruned": "history.actions.QUARANTINE_AUTO_PRUNED",
   "game_mode.restored_after_game_exit": "history.actions.GAME_MODE_RESTORED_AFTER_EXIT",
   "focus.restored_after_ttl": "history.actions.FOCUS_RESTORED_AFTER_TTL",
   "network_tune.reverted_after_timeout": "history.actions.NETWORK_TUNE_REVERTED_TIMEOUT",
