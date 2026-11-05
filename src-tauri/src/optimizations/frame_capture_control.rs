@@ -235,6 +235,14 @@ fn stop_frame_capture_sync(payload: Option<Value>) -> ExecutionResult {
         .and_then(|value| value.get("captureId").or_else(|| value.get("capture_id")))
         .and_then(Value::as_str)
         .map(str::to_string);
+    // The before/after windows ask for per-block 1% lows (how steady the
+    // window was); the session-long capture doesn't, since hours of 5 s
+    // blocks are of no use to anyone.
+    let want_chunks = payload
+        .as_ref()
+        .and_then(|value| value.get("chunks"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let Some(capture_id) = capture_id else {
         return ExecutionResult {
             success: false,
@@ -288,6 +296,11 @@ fn stop_frame_capture_sync(payload: Option<Value>) -> ExecutionResult {
         .map(|guard| guard.clone())
         .unwrap_or_default();
     let stats = crate::telemetry::frame_capture::compute_frame_time_stats(&samples);
+    let chunk_lows = if want_chunks {
+        crate::telemetry::frame_capture::chunk_low_1pct_fps(&samples, crate::telemetry::frame_capture::CHUNK_MS)
+    } else {
+        Vec::new()
+    };
     let ended_at = chrono::Utc::now().timestamp();
 
     ExecutionResult::ok(
@@ -304,6 +317,7 @@ fn stop_frame_capture_sync(payload: Option<Value>) -> ExecutionResult {
             "low0_1PctFps": stats.low_0_1pct_fps,
             "droppedFrameCount": stats.dropped_frame_count,
             "stutterCount": stats.stutter_count,
+            "chunkLow1PctFps": chunk_lows,
         }),
     )
 }

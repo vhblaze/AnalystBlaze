@@ -900,6 +900,50 @@ export async function releaseMemory(): Promise<OptimizationResult> {
   return invoke<OptimizationResult>("release_memory");
 }
 
+/** L4: uma janela de 20 s de jogo medida pela captura de quadros. */
+export type FrameWindow = {
+  sampleCount: number;
+  avgFps: number | null;
+  low1PctFps: number | null;
+  low0_1PctFps?: number | null;
+  stutterCount?: number | null;
+  foregroundShare?: number | null;
+  chunkLow1PctFps?: number[];
+};
+
+export type FrameMeasurementVerdict = "better" | "worse" | "no_measurable_difference" | "incomplete";
+
+/**
+ * Antes/depois do Modo Jogo automático. `skipped` vem quando uma das
+ * janelas não valeu (jogo fora da frente, poucos quadros, captura falhou).
+ */
+export type FrameMeasurement = {
+  windowSeconds?: number;
+  baseline?: FrameWindow;
+  optimized?: FrameWindow;
+  deltaAvgFps?: number | null;
+  deltaAvgFpsPercent?: number | null;
+  deltaLow1PctFps?: number | null;
+  noiseFps?: number;
+  noiseFromWindows?: boolean;
+  verdict?: FrameMeasurementVerdict;
+  skipped?: string;
+};
+
+export type FrameMeasurementEntry = {
+  id: string;
+  /** Unix, em segundos. */
+  measuredAt: number;
+  gameProcessName: string | null;
+  measurement: FrameMeasurement;
+};
+
+/** Medições guardadas só no PC, da mais nova para a mais velha. */
+export async function getFrameMeasurements(limit = 10): Promise<FrameMeasurementEntry[]> {
+  requireTauriRuntime("Medições de FPS");
+  return invoke<FrameMeasurementEntry[]>("frame_measurements", { limit });
+}
+
 /** L2: tempo de boot que o próprio Windows mediu (Diagnostics-Performance). */
 export type BootRecord = {
   bootMs: number;

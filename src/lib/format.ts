@@ -66,6 +66,20 @@ export function formatPercent(value: number | null | undefined, empty = MISSING)
   return `${Math.round(Math.max(0, Math.min(100, value)))}%`;
 }
 
+/** Quadros por segundo, inteiros: "156 fps". */
+export function formatFps(value: number | null | undefined, empty = MISSING): string {
+  if (!isNumber(value) || value <= 0) return empty;
+  return `${Math.round(value)} fps`;
+}
+
+/** Diferença de FPS com sinal: "+84 fps", "-12 fps", "0 fps". */
+export function formatSignedFps(value: number | null | undefined, empty = MISSING): string {
+  if (!isNumber(value)) return empty;
+  const rounded = Math.round(value);
+  const sign = rounded > 0 ? "+" : rounded < 0 ? "-" : "";
+  return `${sign}${Math.abs(rounded)} fps`;
+}
+
 /** Variação com sinal e uma casa: "+54,0%", "-3,2%". */
 export function formatSignedPercent(value: number | null | undefined, empty = MISSING): string {
   if (!isNumber(value)) return empty;
@@ -195,6 +209,21 @@ export function shortGpuName(raw: string | null | undefined, empty = MISSING) {
     .replace(/\s+GPU$/i, "")
     .replace(/\s{2,}/g, " ")
     .trim() || raw.trim();
+}
+
+/**
+ * Nome de jogo vindo do executável: tira ".exe" e os sufixos de build do
+ * Unreal/Unity ("VALORANT-Win64-Shipping" -> "VALORANT"); nomes curtos
+ * em minúsculas viram sigla ("cs2" -> "CS2").
+ */
+export function displayGameName(processName: string): string {
+  const base = processName
+    .trim()
+    .replace(/\.exe$/i, "")
+    .replace(/([-_ ](win64|win32|x64|x86))?[-_ ]shipping$/i, "")
+    .replace(/[-_ ](win64|win32|x64|x86)$/i, "");
+  if (base.length <= 4 && base === base.toLowerCase()) return base.toUpperCase();
+  return displayProcessName(base);
 }
 
 /** Nome de programa vindo do executável ("chrome" -> "Chrome"); o resto fica como veio. */
