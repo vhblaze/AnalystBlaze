@@ -21,7 +21,7 @@ const Insights = lazy(() => import("@/components/analystblaze/views/Insights").t
 const Controls = lazy(() => import("@/components/screens/controls/Controls").then((module) => ({ default: module.Controls })));
 const DiskExplorer = lazy(() => import("@/components/screens/mypc/Disk").then((module) => ({ default: module.Disk })));
 const Network = lazy(() => import("@/components/screens/mypc/Network").then((module) => ({ default: module.Network })));
-const Settings = lazy(() => import("@/components/analystblaze/views/Settings").then((module) => ({ default: module.Settings })));
+const Settings = lazy(() => import("@/components/screens/settings/Settings").then((module) => ({ default: module.Settings })));
 
 function ViewFallback() {
   return <div className="h-44 animate-pulse rounded-card border border-line bg-surface" />;
@@ -543,6 +543,7 @@ export function ScreenOutlet({
             onRequestAgentApplyInsight={auth.requestAgentApplyInsight}
             shadowConsentNeeded={shadowConsentNeeded}
             onResolveShadowConsent={resolveShadowConsent}
+            onOpenWindowsHealth={() => navigate(route("mypc", "health"))}
           />
         </Suspense>
       );

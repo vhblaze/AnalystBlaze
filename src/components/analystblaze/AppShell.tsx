@@ -39,6 +39,17 @@ export function AppShell() {
   useEffect(() => {
     startTelemetryHistory();
   }, []);
+  // Acessibilidade (Configurações): vale desde a abertura do app, não só
+  // depois que a tela de Configurações é aberta.
+  useEffect(() => {
+    try {
+      const root = document.documentElement;
+      root.classList.toggle("ab-high-contrast", localStorage.getItem("analystblaze.accessibility.highContrast") === "1");
+      root.classList.toggle("ab-reduce-motion", localStorage.getItem("analystblaze.accessibility.reduceMotion") === "1");
+    } catch {
+      // Sem localStorage: fica o padrão.
+    }
+  }, []);
   const auth = useAuth();
   const telemetry = useAgentTelemetry();
   const updater = useUpdater();
