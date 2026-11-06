@@ -144,6 +144,10 @@ export const controls: Mirror<typeof pt> = {
             title: "Review startup apps",
             desc: "Suggests removing safe apps you don't use.",
           },
+          profile_rules_enabled: {
+            title: "Handle what weighs without use",
+            desc: "Delays at startup or pauses what costs now and hasn't shown up in 7 days. Only with the PC idle for 10 min, no game open, at most 2 a day; never a critical service. All with Undo.",
+          },
           reduce_background_processes: {
             title: "Calm background apps",
             desc: "Lowers secondary apps' priority. Does not touch protected ones.",
