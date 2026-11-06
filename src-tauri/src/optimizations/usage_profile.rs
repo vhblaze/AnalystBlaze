@@ -76,9 +76,16 @@ pub fn categorize(exe: &str) -> &'static str {
     }
     if matches!(
         stem,
-        "code" | "cursor" | "devenv" | "idea64" | "pycharm64" | "rider64" | "webstorm64" | "excel" | "winword"
-            | "powerpnt" | "outlook" | "onenote" | "notion" | "figma" | "obsidian" | "windowsterminal"
-            | "powershell" | "cmd" | "acrobat" | "acrord32"
+        "code" | "cursor" | "devenv" | "idea64" | "pycharm64" | "rider64" | "webstorm64" | "clion64" | "goland64"
+            | "windowsterminal" | "powershell" | "pwsh" | "cmd" | "wt" | "sublime_text" | "notepad++" | "docker desktop"
+            | "postman" | "dbeaver" | "android studio" | "studio64"
+    ) {
+        return "dev";
+    }
+    if matches!(
+        stem,
+        "excel" | "winword" | "powerpnt" | "outlook" | "onenote" | "notion" | "figma" | "obsidian" | "acrobat"
+            | "acrord32" | "soffice" | "libreoffice"
     ) {
         return "work";
     }
@@ -262,6 +269,9 @@ pub fn classify(store: &UsageStore, window_days: usize) -> UsageProfile {
     } else if share("creation") >= 0.30 {
         reasons.push("creation_share".to_string());
         "creation"
+    } else if share("dev") >= 0.30 {
+        reasons.push("dev_share".to_string());
+        "dev"
     } else if avg_active_per_day < 3600 {
         reasons.push("light_use".to_string());
         "light"
@@ -343,7 +353,8 @@ mod tests {
     #[test]
     fn categorizes_known_apps() {
         assert_eq!(categorize("chrome.exe"), "browser");
-        assert_eq!(categorize("Code.exe"), "work");
+        assert_eq!(categorize("Code.exe"), "dev");
+        assert_eq!(categorize("winword.exe"), "work");
         assert_eq!(categorize("blender.exe"), "creation");
         assert_eq!(categorize("steam.exe"), "launcher");
         assert_eq!(categorize("explorer.exe"), "system");
@@ -366,6 +377,15 @@ mod tests {
         assert_eq!(profile.days_observed, 2);
         assert_eq!(profile.top_apps[0].name, "chrome.exe");
         assert!(profile.reasons.contains(&"work_share".to_string()));
+    }
+
+    #[test]
+    fn mostly_editor_and_terminal_is_dev() {
+        let store = store_with(&[
+            ("2026-11-01", &[("code.exe", 5000), ("chrome.exe", 3000)]),
+            ("2026-11-02", &[("cursor.exe", 4000), ("chrome.exe", 2000)]),
+        ]);
+        assert_eq!(classify(&store, 7).profile, "dev");
     }
 
     #[test]

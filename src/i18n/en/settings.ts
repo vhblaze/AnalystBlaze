@@ -38,6 +38,12 @@ export const settings: Mirror<typeof pt> = {
       highContrast: "High contrast",
       highContrastHint: "Stronger text and fewer decorative effects",
     },
+    profile: {
+      label: "This PC's profile",
+      body: "What you answered on first contact. Automatic rules and suggestions follow this profile; measurement runs alongside.",
+      measured: "Measured over the last days: {{profile}}.",
+      replayTutorial: "Replay the tutorial",
+    },
     notifications: {
       label: "Notifications",
       critical: "Windows alert if the PC reaches a critical state",

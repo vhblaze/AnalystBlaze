@@ -504,8 +504,14 @@ export type LocalAiPolicy = {
   notify_on_improvement: boolean;
   notify_on_new_insight: boolean;
   notify_daily_summary: boolean;
+  /** Perfil declarado no primeiro contato; null = ainda não respondeu. */
+  declared_profile: DeclaredProfile | null;
+  /** Regras automáticas do perfil (nascem ligadas). */
+  profile_rules_enabled: boolean;
   telemetry_diagnostics_enabled: boolean;
 };
+
+export type DeclaredProfile = "games" | "work" | "dev" | "creation" | "general";
 
 export type PerformanceReport = {
   id: string;
@@ -958,7 +964,7 @@ export async function getForegroundGame(): Promise<ForegroundGame> {
   return invoke<ForegroundGame>("foreground_game");
 }
 
-export type UsageProfileName = "collecting" | "games" | "work" | "creation" | "light" | "mixed";
+export type UsageProfileName = "collecting" | "games" | "work" | "dev" | "creation" | "light" | "mixed";
 
 export type UsageProfile = {
   profile: UsageProfileName;
@@ -1620,6 +1626,8 @@ export async function getLocalAiPolicy(): Promise<LocalAiPolicy> {
       notify_on_improvement: true,
       notify_on_new_insight: true,
       notify_daily_summary: false,
+      declared_profile: null,
+      profile_rules_enabled: true,
       telemetry_diagnostics_enabled: false,
     };
   }

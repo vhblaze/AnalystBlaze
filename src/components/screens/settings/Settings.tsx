@@ -16,7 +16,9 @@ import { useUpdater } from "@/hooks/useUpdater";
 import type { User } from "@/hooks/useAuth";
 import { localeLabels, type Locale, useI18n } from "@/i18n";
 import { formatAgo, formatMinutes } from "@/lib/format";
-import type { AgentStatus, LocalAiPolicy, UpdateStatus } from "@/services/tauri/agent";
+import type { AgentStatus, DeclaredProfile, LocalAiPolicy, UpdateStatus } from "@/services/tauri/agent";
+import { startTutorial } from "@/features/profile/tutorial";
+import { usageProfile } from "@/features/profile/useUsageProfile";
 import { isTelemetryEnabled, setTelemetryEnabled } from "@/services/telemetry";
 import { useUiTelemetryQueue } from "@/features/telemetry/useUiTelemetryQueue";
 import { useHelper } from "@/features/helper/useHelper";
@@ -118,6 +120,7 @@ export function Settings({
           <MovedCard onOpenControls={onOpenControls} onOpenSystemComponent={onOpenSystemComponent} />
         </div>
         <div className="flex flex-col gap-5">
+          <ProfileCard />
           <NotificationsCard onOpenHistory={onOpenHistory} />
           <AccountCard
             user={user}
@@ -232,6 +235,43 @@ type PermissionState = "granted" | "denied" | "default" | "unsupported";
 function readNotificationPermission(): PermissionState {
   if (typeof Notification === "undefined") return "unsupported";
   return Notification.permission;
+}
+
+const DECLARED_PROFILES: ReadonlyArray<DeclaredProfile> = ["games", "work", "dev", "creation", "general"];
+
+/** Perfil declarado (o que o usuário respondeu no primeiro contato) e "Rever tutorial". */
+function ProfileCard() {
+  const { t } = useI18n();
+  const { policy } = useAutomationPolicy({ auto: true });
+  const measured = usageProfile.use().data;
+  const save = (declared_profile: DeclaredProfile) => {
+    if (!policy) return;
+    const next = { ...policy, declared_profile };
+    automationPolicy.set(next);
+    saveAutomationPolicy(next).catch(() => automationPolicy.set(policy));
+  };
+  return (
+    <Card label={t("settingsD3.profile.label")}>
+      <p className="text-sm text-fg-2">{t("settingsD3.profile.body")}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {DECLARED_PROFILES.map((key) => (
+          <Button key={key} size="sm" variant={policy?.declared_profile === key ? "primary" : "outline"} onClick={() => save(key)}>
+            {t(`firstContact.options.${key}.label`)}
+          </Button>
+        ))}
+      </div>
+      {measured && measured.profile !== "collecting" && (
+        <p className="mt-3 text-xs text-fg-3">
+          {t("settingsD3.profile.measured", { profile: t(`dashboard.d3.usageProfile.names.${measured.profile}`) })}
+        </p>
+      )}
+      <div className="mt-4">
+        <Button size="sm" variant="link" onClick={startTutorial}>
+          {t("settingsD3.profile.replayTutorial")}
+        </Button>
+      </div>
+    </Card>
+  );
 }
 
 function NotificationsCard({ onOpenHistory }: { onOpenHistory?: () => void }) {
