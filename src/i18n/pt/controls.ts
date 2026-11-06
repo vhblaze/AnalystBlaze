@@ -141,6 +141,10 @@ export const controls = {
             title: "Revisar apps de inicialização",
             desc: "Sugere tirar apps seguros que você não usa.",
           },
+          profile_rules_enabled: {
+            title: "Tratar o que pesa sem você usar",
+            desc: "Adia na inicialização ou pausa o que custa agora e não aparece há 7 dias. Só com o PC parado há 10 min, sem jogo aberto, no máximo 2 por dia; nunca serviço crítico. Tudo com Desfazer.",
+          },
           reduce_background_processes: {
             title: "Acalmar apps em segundo plano",
             desc: "Baixa a prioridade de apps secundários. Não mexe nos protegidos.",

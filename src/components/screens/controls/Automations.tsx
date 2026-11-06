@@ -24,6 +24,7 @@ type FlagKey =
   | "auto_pc_clean"
   | "auto_best_dns"
   | "manage_startup_apps"
+  | "profile_rules_enabled"
   | "reduce_background_processes"
   | "manage_services"
   | "allow_automatic_sensitive_actions";
@@ -49,6 +50,7 @@ const GROUPS: Array<{ id: "safe" | "more" | "sensitive"; items: Automation[] }> 
       { key: "auto_pc_clean", proOnly: true },
       { key: "auto_best_dns" },
       { key: "manage_startup_apps" },
+      { key: "profile_rules_enabled" },
       { key: "reduce_background_processes" },
     ],
   },

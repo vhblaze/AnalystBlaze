@@ -242,6 +242,7 @@ async fn todays_automatic_actions() -> Result<Vec<audit::AuditEvent>, String> {
         "shadow_storage.auto_resized",
         "service_usage.auto_restored",
         "quarantine.auto_pruned",
+        "profile_rule.applied",
     ];
     let events = tokio::task::spawn_blocking(|| audit::recent_events(250))
         .await
@@ -2315,6 +2316,7 @@ pub fn run() {
             spawn_plan_sync_loop(app.handle().clone());
             spawn_quarantine_prune_loop();
             spawn_usage_profile_loop();
+            spawn_profile_rules_loop();
 
             // The window starts hidden (see tauri.conf.json) regardless of how
             // it was launched, so this is the single place that decides
@@ -2674,6 +2676,19 @@ fn spawn_usage_profile_loop() {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(optimizations::usage_profile::SAMPLE_SECS)).await;
             let _ = tokio::task::spawn_blocking(optimizations::usage_profile::sample_once).await;
+        }
+    });
+}
+
+/// Regras do perfil (optimizations::profile_rules): trata "pesa sem você
+/// usar" sozinho, só com o PC ocioso, sem jogo e no máximo 2 por dia.
+/// Mesma trilha das ações manuais (snapshot, Histórico, Desfazer).
+fn spawn_profile_rules_loop() {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(5 * 60)).await;
+        loop {
+            optimizations::profile_rules::run_once().await;
+            tokio::time::sleep(std::time::Duration::from_secs(optimizations::profile_rules::LOOP_SECS)).await;
         }
     });
 }
