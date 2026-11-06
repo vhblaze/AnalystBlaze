@@ -14,6 +14,8 @@ export const mypc = {
         sfc: "Verificar arquivos do sistema",
         restartDevice: "Reiniciar dispositivo",
         repairService: "Tentar corrigir",
+        repairDone: "{{name}} voltou a rodar",
+        repairFailed: "Não deu para corrigir {{name}}",
         openSecurity: "Abrir Segurança do Windows",
         openEnergy: "Ver energia",
       },

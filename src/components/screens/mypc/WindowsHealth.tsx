@@ -9,6 +9,8 @@ import { useHelper } from "@/features/helper/useHelper";
 import { startRepair, useSystemRepair, type RepairKind, type RepairState } from "@/features/health/useSystemRepair";
 import { windowsHealthItems, type HealthItem } from "@/features/health/windowsDiagnostics";
 import { useEnergyDiagnostics } from "@/features/health/useEnergyDiagnostics";
+import { markServiceRepaired, useRepairedServices } from "@/features/health/repairedServices";
+import { toast } from "@/hooks/use-toast";
 import { useAutomationPolicy } from "@/features/automations/useAutomationPolicy";
 import { openWindowsSecurity } from "@/services/tauri/agent";
 
@@ -59,10 +61,27 @@ export function WindowsHealth({
     () => (policy ? { cpu: policy.thermal_cpu_limit_c, gpu: policy.thermal_gpu_limit_c } : null),
     [policy],
   );
+  const repairedServices = useRepairedServices();
   const items = useMemo(
-    () => windowsHealthItems({ telemetry, shadowConsentNeeded, energy, thermalLimits }),
-    [telemetry, shadowConsentNeeded, energy, thermalLimits],
+    () => windowsHealthItems({ telemetry, shadowConsentNeeded, energy, thermalLimits, repairedServices }),
+    [telemetry, shadowConsentNeeded, energy, thermalLimits, repairedServices],
   );
+
+  // "Tentar corrigir": se o serviço voltou a rodar, o aviso sai (o log do
+  // Windows guarda as falhas antigas; só volta se falhar de novo).
+  const repairService = async (serviceName: string) => {
+    const result = (await onRepairService(serviceName)) as { success?: boolean; message?: string } | null | undefined;
+    if (result?.success) {
+      const failing = (telemetry?.advanced as { failing_services?: Array<{ name: string; count?: number }> } | null | undefined)?.failing_services;
+      const count = failing?.find((item) => item.name === serviceName)?.count ?? 0;
+      markServiceRepaired(serviceName, count);
+    }
+    toast({
+      title: result?.success ? t("mypc.health.actions.repairDone", { name: serviceName }) : t("mypc.health.actions.repairFailed", { name: serviceName }),
+      description: result?.message,
+      variant: result?.success ? undefined : "destructive",
+    });
+  };
   const firstDanger = items.find((item) => item.severity === "danger")?.id ?? null;
 
   const run = async (key: string, action: () => Promise<unknown>) => {
@@ -106,7 +125,7 @@ export function WindowsHealth({
         );
       case "repair_service":
         return (
-          <Button size="sm" variant={variant} disabled={busy !== null} disabledReason={blocked} onClick={() => void run(item.id, () => onRepairService(action.serviceName))}>
+          <Button size="sm" variant={variant} disabled={busy !== null} disabledReason={blocked} onClick={() => void run(item.id, () => repairService(action.serviceName))}>
             {t("mypc.health.actions.repairService")}
           </Button>
         );

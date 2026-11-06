@@ -17,6 +17,8 @@ export const mypc: Mirror<typeof pt> = {
         sfc: "Check system files",
         restartDevice: "Restart device",
         repairService: "Try to fix",
+        repairDone: "{{name}} is running again",
+        repairFailed: "Could not fix {{name}}",
         openSecurity: "Open Windows Security",
         openEnergy: "See power",
       },
