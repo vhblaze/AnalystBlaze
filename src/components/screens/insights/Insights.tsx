@@ -289,6 +289,8 @@ export function Insights({
   const [actionBusyKey, setActionBusyKey] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  // Itens do card "Pesa sem você usar": contam no título e tiram o "nada para melhorar".
+  const [idleWeightCount, setIdleWeightCount] = useState(0);
   // Only fetched here, on demand, for the local VPN+latency insight below -
   // the passive telemetry sample doesn't probe the adapter/VPN detection
   // (kept out of the 2s telemetry loop deliberately, see collect_network_sample).
@@ -948,8 +950,8 @@ export function Insights({
         <header className="flex flex-col gap-3">
           <div>
             <h2 className="text-[28px] font-semibold tracking-tight text-fg">
-              {visibleInsights.length > 0
-                ? t("insightsD3.title", { count: Math.min(visibleInsights.length, MAX_VISIBLE) })
+              {visibleInsights.length + idleWeightCount > 0
+                ? t("insightsD3.title", { count: Math.min(visibleInsights.length, MAX_VISIBLE) + idleWeightCount })
                 : t("insightsD3.titleNone")}
             </h2>
             <p className="mt-1 text-sm text-fg-3">{t("insightsD3.subtitle")}</p>
@@ -966,7 +968,9 @@ export function Insights({
           </div>
         </header>
 
-        {onDelayStartupApp && onStopService && <IdleWeightCard onDelayStartupApp={onDelayStartupApp} onStopService={onStopService} />}
+        {onDelayStartupApp && onStopService && (
+          <IdleWeightCard onDelayStartupApp={onDelayStartupApp} onStopService={onStopService} onCount={setIdleWeightCount} />
+        )}
         {actionMessage && <p className="rounded-control border border-line bg-surface-2 px-4 py-3 text-sm text-fg-2">{actionMessage}</p>}
         {error && visibleInsights.length > 0 && <p className="text-sm text-danger">{error}</p>}
 
@@ -985,7 +989,7 @@ export function Insights({
             }
           />
         ) : visibleInsights.length === 0 ? (
-          <EmptyState title={t("insightsD3.emptyTitle")} reason={t("insightsD3.emptyReason")} />
+          idleWeightCount === 0 && <EmptyState title={t("insightsD3.emptyTitle")} reason={t("insightsD3.emptyReason")} />
         ) : (
           <>
             {shown.map((ins, index) => {

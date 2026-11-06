@@ -3,6 +3,22 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { useI18n } from "@/i18n";
 import { displayProcessName, formatPercent } from "@/lib/format";
 import { formatHours, sortedShares, usageProfile } from "@/features/profile/useUsageProfile";
+import { automationPolicy, saveAutomationPolicy, useAutomationPolicy } from "@/features/automations/useAutomationPolicy";
+import { Button } from "@/components/ui/button";
+import type { DeclaredProfile, UsageProfileName } from "@/services/tauri/agent";
+
+/** O perfil medido equivalente ao declarado (para saber se vale sugerir a troca). */
+export function measuredMatchesDeclared(measured: UsageProfileName, declared: DeclaredProfile | null): boolean {
+  if (!declared) return true;
+  if (declared === "general") return measured === "mixed" || measured === "light";
+  return measured === declared;
+}
+
+function asDeclared(measured: UsageProfileName): DeclaredProfile | null {
+  if (measured === "games" || measured === "work" || measured === "dev" || measured === "creation") return measured;
+  if (measured === "mixed" || measured === "light") return "general";
+  return null;
+}
 
 /**
  * "Perfil deste PC": o que o AnalystBlaze mediu de uso nos últimos 7 dias,
@@ -11,6 +27,14 @@ import { formatHours, sortedShares, usageProfile } from "@/features/profile/useU
 export function UsageProfileCard() {
   const { t } = useI18n();
   const { data, error } = usageProfile.use();
+  const { policy } = useAutomationPolicy({ auto: true });
+  const declared = policy?.declared_profile ?? null;
+  const switchTo = (next: DeclaredProfile) => {
+    if (!policy) return;
+    const updated = { ...policy, declared_profile: next };
+    automationPolicy.set(updated);
+    saveAutomationPolicy(updated).catch(() => automationPolicy.set(policy));
+  };
 
   if (error) {
     return (
@@ -24,6 +48,11 @@ export function UsageProfileCard() {
   if (data.profile === "collecting") {
     return (
       <Card label={t("dashboard.d3.usageProfile.label")}>
+        {declared && (
+          <p className="mb-3 text-sm text-fg-2">
+            {t("dashboard.d3.usageProfile.declared", { profile: t(`firstContact.options.${declared}.label`) })}
+          </p>
+        )}
         <EmptyState
           title={t("dashboard.d3.usageProfile.collectingTitle")}
           reason={t("dashboard.d3.usageProfile.collectingReason")}
@@ -50,6 +79,19 @@ export function UsageProfileCard() {
             {t(`dashboard.d3.usageProfile.names.${data.profile}`)}
           </p>
           {reasons.length > 0 && <p className="mt-1 text-sm text-fg-2">{reasons.join(" · ")}</p>}
+          {declared && (
+            <p className="mt-1 text-xs text-fg-3">
+              {t("dashboard.d3.usageProfile.declared", { profile: t(`firstContact.options.${declared}.label`) })}
+            </p>
+          )}
+          {declared && data.confidence >= 0.7 && !measuredMatchesDeclared(data.profile, declared) && asDeclared(data.profile) && (
+            <div className="mt-3 flex items-center gap-3 text-sm">
+              <span className="text-fg-2">{t("dashboard.d3.usageProfile.changed")}</span>
+              <Button size="sm" variant="outline" onClick={() => switchTo(asDeclared(data.profile) as DeclaredProfile)}>
+                {t("dashboard.d3.usageProfile.switchTo", { profile: t(`dashboard.d3.usageProfile.names.${data.profile}`) })}
+              </Button>
+            </div>
+          )}
           <ul className="mt-4 grid gap-2">
             {shares.slice(0, 5).map(([category, share]) => (
               <li key={category} className="grid grid-cols-[140px_minmax(0,1fr)_48px] items-center gap-3 text-sm text-fg-2">

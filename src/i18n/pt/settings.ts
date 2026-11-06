@@ -35,6 +35,12 @@ export const settings = {
       highContrast: "Alto contraste",
       highContrastHint: "Textos mais fortes e menos efeitos decorativos",
     },
+    profile: {
+      label: "Perfil deste PC",
+      body: "O que você respondeu no primeiro contato. As regras automáticas e as sugestões seguem este perfil; a medição corre ao lado.",
+      measured: "Medido nos últimos dias: {{profile}}.",
+      replayTutorial: "Rever o tutorial",
+    },
     notifications: {
       label: "Notificações",
       critical: "Aviso do Windows se o PC ficar em estado crítico",

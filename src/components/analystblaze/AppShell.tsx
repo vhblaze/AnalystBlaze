@@ -21,6 +21,11 @@ import { useAppNotifications } from "@/features/notifications/useAppNotification
 import { useConfirmation } from "@/components/shell/useConfirmation";
 import { ConfirmationDialog } from "@/components/shell/dialogs/ConfirmationDialog";
 import { PcCleanFastProgress } from "@/components/shell/dialogs/PcCleanFastProgress";
+import { FirstContact } from "@/components/shell/dialogs/FirstContact";
+import { Tutorial } from "@/components/shell/dialogs/Tutorial";
+import { saveAutomationPolicy, useAutomationPolicy } from "@/features/automations/useAutomationPolicy";
+import { FIRST_CONTACT_DONE, readFlag, startTutorial, writeFlag } from "@/features/profile/tutorial";
+import { isTauriRuntime, type DeclaredProfile } from "@/services/tauri/agent";
 import { DeviceLimitDialog } from "@/components/shell/dialogs/DeviceLimitDialog";
 import { EmailVerificationNotice } from "@/components/shell/dialogs/EmailVerificationNotice";
 import { RemoteConfirmationNotice } from "@/components/shell/dialogs/RemoteConfirmationNotice";
@@ -101,6 +106,22 @@ export function AppShell() {
   const remoteQueue = prompts.remoteConfirmationQueue;
   const deviceLimitChoices = prompts.deviceLimitChoices;
 
+  // Primeiro contato: "para que você usa este PC?" uma vez, depois o tutorial.
+  const agentReady = Boolean(auth.status?.authenticated && auth.status.registered && isTauriRuntime());
+  const { policy } = useAutomationPolicy({ auto: agentReady });
+  const [firstContactDone, setFirstContactDone] = useState(() => readFlag(FIRST_CONTACT_DONE));
+  const showFirstContact = agentReady && !firstContactDone && policy != null && policy.declared_profile == null && !confirmRequest;
+  const chooseProfile = useCallback(
+    async (declared_profile: DeclaredProfile) => {
+      if (policy) await saveAutomationPolicy({ ...policy, declared_profile }).catch(() => undefined);
+      writeFlag(FIRST_CONTACT_DONE);
+      setFirstContactDone(true);
+      track("first_contact_profile", { profile: declared_profile });
+      startTutorial();
+    },
+    [policy, track],
+  );
+
   return (
     <div className="relative flex h-screen w-full overflow-hidden bg-bg text-fg">
       <Sidebar
@@ -152,6 +173,8 @@ export function AppShell() {
         </div>
       </main>
 
+      {showFirstContact && <FirstContact onChoose={chooseProfile} />}
+      <Tutorial navigate={navigate} />
       <PcCleanFastProgress
         onUndo={(sessionId) =>
           void runConfirmed(

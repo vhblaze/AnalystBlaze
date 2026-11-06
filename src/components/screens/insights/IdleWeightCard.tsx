@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useI18n } from "@/i18n";
@@ -16,9 +16,12 @@ import type { IdleWeightItem } from "@/services/tauri/agent";
 export function IdleWeightCard({
   onDelayStartupApp,
   onStopService,
+  onCount,
 }: {
   onDelayStartupApp: (name: string, location?: string | null) => Promise<unknown>;
   onStopService: (name: string) => Promise<unknown>;
+  /** Quantos itens estão visíveis (o título da tela conta com eles). */
+  onCount?: (count: number) => void;
 }) {
   const { t } = useI18n();
   const { data } = idleWeight.use();
@@ -26,6 +29,9 @@ export function IdleWeightCard({
   const [busy, setBusy] = useState<string | null>(null);
 
   const items = (data ?? []).filter((item) => !(idleWeightKey(item) in dismissed));
+  useEffect(() => {
+    onCount?.(items.length);
+  }, [items.length, onCount]);
   if (items.length === 0) return null;
 
   const dismiss = (item: IdleWeightItem) => {

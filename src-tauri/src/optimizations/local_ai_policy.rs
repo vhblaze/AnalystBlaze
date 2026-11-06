@@ -75,6 +75,13 @@ pub struct LocalAiPolicy {
     pub notify_on_improvement: bool,
     pub notify_on_new_insight: bool,
     pub notify_daily_summary: bool,
+    /// Perfil que o usuário declarou no primeiro contato ("games" | "work" |
+    /// "dev" | "creation" | "general"). None = ainda não respondeu. O perfil
+    /// medido (usage_profile) corre ao lado e pode sugerir a troca.
+    pub declared_profile: Option<String>,
+    /// Regras automáticas do perfil (adiar inicialização / pausar serviço
+    /// sem uso, no horário ocioso e com freios). Nasce ligada.
+    pub profile_rules_enabled: bool,
     /// Whether the main window starts hidden in the tray instead of visible.
     /// Overridden regardless of this setting whenever there's something the
     /// user needs to see right away - logged out, or an update available
@@ -135,6 +142,8 @@ impl Default for LocalAiPolicy {
             notify_on_improvement: true,
             notify_on_new_insight: true,
             notify_daily_summary: false,
+            declared_profile: None,
+            profile_rules_enabled: true,
             telemetry_diagnostics_enabled: true,
         }
     }
@@ -207,6 +216,8 @@ pub fn save_local_ai_policy(policy: LocalAiPolicy) -> Result<LocalAiPolicy, Stri
             "notify_on_improvement": policy.notify_on_improvement,
             "notify_on_new_insight": policy.notify_on_new_insight,
             "notify_daily_summary": policy.notify_daily_summary,
+            "declared_profile": policy.declared_profile,
+            "profile_rules_enabled": policy.profile_rules_enabled,
             "telemetry_diagnostics_enabled": policy.telemetry_diagnostics_enabled,
         }),
     );
