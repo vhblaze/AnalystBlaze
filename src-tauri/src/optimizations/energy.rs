@@ -359,11 +359,24 @@ fn power_source() -> Option<String> {
         })
 }
 
+/// SystemStatusFlag de GetSystemPowerStatus: 1 = economia de bateria do
+/// Windows ligada agora. (A leitura antiga olhava a chave PowerThrottlingOff,
+/// que quase nunca está em 1, e dava "ligada" em qualquer PC.)
+fn battery_saver_from_flag(flag: u8) -> bool {
+    flag == 1
+}
+
+#[cfg(target_os = "windows")]
 fn battery_saver_on() -> Option<bool> {
-    let value = powershell_json(
-        "$path='HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Power\\PowerThrottling'; $value=(Get-ItemProperty -Path $path -Name PowerThrottlingOff -ErrorAction SilentlyContinue).PowerThrottlingOff; [pscustomobject]@{BatterySaverOn=($value -ne 1)} | ConvertTo-Json -Compress",
-    )?;
-    value.get("BatterySaverOn").and_then(Value::as_bool)
+    use windows::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+    let mut status = SYSTEM_POWER_STATUS::default();
+    unsafe { GetSystemPowerStatus(&mut status) }.ok()?;
+    Some(battery_saver_from_flag(status.SystemStatusFlag))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn battery_saver_on() -> Option<bool> {
+    None
 }
 
 fn cpu_clock_info() -> (Option<f64>, Option<f64>) {
@@ -379,6 +392,10 @@ fn cpu_clock_info() -> (Option<f64>, Option<f64>) {
     )
 }
 
+/// Plano indicado para a situação atual. Só manda mudar quando há motivo:
+/// bateria baixa ou economia de bateria do Windows ligada (Economia); Economia
+/// na tomada ou Desempenho na bateria (Equilibrado). Quem está na tomada com
+/// Desempenho, ou Equilibrado, fica como está: é escolha válida, não erro.
 fn recommended_plan(
     power_source: Option<&str>,
     battery_percent: Option<f64>,
@@ -392,10 +409,12 @@ fn recommended_plan(
     if battery_saver_on == Some(true) {
         return "power_saver".to_string();
     }
-    if power_source == Some("ac") && active_scheme_alias == Some("power_saver") {
-        return "balanced".to_string();
+    match (power_source, active_scheme_alias) {
+        (Some("ac"), Some("power_saver")) => "balanced".to_string(),
+        (Some("battery"), Some("high_performance")) => "balanced".to_string(),
+        (_, Some(active @ ("balanced" | "high_performance" | "power_saver"))) => active.to_string(),
+        _ => "balanced".to_string(),
     }
-    "balanced".to_string()
 }
 
 fn energy_recommendations(
@@ -496,7 +515,36 @@ fn battery_status_label(status: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{overlay_guid_for_label, overlay_scheme_alias, scheme_alias};
+    use super::{battery_saver_from_flag, overlay_guid_for_label, overlay_scheme_alias, recommended_plan, scheme_alias};
+
+    #[test]
+    fn battery_saver_is_only_on_when_the_flag_says_so() {
+        assert!(!battery_saver_from_flag(0));
+        assert!(battery_saver_from_flag(1));
+        assert!(!battery_saver_from_flag(255));
+    }
+
+    #[test]
+    fn plugged_in_on_high_performance_is_not_a_mismatch() {
+        assert_eq!(recommended_plan(Some("ac"), None, Some(false), Some("high_performance"), 20.0), "high_performance");
+        assert_eq!(recommended_plan(Some("ac"), None, Some(false), Some("balanced"), 20.0), "balanced");
+    }
+
+    #[test]
+    fn power_saver_on_the_charger_recommends_balanced() {
+        assert_eq!(recommended_plan(Some("ac"), None, Some(false), Some("power_saver"), 20.0), "balanced");
+    }
+
+    #[test]
+    fn high_performance_on_battery_recommends_balanced() {
+        assert_eq!(recommended_plan(Some("battery"), Some(80.0), Some(false), Some("high_performance"), 20.0), "balanced");
+    }
+
+    #[test]
+    fn low_battery_or_real_battery_saver_recommends_power_saver() {
+        assert_eq!(recommended_plan(Some("battery"), Some(15.0), Some(false), Some("balanced"), 20.0), "power_saver");
+        assert_eq!(recommended_plan(Some("ac"), None, Some(true), Some("balanced"), 20.0), "power_saver");
+    }
 
     #[test]
     fn maps_windows_power_plan_aliases() {
