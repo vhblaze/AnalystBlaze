@@ -101,7 +101,7 @@ export const shell: Mirror<typeof pt> = {
       insights: {
         title: "Suggestions",
         body: "What's worth doing, with the reason, the risk and whether it can be undone. Nothing here runs on its own without your confirmation.",
-        b1: "\"Weighs without you using it\": apps and services that cost now and haven't shown up in 7 days.",
+        b1: "\"Weighs without you using it\": startup apps that cost now and haven't shown up in 7 days.",
         b2: "\"Do now\" applies with the usual confirmation and snapshot.",
         b3: "\"Not now\" hides it for 24 hours.",
       },

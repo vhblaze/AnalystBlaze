@@ -3,14 +3,14 @@
 //! Cruza o que está rodando em segundo plano com o perfil de uso medido
 //! (`usage_profile`): um app que abre com o Windows, consome memória ou CPU
 //! agora, e não aparece em primeiro plano há `UNUSED_DAYS` dias é custo sem
-//! uso. Serviços entram pelos detectores de `service_usage`. Só lista; quem
-//! age é o usuário, pela mesma ação (reversível) de Controles.
+//! uso. Só lista apps de inicialização (serviços não: o sinal de "sem uso"
+//! deles não é confiável). Quem age é o usuário, ou a regra do perfil.
 
 use serde::Serialize;
 use std::collections::BTreeMap;
 
 use super::app_usage::exe_name_from_command as app_usage_exe;
-use super::{active_use, detection, service_usage, usage_profile, windows_inventory};
+use super::{active_use, detection, usage_profile, windows_inventory};
 
 /// Abaixo disto o item não vale a pena: o custo é menor que o risco.
 pub const MIN_MEMORY_MB: f64 = 150.0;
@@ -146,31 +146,14 @@ fn startup_exes() -> BTreeMap<String, (String, String)> {
         .collect()
 }
 
-fn service_items() -> Vec<IdleWeightItem> {
-    service_usage::current_signals()
-        .into_iter()
-        .filter(|status| status.unused_long_enough && !service_usage::is_paused_by_analystblaze(&status.service_name))
-        .map(|status| IdleWeightItem {
-            kind: "service".to_string(),
-            name: status.service_name,
-            display_name: status.display_name,
-            location: None,
-            memory_mb: 0.0,
-            cpu_percent: 0.0,
-            last_foreground_days_ago: status.days_unused,
-            days_tracked: 0,
-            action: "stop_service".to_string(),
-        })
-        .collect()
-}
-
 /// Lista atual. Bloqueante (~1 s por causa da amostra de CPU).
 pub fn candidates() -> Vec<IdleWeightItem> {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let store = usage_profile::snapshot_store();
-    let mut items = select_startup(&background_processes(), &startup_exes(), &store, &today);
-    items.extend(service_items());
-    items
+    // Só apps de inicialização. Serviços ficam de fora de propósito: os sinais de
+    // "sem uso" (ex.: data da última conexão Bluetooth) não provam que o usuário
+    // não depende do serviço, e pausar errado derruba teclado, mouse e fone.
+    select_startup(&background_processes(), &startup_exes(), &store, &today)
 }
 
 #[cfg(test)]

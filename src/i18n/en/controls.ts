@@ -146,7 +146,7 @@ export const controls: Mirror<typeof pt> = {
           },
           profile_rules_enabled: {
             title: "Handle what weighs without use",
-            desc: "Delays at startup or pauses what costs now and hasn't shown up in 7 days. Only with the PC idle for 10 min, no game open, at most 2 a day; never a critical service. All with Undo.",
+            desc: "Delays at startup the apps that cost now and haven't shown up in 7 days. Only with the PC idle for 10 min, no game open, at most 2 a day. Never touches Windows services or anti-cheat. All with Undo.",
           },
           reduce_background_processes: {
             title: "Calm background apps",

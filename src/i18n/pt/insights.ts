@@ -58,7 +58,7 @@ export const insights = {
     },
     idleWeight: {
       title: "Pesa sem você usar",
-      explanation: "Rodando agora, com custo medido, e sem aparecer na sua frente há 7 dias. Cada ação fica no Histórico com Desfazer.",
+      explanation: "Apps que abrem com o Windows, rodando agora com custo medido e sem aparecer na sua frente há 7 dias. Cada ação fica no Histórico com Desfazer.",
       kind: { startup: "abre com o Windows", service: "serviço do Windows" },
       cpu: "{{percent}} de CPU",
       neverSeen: "nunca em primeiro plano em {{days}} dias",

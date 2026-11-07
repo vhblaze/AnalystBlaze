@@ -98,7 +98,7 @@ export const shell = {
       insights: {
         title: "Sugestões",
         body: "O que vale a pena fazer, com o motivo, o risco e se dá para desfazer. Nada aqui roda sozinho sem a sua confirmação.",
-        b1: "\"Pesa sem você usar\": apps e serviços que custam agora e não aparecem há 7 dias.",
+        b1: "\"Pesa sem você usar\": apps de inicialização que custam agora e não aparecem há 7 dias.",
         b2: "\"Fazer agora\" aplica com a confirmação e o snapshot de sempre.",
         b3: "\"Agora não\" esconde por 24 horas.",
       },
