@@ -1,4 +1,5 @@
 import type { AgentTelemetrySnapshot, EnergyDiagnostics } from "@/services/tauri/agent";
+import { isRepaired, type RepairedServices } from "./repairedServices";
 
 /**
  * Meu PC › Saúde do Windows (board Tela-MeuPC-Saude): o que está errado no
@@ -36,7 +37,7 @@ type Advanced = {
   gpu_driver_status?: { device_name?: string | null; driver_version?: string | null; driver_age_days?: number | null; outdated?: boolean | null } | null;
   windows_update_reboot_pending?: boolean | null;
   event_log_critical_errors_24h?: number | null;
-  failing_services?: Array<{ name: string; kind: string }>;
+  failing_services?: Array<{ name: string; kind: string; count?: number }>;
   shell_crashes?: Array<{ process: string }>;
   failing_devices?: Array<{ name?: string | null; device_id: string; device_class?: string | null; problem_code: number }>;
   modem_usb_link_issue?: { usb_device_id?: string | null; root_net_device_id?: string | null } | null;
@@ -66,12 +67,15 @@ export function windowsHealthItems({
   telemetry,
   shadowConsentNeeded,
   energy = null,
+  repairedServices,
   thermalLimits = null,
 }: {
   telemetry: AgentTelemetrySnapshot | null;
   shadowConsentNeeded: boolean;
   /** Plano de energia ativo e o recomendado (features/energy). */
   energy?: EnergyDiagnostics | null;
+  /** Serviços já corrigidos pelo usuário (features/health/repairedServices). */
+  repairedServices?: RepairedServices;
   /** Limites de temperatura da política local (Controles › Automações). */
   thermalLimits?: { cpu: number; gpu: number } | null;
 }): HealthItem[] {
@@ -116,7 +120,7 @@ export function windowsHealthItems({
   }
 
   // Serviços falhando: um item por serviço, com "tentar corrigir" (REPAIR_SERVICE).
-  for (const service of (advanced?.failing_services ?? []).slice(0, 5)) {
+  for (const service of (advanced?.failing_services ?? []).filter((item) => !isRepaired(repairedServices, item.name, item.count)).slice(0, 5)) {
     items.push({
       id: `service:${service.name}`,
       severity: "warn",
