@@ -10,6 +10,7 @@ import { startRepair, useSystemRepair, type RepairKind, type RepairState } from 
 import { windowsHealthItems, type HealthItem } from "@/features/health/windowsDiagnostics";
 import { useEnergyDiagnostics } from "@/features/health/useEnergyDiagnostics";
 import { markServiceRepaired, useRepairedServices } from "@/features/health/repairedServices";
+import { useSfcCleanAt } from "@/features/health/sfcResult";
 import { toast } from "@/hooks/use-toast";
 import { useAutomationPolicy } from "@/features/automations/useAutomationPolicy";
 import { openWindowsSecurity } from "@/services/tauri/agent";
@@ -62,9 +63,10 @@ export function WindowsHealth({
     [policy],
   );
   const repairedServices = useRepairedServices();
+  const sfcCleanAt = useSfcCleanAt();
   const items = useMemo(
-    () => windowsHealthItems({ telemetry, shadowConsentNeeded, energy, thermalLimits, repairedServices }),
-    [telemetry, shadowConsentNeeded, energy, thermalLimits, repairedServices],
+    () => windowsHealthItems({ telemetry, shadowConsentNeeded, energy, thermalLimits, repairedServices, sfcCleanAt }),
+    [telemetry, shadowConsentNeeded, energy, thermalLimits, repairedServices, sfcCleanAt],
   );
 
   // "Tentar corrigir": se o serviço voltou a rodar, o aviso sai (o log do

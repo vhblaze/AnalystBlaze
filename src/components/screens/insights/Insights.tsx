@@ -21,6 +21,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { windowsHealthItems } from "@/features/health/windowsDiagnostics";
 import { IdleWeightCard } from "./IdleWeightCard";
 import { useRepairedServices } from "@/features/health/repairedServices";
+import { useSfcCleanAt } from "@/features/health/sfcResult";
 
 const DISK_USAGE_WARNING_THRESHOLD_PERCENT = 80;
 const NETWORK_LAG_FLAGS = ["packet_loss_detected", "jitter_high", "latency_high"] as const;
@@ -283,6 +284,7 @@ export function Insights({
 }) {
   const { t, locale } = useI18n();
   const repairedServices = useRepairedServices();
+  const sfcCleanAt = useSfcCleanAt();
   const track = useTelemetry("insights");
   const [insights, setInsights] = useState<Insight[]>([]);
   const [loading, setLoading] = useState(false);
@@ -930,7 +932,7 @@ export function Insights({
     }
   };
 
-  const healthWarnings = windowsHealthItems({ telemetry: telemetry ?? null, shadowConsentNeeded: Boolean(shadowConsentNeeded), repairedServices }).filter(
+  const healthWarnings = windowsHealthItems({ telemetry: telemetry ?? null, shadowConsentNeeded: Boolean(shadowConsentNeeded), repairedServices, sfcCleanAt }).filter(
     (item) => item.severity !== "ok",
   );
   const shown = showAll ? visibleInsights : visibleInsights.slice(0, MAX_VISIBLE);

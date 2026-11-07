@@ -6,6 +6,7 @@ import {
   type SystemFileCheckStatus,
 } from "@/services/tauri/agent";
 import { errorText } from "@/features/shared/agentResource";
+import { markSfcClean } from "./sfcResult";
 
 /**
  * Reparo do Windows (SFC e DISM). A varredura leva minutos e o helper não
@@ -76,6 +77,7 @@ async function poll(kind: RepairKind) {
     const status = result.details as unknown as SystemFileCheckStatus;
     patch(kind, { status });
     if (status.done) {
+      if (kind === "sfc" && status.result?.outcome === "clean") markSfcClean();
       patch(kind, { scanId: null });
       stopPolling(kind);
     }
