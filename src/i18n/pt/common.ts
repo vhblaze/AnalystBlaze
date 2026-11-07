@@ -2,7 +2,7 @@
 // Gerado na etapa 7 do doc 15 a partir do translations.ts antigo; edite à vontade.
 export const common = {
   app: {
-    versionLine: "v0.1.78 - build 2026.11",
+    versionLine: "v0.2.0 - build 2026.11",
     loading: "Carregando...",
   },
   common: {
