@@ -5,7 +5,7 @@ import type { common as pt } from "../pt/common";
 
 export const common: Mirror<typeof pt> = {
   app: {
-    versionLine: "v0.1.78 - build 2026.11",
+    versionLine: "v0.2.0 - build 2026.11",
     loading: "Loading...",
   },
   common: {
