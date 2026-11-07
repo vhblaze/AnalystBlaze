@@ -615,7 +615,12 @@ async fn apply_cleanup_category(
     category: String,
     mode: Option<String>,
 ) -> Result<optimizations::ExecutionResult, String> {
-    Ok(optimizations::performance_suite::apply_cleanup_category(category, mode).await)
+    let result = optimizations::performance_suite::apply_cleanup_category(category, mode).await;
+    // Limpeza por categoria também confere o teto de 5 GB / 7 dias da quarentena na hora.
+    if result.success {
+        let _ = tokio::task::spawn_blocking(optimizations::quarantine_limits::prune_quarantine);
+    }
+    Ok(result)
 }
 
 const DISK_USAGE_CACHE_TTL_SECONDS: i64 = 10 * 60;
@@ -2667,7 +2672,7 @@ const PLAN_SYNC_PERIODIC_INTERVAL: std::time::Duration = std::time::Duration::fr
 /// logged via record_plan_sync_outcome and simply retried on the next tick -
 /// never surfaced as a hard error (see refresh_account_profile_if_needed).
 /// Quarentena: até 5 GB e 7 dias (optimizations::quarantine_limits). Roda
-/// pouco depois de abrir e depois a cada 6 h; só apaga pastas da própria
+/// pouco depois de abrir e depois a cada 30 min (e logo após cada limpeza); só apaga arquivos da própria
 /// quarentena e registra no Histórico. Nunca abre janela.
 /// Perfil de uso: uma amostra por minuto do que está em primeiro plano
 /// (só o nome do .exe) e se o PC está ocioso. Fica só no PC.
@@ -2698,7 +2703,7 @@ fn spawn_quarantine_prune_loop() {
         tokio::time::sleep(std::time::Duration::from_secs(2 * 60)).await;
         loop {
             let _ = tokio::task::spawn_blocking(optimizations::quarantine_limits::prune_quarantine).await;
-            tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+            tokio::time::sleep(std::time::Duration::from_secs(30 * 60)).await;
         }
     });
 }

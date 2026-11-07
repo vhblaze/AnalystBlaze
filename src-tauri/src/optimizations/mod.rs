@@ -396,6 +396,17 @@ async fn execute_command_checked_with_helper(
         }),
     );
 
+    // Quem enche a quarentena confere o limite de 5 GB / 7 dias logo depois,
+    // sem esperar o loop (uma limpeza grande não fica horas acima do teto).
+    if result.success
+        && matches!(
+            action_name,
+            "EMPTY_TEMP" | "APPLY_CLEANUP_CATEGORY" | "DELETE_DISK_USAGE_ITEM" | "APPLY_PC_CLEAN_FAST_PROFILE"
+        )
+    {
+        let _ = tokio::task::spawn_blocking(quarantine_limits::prune_quarantine);
+    }
+
     result
 }
 
