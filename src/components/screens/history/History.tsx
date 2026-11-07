@@ -152,7 +152,7 @@ export function History() {
           reason={timeline.loading ? null : t("history.emptyReason")}
         />
       ) : (
-        <Card padding="md" className="flex flex-col gap-5">
+        <Card padding="md" className="flex flex-col gap-5" data-tour="history-list">
           {days.map(([day, items]) => (
             <section key={day}>
               <SectionLabel className="border-b border-line-soft pb-2">{dayLabel(day)}</SectionLabel>

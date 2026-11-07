@@ -151,8 +151,12 @@ export function AppShell() {
                   {t("nav.controls")}
                 </Button>
               )}
-              <CommandPalette items={commandItems} />
-              <Notifications items={notificationItems} onItemClick={onNotificationClick} />
+              <div data-tour="search">
+                <CommandPalette items={commandItems} />
+              </div>
+              <div data-tour="bell">
+                <Notifications items={notificationItems} onItemClick={onNotificationClick} />
+              </div>
             </>
           }
         />

@@ -38,7 +38,7 @@ export function UsageProfileCard() {
 
   if (error) {
     return (
-      <Card label={t("dashboard.d3.usageProfile.label")}>
+      <Card label={t("dashboard.d3.usageProfile.label")} data-tour="usage-profile">
         <EmptyState title={t("dashboard.d3.usageProfile.collectingTitle")} reason={error} />
       </Card>
     );
@@ -47,7 +47,7 @@ export function UsageProfileCard() {
 
   if (data.profile === "collecting") {
     return (
-      <Card label={t("dashboard.d3.usageProfile.label")}>
+      <Card label={t("dashboard.d3.usageProfile.label")} data-tour="usage-profile">
         {declared && (
           <p className="mb-3 text-sm text-fg-2">
             {t("dashboard.d3.usageProfile.declared", { profile: t(`firstContact.options.${declared}.label`) })}
@@ -70,6 +70,7 @@ export function UsageProfileCard() {
 
   return (
     <Card
+      data-tour="usage-profile"
       label={t("dashboard.d3.usageProfile.label")}
       aside={t("dashboard.d3.usageProfile.measured", { days: data.daysObserved, window: data.windowDays })}
     >

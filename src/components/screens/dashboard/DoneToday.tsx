@@ -34,6 +34,7 @@ export function DoneToday({ onOpenHistory }: { onOpenHistory: () => void }) {
 
   return (
     <Card
+      data-tour="done-today"
       label={t("dashboard.d3.doneToday")}
       aside={
         <button type="button" onClick={onOpenHistory} className="text-accent-2 underline underline-offset-4 hover:text-accent">

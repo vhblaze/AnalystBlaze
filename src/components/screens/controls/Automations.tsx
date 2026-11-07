@@ -126,7 +126,7 @@ export function Automations({ status }: { status: AgentStatus | null }) {
 
   if (!policy) {
     return (
-      <Card label={t("controls.d3.auto.label")} className="self-start">
+      <Card label={t("controls.d3.auto.label")} className="self-start" data-tour="automations">
         <p className="text-sm text-fg-3">{t("controls.d3.auto.loading")}</p>
       </Card>
     );
@@ -158,6 +158,7 @@ export function Automations({ status }: { status: AgentStatus | null }) {
 
   return (
     <Card
+      data-tour="automations"
       label={t("controls.d3.auto.label")}
       aside={t("controls.d3.auto.count", { on: onCount, total: ALL_KEYS.length })}
       className="self-start"

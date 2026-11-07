@@ -32,7 +32,7 @@ export function PcStrip({
 
   if (!telemetry) {
     return (
-      <Card padding="md">
+      <Card padding="md" data-tour="pc-strip">
         <EmptyState variant="inline" title={t("dashboard.d3.stripEmptyTitle")} reason={t("dashboard.d3.stripEmptyReason")} />
       </Card>
     );
@@ -47,7 +47,7 @@ export function PcStrip({
       : null;
 
   return (
-    <Card padding="md" className="flex items-center gap-6">
+    <Card padding="md" className="flex items-center gap-6" data-tour="pc-strip">
       <div className="grid flex-1 grid-cols-4 divide-x divide-line">
         <Kpi
           className="pr-4"
