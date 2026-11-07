@@ -437,6 +437,16 @@ mod tests {
     }
 
     #[test]
+    fn sfc_portuguese_clean_result_in_utf16_is_classified_correctly() {
+        // O sfc.exe escreve UTF-16 quando a saída vai para um pipe (relato do dono).
+        let text = "Iniciando verificação de arquivos.\r\n\r\nVerificação 100% concluída.\r\n\r\nA Proteção de Recursos do Windows não encontrou nenhuma violação de integridade.\r\n";
+        let bytes: Vec<u8> = text.encode_utf16().flat_map(|unit| unit.to_le_bytes()).collect();
+        let result = classify_output(ScanKind::Sfc, true, &bytes, &[]);
+        assert_eq!(result.outcome, ScanOutcome::Clean, "{}", result.raw_tail);
+        assert!(result.success);
+    }
+
+    #[test]
     fn sfc_english_clean_result_is_classified_correctly() {
         let output = stdout(
             "Beginning system scan.\nVerification 100% complete.\nWindows Resource Protection did not find any integrity violations.",

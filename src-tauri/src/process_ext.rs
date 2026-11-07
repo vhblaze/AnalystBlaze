@@ -22,6 +22,30 @@ impl CommandExt for Command {
     }
 }
 
+/// `sfc.exe` (e alguns outros) escreve em UTF-16 quando a saída é redirecionada
+/// para um pipe. Lido como página de código do console, cada letra vem
+/// seguida de um byte nulo e "ç" vira "þ" ("V e r i f i c a þ Ò o"). Detecta
+/// UTF-16 LE pelo BOM ou por bytes nulos nas posições ímpares.
+pub fn looks_like_utf16le(bytes: &[u8]) -> bool {
+    if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
+        return true;
+    }
+    if bytes.len() < 4 {
+        return false;
+    }
+    let pairs = bytes.len() / 2;
+    let odd_nulls = (0..pairs).filter(|&n| bytes[n * 2 + 1] == 0).count();
+    let even_nulls = (0..pairs).filter(|&n| bytes[n * 2] == 0).count();
+    odd_nulls * 10 >= pairs * 4 && even_nulls * 10 <= pairs
+}
+
+/// Decodifica UTF-16 LE (com ou sem BOM), tirando o BOM.
+pub fn decode_utf16le(bytes: &[u8]) -> String {
+    let body = if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE { &bytes[2..] } else { bytes };
+    let units: Vec<u16> = body.chunks_exact(2).map(|pair| u16::from_le_bytes([pair[0], pair[1]])).collect();
+    String::from_utf16_lossy(&units)
+}
+
 /// Decodes captured stdout/stderr bytes from a spawned Windows console tool
 /// (netsh, sc, powercfg, wmic, ...). These legacy console programs write in
 /// the system's OEM codepage (e.g. CP850/CP860 on a pt-BR Windows install),
@@ -33,6 +57,9 @@ impl CommandExt for Command {
 /// ASCII-only case and for tools that do emit UTF-8.
 #[cfg(windows)]
 pub fn decode_console_bytes(bytes: &[u8]) -> String {
+    if looks_like_utf16le(bytes) {
+        return decode_utf16le(bytes);
+    }
     if let Ok(text) = std::str::from_utf8(bytes) {
         return text.to_string();
     }
@@ -200,5 +227,39 @@ mod tests {
             "O processo nao pode acessar o arquivo porque ele esta em uso por outro processo. (os error 32)"
         ));
         assert!(!error_indicates_file_in_use("Access is denied. (os error 5)"));
+    }
+}
+
+#[cfg(test)]
+mod utf16_tests {
+    use super::{decode_utf16le, looks_like_utf16le};
+
+    fn utf16le(text: &str) -> Vec<u8> {
+        text.encode_utf16().flat_map(|unit| unit.to_le_bytes()).collect()
+    }
+
+    #[test]
+    fn sfc_style_utf16_output_is_detected_and_decoded() {
+        let text = "Verificação 8% concluída.\r\nA Proteção de Recursos do Windows não encontrou nenhuma violação de integridade.";
+        let bytes = utf16le(text);
+        assert!(looks_like_utf16le(&bytes));
+        assert_eq!(decode_utf16le(&bytes), text);
+    }
+
+    #[test]
+    fn utf16_with_bom_loses_the_bom() {
+        let mut bytes = vec![0xFF, 0xFE];
+        bytes.extend(utf16le("ok"));
+        assert!(looks_like_utf16le(&bytes));
+        assert_eq!(decode_utf16le(&bytes), "ok");
+    }
+
+    #[test]
+    fn plain_oem_and_ascii_text_are_not_mistaken_for_utf16() {
+        // Bytes OEM (CP850) de "Verificação 8% concluída.": ç=0x87, ã=0xC6, í=0xA1.
+        assert!(!looks_like_utf16le(&[b'V', b'e', b'r', b'i', b'f', b'i', b'c', b'a', 0x87, 0xC6, b'o', b' ', b'8', b'%', b' ', b'c', b'o', b'n', b'c', b'l', b'u', 0xA1, b'd', b'a']));
+        assert!(!looks_like_utf16le(b"Windows Resource Protection did not find any integrity violations."));
+        assert!(!looks_like_utf16le(b""));
+        assert!(!looks_like_utf16le(b"ab"));
     }
 }
