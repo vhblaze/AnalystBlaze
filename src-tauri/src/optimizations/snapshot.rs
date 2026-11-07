@@ -375,23 +375,47 @@ pub fn discard_snapshot(snapshot_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// A pasta deste snapshot saiu da quarentena pelos limites automáticos
-/// (5 GB / 7 dias): ele não tem mais volta.
-pub fn mark_snapshot_purged(snapshot_id: &str) -> Result<(), String> {
+/// Resultado dos limites da quarentena para um snapshot: a pasta saiu inteira
+/// ("purged": sem volta) ou só parte dos arquivos ("partial": o que sobrou
+/// ainda volta, o resto some).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuarantinePurge {
+    Whole,
+    Partial,
+}
+
+/// Marca vários snapshots de uma vez (uma leitura e uma escrita do arquivo,
+/// que pode passar de 200 MB): os limites automáticos (5 GB / 7 dias).
+pub fn mark_snapshots_pruned(items: &[(String, QuarantinePurge)]) -> Result<(), String> {
+    if items.is_empty() {
+        return Ok(());
+    }
     let _guard = lock_snapshot_file();
     let mut snapshots = read_snapshots()?;
     let now = chrono::Utc::now().timestamp();
     let mut changed = false;
     for snapshot in &mut snapshots {
-        if snapshot.id != snapshot_id || snapshot.restored_at.is_some() {
+        let Some((_, kind)) = items.iter().find(|(id, _)| *id == snapshot.id) else {
+            continue;
+        };
+        if snapshot.restored_at.is_some() {
             continue;
         }
-        snapshot.restored_at = Some(now);
         if let Some(details) = snapshot.details.as_object_mut() {
-            details.insert("purged".to_string(), Value::Bool(true));
-            details.insert("purged_at".to_string(), Value::Number(now.into()));
             details.insert("purged_by".to_string(), Value::String("quarantine_limits".to_string()));
-            details.insert("reversible".to_string(), Value::Bool(false));
+            details.insert("purged_at".to_string(), Value::Number(now.into()));
+            match kind {
+                QuarantinePurge::Whole => {
+                    details.insert("purged".to_string(), Value::Bool(true));
+                    details.insert("reversible".to_string(), Value::Bool(false));
+                }
+                QuarantinePurge::Partial => {
+                    details.insert("partially_purged".to_string(), Value::Bool(true));
+                }
+            }
+        }
+        if *kind == QuarantinePurge::Whole {
+            snapshot.restored_at = Some(now);
         }
         changed = true;
     }
