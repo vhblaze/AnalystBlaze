@@ -57,7 +57,7 @@ fn is_system_process(normalized: &str) -> bool {
             | "shellexperiencehost.exe" | "textinputhost.exe" | "ctfmon.exe" | "conhost.exe" | "audiodg.exe"
             | "memcompression" | "msmpeng.exe" | "nissrv.exe" | "securityhealthservice.exe" | "wudfhost.exe"
             | "spoolsv.exe" | "dllhost.exe" | "applicationframehost.exe" | "systemsettings.exe"
-    ) || normalized.starts_with("analystblaze")
+    ) || normalized.starts_with("analystblaze") || super::anticheat::is_anticheat_process(normalized)
 }
 
 /// Decide quais apps de inicialização pesam sem uso. Puro.
@@ -218,6 +218,13 @@ mod tests {
     fn light_process_is_not_listed() {
         let s = store(&[("2026-11-01", &[("chrome.exe", 600)]), ("2026-11-04", &[("chrome.exe", 600)])]);
         let items = select_startup(&[proc("Updater.exe", 20.0, 0.1)], &startup(&[("updater.exe", "Updater")]), &s, "2026-11-05");
+        assert!(items.is_empty());
+    }
+
+    #[test]
+    fn anticheat_processes_are_never_listed() {
+        let s = store(&[("2026-11-01", &[("chrome.exe", 600)]), ("2026-11-04", &[("chrome.exe", 600)])]);
+        let items = select_startup(&[proc("vgtray.exe", 400.0, 2.0)], &startup(&[("vgtray.exe", "Riot Vanguard")]), &s, "2026-11-07");
         assert!(items.is_empty());
     }
 

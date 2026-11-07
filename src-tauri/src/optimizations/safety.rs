@@ -540,6 +540,9 @@ pub(crate) fn is_safe_network_target(value: &str) -> bool {
 #[allow(dead_code)]
 pub fn is_critical_service(name: &str) -> bool {
     let normalized = normalize_target_name(name);
+    if super::anticheat::is_anticheat_service(&normalized) {
+        return true;
+    }
     matches!(
         normalized.as_str(),
         "windefend"
@@ -1760,6 +1763,14 @@ mod tests {
         .expect("stop frame capture should be allowed with a capture id");
         assert_eq!(profile.risk, super::RiskLevel::Sensitive);
         assert!(profile.requires_privileged_helper);
+    }
+
+    #[test]
+    fn anticheat_services_are_critical_and_cannot_be_stopped() {
+        for name in ["vgc", "vgk", "EasyAntiCheat", "BEService"] {
+            assert!(is_critical_service(name), "{name}");
+        }
+        assert!(!is_critical_service("SysMain"));
     }
 
     #[test]

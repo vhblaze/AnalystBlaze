@@ -85,9 +85,10 @@ pub fn is_protected_app(name: &str) -> bool {
         return false;
     }
 
-    default_protected_apps()
-        .iter()
-        .any(|app| same_app_name(app, &normalized))
+    super::anticheat::is_anticheat_process(&normalized)
+        || default_protected_apps()
+            .iter()
+            .any(|app| same_app_name(app, &normalized))
         || load_user_apps()
             .iter()
             .any(|app| same_app_name(&app.name, &normalized))
