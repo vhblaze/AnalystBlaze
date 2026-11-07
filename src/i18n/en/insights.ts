@@ -61,7 +61,7 @@ export const insights: Mirror<typeof pt> = {
     },
     idleWeight: {
       title: "Weighs without you using it",
-      explanation: "Running now, with a measured cost, and not in front of you for 7 days. Every action goes to History with Undo.",
+      explanation: "Apps that open with Windows, running now with a measured cost and not in front of you for 7 days. Every action goes to History with Undo.",
       kind: { startup: "opens with Windows", service: "Windows service" },
       cpu: "{{percent}} CPU",
       neverSeen: "never in the foreground in {{days}} days",

@@ -576,6 +576,14 @@ fn is_critical_purge_path(path: &Path) -> bool {
         })
 }
 
+fn dir_has_anticheat_files(dir: &Path) -> bool {
+    fs::read_dir(dir).is_ok_and(|entries| {
+        entries
+            .flatten()
+            .any(|entry| entry.file_name().to_str().is_some_and(super::anticheat::is_anticheat_file_name))
+    })
+}
+
 fn quarantine_dir(
     root: &Path,
     dir: &Path,
@@ -606,6 +614,12 @@ fn quarantine_dir(
         }
 
         if metadata.is_dir() {
+            // Pasta de instalação/atualização de anti-cheat (ex.: a extração do
+            // Vanguard em %TEMP%): nunca entra na limpeza.
+            if dir_has_anticheat_files(&path) {
+                summary.skipped_special_entries += 1;
+                continue;
+            }
             summary.scanned_dirs += 1;
             quarantine_dir(root, &path, quarantine_root, min_age, summary);
             if is_old_enough(&metadata, min_age) {

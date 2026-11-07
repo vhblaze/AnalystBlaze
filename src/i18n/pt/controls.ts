@@ -143,7 +143,7 @@ export const controls = {
           },
           profile_rules_enabled: {
             title: "Tratar o que pesa sem você usar",
-            desc: "Adia na inicialização ou pausa o que custa agora e não aparece há 7 dias. Só com o PC parado há 10 min, sem jogo aberto, no máximo 2 por dia; nunca serviço crítico. Tudo com Desfazer.",
+            desc: "Adia na inicialização os apps que custam agora e não aparecem há 7 dias. Só com o PC parado há 10 min, sem jogo aberto, no máximo 2 por dia. Nunca mexe em serviços do Windows nem em anti-cheat. Tudo com Desfazer.",
           },
           reduce_background_processes: {
             title: "Acalmar apps em segundo plano",

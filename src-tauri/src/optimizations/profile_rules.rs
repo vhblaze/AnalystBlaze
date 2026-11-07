@@ -1,8 +1,8 @@
 //! Regras automáticas do perfil (etapa 3).
 //!
 //! Pega a lista de "pesa sem você usar" (`idle_weight`) e aplica, sozinho,
-//! a mesma ação reversível que o botão em Insights aplicaria, mas só quando
-//! é seguro:
+//! o "Adiar na inicialização" (reversível) que o botão em Insights aplicaria,
+//! mas só quando é seguro. Nunca mexe em serviço:
 //! - `profile_rules_enabled` ligado (nasce ligado) e a automação geral ligada;
 //! - PC ocioso há `MIN_IDLE_SECS` (sem teclado nem mouse);
 //! - nenhum jogo aberto;
@@ -21,7 +21,7 @@ use std::sync::Mutex;
 
 use super::idle_weight::{self, IdleWeightItem};
 use super::safety::{self, CommandSource};
-use super::{adaptive, detection, local_ai_policy, service_usage, snapshot};
+use super::{adaptive, detection, local_ai_policy, snapshot};
 use crate::audit;
 
 pub const MIN_IDLE_SECS: u64 = 10 * 60;
@@ -134,13 +134,9 @@ pub async fn run_once() {
         }
         let (action, payload) = match item.action.as_str() {
             "delay_startup" => ("DELAY_STARTUP_APP", json!({ "name": item.name, "location": item.location, "delaySeconds": 120 })),
-            "stop_service" => ("STOP_SERVICE", json!({ "service_name": item.name })),
             _ => continue,
         };
         let result = super::execute_command_checked(CommandSource::LocalPolicy, action, Some(payload), None, true).await;
-        if result.success && action == "STOP_SERVICE" {
-            service_usage::mark_paused_by_analystblaze(&item.name);
-        }
         let _ = audit::record_event(
             if result.success { "info" } else { "warn" },
             "profile_rule.applied",

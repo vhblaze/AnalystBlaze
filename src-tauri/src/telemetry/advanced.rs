@@ -780,6 +780,12 @@ fn is_noise_service(name: &str) -> bool {
     if lower.contains("gamedvr") || lower.contains("game dvr") || lower.contains("bcastdvr") {
         return true;
     }
+    // Anti-cheat (Vanguard, EAC, BattlEye...): para e sobe junto com o jogo,
+    // então o log do Windows registra "falha" que não é falha. Nunca vira card
+    // de "tentar corrigir"/"desativar".
+    if crate::optimizations::anticheat::is_anticheat_service(&lower) {
+        return true;
+    }
     FAILING_SERVICE_NOISE
         .iter()
         .any(|noise| lower.starts_with(&noise.to_ascii_lowercase()))
@@ -913,9 +919,12 @@ mod shell_crash_tests {
             "ASUS AURA SYNC lighting service",
             "Steam Client Service",
             "Autodesk CER Service",
-            "vgc",
         ] {
             assert!(!is_noise_service(real), "{real} must not be filtered");
+        }
+        // Anti-cheat para junto com o jogo: nunca é "serviço falhando".
+        for anticheat in ["vgc", "vgk", "EasyAntiCheat", "BEService"] {
+            assert!(is_noise_service(anticheat), "{anticheat} must be filtered");
         }
     }
 
