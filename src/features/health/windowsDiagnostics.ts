@@ -37,7 +37,7 @@ type Advanced = {
   gpu_driver_status?: { device_name?: string | null; driver_version?: string | null; driver_age_days?: number | null; outdated?: boolean | null } | null;
   windows_update_reboot_pending?: boolean | null;
   event_log_critical_errors_24h?: number | null;
-  failing_services?: Array<{ name: string; kind: string; count?: number }>;
+  failing_services?: Array<{ name: string; display_name?: string | null; kind: string; count?: number }>;
   shell_crashes?: Array<{ process: string }>;
   failing_devices?: Array<{ name?: string | null; device_id: string; device_class?: string | null; problem_code: number }>;
   modem_usb_link_issue?: { usb_device_id?: string | null; root_net_device_id?: string | null } | null;
@@ -125,7 +125,7 @@ export function windowsHealthItems({
       id: `service:${service.name}`,
       severity: "warn",
       titleKey: "service.title",
-      titleParams: { name: service.name },
+      titleParams: { name: service.display_name || service.name },
       detailKey: "service.detail",
       action: { kind: "repair_service", serviceName: service.name },
     });

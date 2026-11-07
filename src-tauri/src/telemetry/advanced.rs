@@ -142,7 +142,11 @@ pub struct EventLogIssue {
 /// the Game DVR card), are filtered out - see `FAILING_SERVICE_NOISE`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FailingService {
+    /// Nome do serviço no SCM (a chave que `sc.exe` e as ações aceitam).
     pub name: String,
+    /// Nome de exibição, para mostrar na tela. O log do Windows usa este, não o `name`.
+    #[serde(default)]
+    pub display_name: Option<String>,
     /// "crashing" (started, then died - SCM 7031/7034/7023),
     /// "wont_start" (failed to start at all - SCM 7000),
     /// "start_timeout" (took too long to report ready - SCM 7009).
@@ -803,50 +807,71 @@ fn collect_failing_services(telemetry: &mut AdvancedTelemetry) {
         .collect::<Vec<_>>()
         .join(",");
 
+    // O log do SCM guarda o NOME DE EXIBIÇÃO, e também registra drivers de
+    // kernel (ex.: "Microsoft Route Policy Service" é o driver RoutePolicy.sys,
+    // sob demanda). Só serviços Win32 reais entram: cada evento é resolvido em
+    // Win32_Service, o que descarta drivers e traz o nome-chave que as ações
+    // (sc.exe) aceitam. Sem isso, "Tentar corrigir" dava "serviço não encontrado".
     // The service name lives in different Properties slots per event: [1] for
     // 7009 (the wait-timeout, whose [0] is the timeout in ms), [0] for the
     // rest. A trailing "_<hex/random>" is a per-session instance suffix and
     // is stripped so instances of one service group together.
     let Some(values) = powershell_json_array(&format!(
         "$kind=@{{{kind_map}}}; \
+         $svc=@{{}}; Get-CimInstance Win32_Service -ErrorAction SilentlyContinue | ForEach-Object {{ $svc[[string]$_.DisplayName]=$_; $svc[[string]$_.Name]=$_ }}; \
          Get-WinEvent -FilterHashtable @{{LogName='System'; ProviderName='Service Control Manager'; Id=@({ids}); StartTime=(Get-Date).AddDays(-7)}} -MaxEvents 400 -ErrorAction SilentlyContinue \
          | ForEach-Object {{ $n=if($_.Id -eq 7009){{[string]$_.Properties[1].Value}}else{{[string]$_.Properties[0].Value}}; \
-             [pscustomobject]@{{ Name=($n -replace '_[0-9A-Fa-f]{{3,}}$',''); Kind=$kind[$_.Id]; Id=$_.Id }} }} \
+             $n=($n -replace '_[0-9A-Fa-f]{{3,}}$',''); $s=$svc[$n]; \
+             if($s){{ [pscustomobject]@{{ Name=[string]$s.Name; Display=[string]$s.DisplayName; Kind=$kind[$_.Id]; Id=$_.Id }} }} }} \
          | Where-Object {{ $_.Name -and $_.Kind }} \
          | Group-Object Name,Kind,Id | Sort-Object Count -Descending | Select-Object -First 10 \
-         | ForEach-Object {{ [pscustomobject]@{{ Name=$_.Group[0].Name; Kind=$_.Group[0].Kind; Id=$_.Group[0].Id; Count=$_.Count }} }} \
+         | ForEach-Object {{ [pscustomobject]@{{ Name=$_.Group[0].Name; Display=$_.Group[0].Display; Kind=$_.Group[0].Kind; Id=$_.Group[0].Id; Count=$_.Count }} }} \
          | ConvertTo-Json -Compress",
     )) else {
         return;
     };
 
     telemetry.failing_services = values
-        .into_iter()
-        .filter_map(|value| {
-            let name = clean_string(value.get("Name").and_then(Value::as_str)?);
-            let count = value.get("Count").and_then(Value::as_u64).unwrap_or(1) as u32;
-            // The card is about a service that *keeps* failing; a single
-            // one-off is not a pattern and would only pad the payload (which
-            // is bounded - the server rejects a batch whose `details`
-            // exceeds 8000 chars).
-            if name.is_empty() || count < 2 || is_noise_service(&name) {
-                return None;
-            }
-            Some(FailingService {
-                // Service display names run short; the cap is only a guard
-                // against a pathological one, not expected to bite.
-                name: name.chars().take(64).collect(),
-                kind: value
-                    .get("Kind")
-                    .and_then(Value::as_str)
-                    .unwrap_or("crashing")
-                    .to_string(),
-                event_id: value.get("Id").and_then(Value::as_u64).map(|v| v as u32),
-                count,
-            })
-        })
+        .iter()
+        .filter_map(parse_failing_service)
         .take(4)
         .collect();
+}
+
+/// Uma linha do script acima → `FailingService`, ou None se não vale um aviso.
+/// Pura, para ser testável.
+fn parse_failing_service(value: &Value) -> Option<FailingService> {
+    let name = clean_string(value.get("Name").and_then(Value::as_str)?);
+    let display = value
+        .get("Display")
+        .and_then(Value::as_str)
+        .map(clean_string)
+        .filter(|text| !text.is_empty());
+    let count = value.get("Count").and_then(Value::as_u64).unwrap_or(1) as u32;
+    // The card is about a service that *keeps* failing; a single
+    // one-off is not a pattern and would only pad the payload (which
+    // is bounded - the server rejects a batch whose `details`
+    // exceeds 8000 chars).
+    if name.is_empty()
+        || count < 2
+        || is_noise_service(&name)
+        || display.as_deref().is_some_and(is_noise_service)
+    {
+        return None;
+    }
+    Some(FailingService {
+        // Service names run short; the cap is only a guard
+        // against a pathological one, not expected to bite.
+        name: name.chars().take(64).collect(),
+        display_name: display.map(|text| text.chars().take(64).collect()),
+        kind: value
+            .get("Kind")
+            .and_then(Value::as_str)
+            .unwrap_or("crashing")
+            .to_string(),
+        event_id: value.get("Id").and_then(Value::as_u64).map(|v| v as u32),
+        count,
+    })
 }
 
 #[cfg(test)]
@@ -898,6 +923,27 @@ mod shell_crash_tests {
             EVENT_LOG_COUNT_CAP > 50,
             "cap must exceed the value the old metric saturated at"
         );
+    }
+
+    #[test]
+    fn failing_service_keeps_the_scm_name_and_the_display_name() {
+        let row = serde_json::json!({ "Name": "Spooler", "Display": "Print Spooler", "Kind": "crashing", "Id": 7034, "Count": 3 });
+        let service = parse_failing_service(&row).expect("a repeated real failure is kept");
+        assert_eq!(service.name, "Spooler");
+        assert_eq!(service.display_name.as_deref(), Some("Print Spooler"));
+        assert_eq!(service.count, 3);
+    }
+
+    #[test]
+    fn a_single_failure_is_not_a_pattern() {
+        let row = serde_json::json!({ "Name": "Spooler", "Display": "Print Spooler", "Kind": "crashing", "Id": 7034, "Count": 1 });
+        assert!(parse_failing_service(&row).is_none());
+    }
+
+    #[test]
+    fn anticheat_is_dropped_by_scm_name() {
+        let row = serde_json::json!({ "Name": "vgc", "Display": "vgc", "Kind": "crashing", "Id": 7034, "Count": 5 });
+        assert!(parse_failing_service(&row).is_none());
     }
 
     #[test]
