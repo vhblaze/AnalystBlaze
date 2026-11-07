@@ -23,6 +23,27 @@ export type RepairState = {
 };
 
 const POLL_MS = 5_000;
+
+/** Qual reparo está com o pop-up aberto (null = nenhum). Abre quando a pessoa confirma e a varredura começa. */
+let panelKind: RepairKind | null = null;
+function openPanel(kind: RepairKind) {
+  panelKind = kind;
+  listeners.forEach((listener) => listener());
+}
+export function closeRepairPanel() {
+  panelKind = null;
+  listeners.forEach((listener) => listener());
+}
+export function useRepairPanel(): RepairKind | null {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => panelKind,
+    () => panelKind,
+  );
+}
 const empty: RepairState = { scanId: null, starting: false, status: null, error: null };
 let state: Record<RepairKind, RepairState> = { sfc: empty, dism: empty };
 const listeners = new Set<() => void>();
@@ -77,11 +98,13 @@ export async function startRepair(kind: RepairKind, start: () => Promise<unknown
     const outcome = result as OptimizationResult;
     if (!outcome.success) {
       patch(kind, { error: outcome.message });
+      openPanel(kind);
       return;
     }
     const scanId = (outcome.details as { scanId?: string } | null)?.scanId;
     if (!scanId) return;
     patch(kind, { scanId, status: null });
+    openPanel(kind);
     void poll(kind);
     stopPolling(kind);
     timers[kind] = window.setInterval(() => void poll(kind), POLL_MS);
