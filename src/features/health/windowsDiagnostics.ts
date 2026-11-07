@@ -1,5 +1,6 @@
 import type { AgentTelemetrySnapshot, EnergyDiagnostics } from "@/services/tauri/agent";
 import { isRepaired, type RepairedServices } from "./repairedServices";
+import { formatDateTime } from "@/lib/format";
 
 /**
  * Meu PC › Saúde do Windows (board Tela-MeuPC-Saude): o que está errado no
@@ -68,6 +69,7 @@ export function windowsHealthItems({
   shadowConsentNeeded,
   energy = null,
   repairedServices,
+  sfcCleanAt = null,
   thermalLimits = null,
 }: {
   telemetry: AgentTelemetrySnapshot | null;
@@ -76,6 +78,8 @@ export function windowsHealthItems({
   energy?: EnergyDiagnostics | null;
   /** Serviços já corrigidos pelo usuário (features/health/repairedServices). */
   repairedServices?: RepairedServices;
+  /** Quando o último SFC deu limpo (features/health/sfcResult), ou null. */
+  sfcCleanAt?: number | null;
   /** Limites de temperatura da política local (Controles › Automações). */
   thermalLimits?: { cpu: number; gpu: number } | null;
 }): HealthItem[] {
@@ -142,7 +146,17 @@ export function windowsHealthItems({
   const critical = advanced?.event_log_critical_errors_24h ?? 0;
   const services = advanced?.failing_services ?? [];
   const crashes = advanced?.shell_crashes ?? [];
-  if (critical >= EVENT_LOG_CRITICAL_THRESHOLD) {
+  if (critical >= EVENT_LOG_CRITICAL_THRESHOLD && sfcCleanAt) {
+    // Verificação limpa: arquivos corrompidos estão descartados como causa.
+    items.push({
+      id: "system-sfc-clean",
+      severity: "ok",
+      titleKey: "events.cleanTitle",
+      titleParams: { count: critical },
+      detailKey: "events.cleanDetail",
+      detailParams: { when: formatDateTime(Math.floor(sfcCleanAt / 1000)) },
+    });
+  } else if (critical >= EVENT_LOG_CRITICAL_THRESHOLD) {
     items.push({
       id: "system",
       severity: "warn",

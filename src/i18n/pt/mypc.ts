@@ -70,6 +70,8 @@ export const mypc = {
           detail: "O Windows registrou falhas deste serviço nas últimas 24 h. Tentar corrigir para e reinicia o serviço e confere se ele continuou ativo.",
         },
         events: {
+          cleanTitle: "Erros no log das últimas 24 h: {{count}}, e os arquivos do sistema estão íntegros",
+          cleanDetail: "A verificação de {{when}} não achou nenhum arquivo corrompido, então o motivo é outro (drivers, serviços que não subiram, desligamento abrupto). Não é preciso agir.",
           title: "Erros críticos nas últimas 24 h: {{count}}",
           detail: "Muitos erros críticos no log do Windows. Pode indicar arquivos do sistema corrompidos; a verificação confirma.",
           detailWithCrashes: "Muitos erros críticos no log do Windows, mais {{crashes}} travamentos. Pode indicar arquivos do sistema corrompidos; a verificação confirma.",

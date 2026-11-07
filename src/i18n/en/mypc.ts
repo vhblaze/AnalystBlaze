@@ -73,6 +73,8 @@ export const mypc: Mirror<typeof pt> = {
           detail: "Windows recorded failures of this service in the last 24 h. Try to fix stops and restarts the service and checks it stayed up.",
         },
         events: {
+          cleanTitle: "Log errors in the last 24 h: {{count}}, and system files are intact",
+          cleanDetail: "The check from {{when}} found no corrupted file, so the cause is something else (drivers, services that didn't start, abrupt shutdown). No action needed.",
           title: "Critical errors in the last 24 h: {{count}}",
           detail: "Many critical errors in the Windows log. May point to corrupted system files; the check confirms.",
           detailWithCrashes: "Many critical errors in the Windows log, plus {{crashes}} crashes. May point to corrupted system files; the check confirms.",
