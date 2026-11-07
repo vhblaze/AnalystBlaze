@@ -21,6 +21,8 @@ import { useAppNotifications } from "@/features/notifications/useAppNotification
 import { useConfirmation } from "@/components/shell/useConfirmation";
 import { ConfirmationDialog } from "@/components/shell/dialogs/ConfirmationDialog";
 import { PcCleanFastProgress } from "@/components/shell/dialogs/PcCleanFastProgress";
+import { SystemRepairProgress } from "@/components/shell/dialogs/SystemRepairProgress";
+import { startRepair } from "@/features/health/useSystemRepair";
 import { FirstContact } from "@/components/shell/dialogs/FirstContact";
 import { Tutorial } from "@/components/shell/dialogs/Tutorial";
 import { saveAutomationPolicy, useAutomationPolicy } from "@/features/automations/useAutomationPolicy";
@@ -175,6 +177,21 @@ export function AppShell() {
 
       {showFirstContact && <FirstContact onChoose={chooseProfile} />}
       <Tutorial navigate={navigate} />
+      <SystemRepairProgress
+        onStartDism={() =>
+          startRepair("dism", () =>
+            runConfirmed(
+              {
+                title: t("confirm.dism.title"),
+                description: t("confirm.dism.body"),
+                risk: "sensivel",
+                snapshot: false,
+              },
+              auth.startDismRestoreHealth,
+            ),
+          )
+        }
+      />
       <PcCleanFastProgress
         onUndo={(sessionId) =>
           void runConfirmed(
