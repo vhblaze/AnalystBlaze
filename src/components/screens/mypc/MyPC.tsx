@@ -20,12 +20,14 @@ export function MyPC({
   const { t } = useI18n();
   return (
     <div className="flex flex-col gap-6">
-      <Tabs
-        aria-label={t("nav.mypc")}
-        items={MYPC_TABS.map((item) => ({ value: item.key, label: t(item.labelKey) }))}
-        active={tab}
-        onChange={onTabChange}
-      />
+      <div data-tour="mypc-tabs">
+        <Tabs
+          aria-label={t("nav.mypc")}
+          items={MYPC_TABS.map((item) => ({ value: item.key, label: t(item.labelKey) }))}
+          active={tab}
+          onChange={onTabChange}
+        />
+      </div>
       <div role="tabpanel" aria-label={t(MYPC_TABS.find((item) => item.key === tab)?.labelKey ?? "nav.mypc")}>
         {children}
       </div>

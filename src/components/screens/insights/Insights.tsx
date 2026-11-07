@@ -950,7 +950,7 @@ export function Insights({
 
   return (
     <div className="grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-5">
-      <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-5" data-tour="insights-list">
         <header className="flex flex-col gap-3">
           <div>
             <h2 className="text-[28px] font-semibold tracking-tight text-fg">

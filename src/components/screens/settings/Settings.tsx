@@ -251,7 +251,7 @@ function ProfileCard() {
     saveAutomationPolicy(next).catch(() => automationPolicy.set(policy));
   };
   return (
-    <Card label={t("settingsD3.profile.label")}>
+    <Card label={t("settingsD3.profile.label")} data-tour="settings-profile">
       <p className="text-sm text-fg-2">{t("settingsD3.profile.body")}</p>
       <div className="mt-3 flex flex-wrap gap-2">
         {DECLARED_PROFILES.map((key) => (

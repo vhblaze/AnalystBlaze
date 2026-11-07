@@ -109,7 +109,7 @@ function ControlsHome({ status, navigate }: Props) {
           <h2 className="text-[28px] font-semibold tracking-tight text-fg">{t("controls.d3.title")}</h2>
           <p className="mt-1 text-sm text-fg-3">{t("controls.d3.subtitle")}</p>
         </header>
-        <Card padding="sm" className="px-5">
+        <Card padding="sm" className="px-5" data-tour="controls-list">
           <SummaryRow
             title={t("controls.d3.groups.gamemode.title")}
             summary={gameModeSummary}

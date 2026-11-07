@@ -172,7 +172,7 @@ export function Dashboard({
           <p className="mt-1 text-[15px] text-fg-2">{subtitle}</p>
         </div>
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="outline" disabled={busy} disabledReason={notReadyReason} onClick={() => void toggleGameMode()}>
+          <Button size="sm" variant="outline" disabled={busy} disabledReason={notReadyReason} onClick={() => void toggleGameMode()} data-tour="game-mode">
             <Gamepad2 />
             {gameModeActive ? t("dashboard.d3.gameModeTurnOff") : t("dashboard.d3.gameMode")}
             {gameModeHint && !gameModeActive && (
@@ -181,7 +181,7 @@ export function Dashboard({
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="outline" disabled={!isReady}>
+              <Button size="sm" variant="outline" disabled={!isReady} data-tour="more-actions">
                 {t("dashboard.d3.moreActions")}
                 <ChevronDown />
               </Button>
@@ -197,7 +197,7 @@ export function Dashboard({
         </div>
       </header>
 
-      <Card padding="lg" className="flex items-center gap-8">
+      <Card padding="lg" className="flex items-center gap-8" data-tour="weighing">
         <HealthRing
           score={telemetry ? telemetry.health_score : null}
           reasons={telemetry?.health_reasons ?? []}

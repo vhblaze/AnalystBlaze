@@ -39,6 +39,7 @@ export function LastOptimization({ disabledReason }: { disabledReason: string | 
 
   return (
     <Card
+      data-tour="last-opt"
       label={t("dashboard.d3.lastOptimization")}
       aside={report ? formatDateTime(report.generatedAt) : null}
       className="flex min-h-[248px] flex-col"
@@ -110,7 +111,7 @@ function FpsBeforeAfter({ entry, note }: { entry: FrameMeasurementEntry; note: R
         : t("dashboard.d3.fps.same", { noise });
 
   return (
-    <Card label={t("dashboard.d3.lastOptimization")} aside={formatDateTime(entry.measuredAt)} className="flex min-h-[248px] flex-col">
+    <Card data-tour="last-opt" label={t("dashboard.d3.lastOptimization")} aside={formatDateTime(entry.measuredAt)} className="flex min-h-[248px] flex-col">
       <div className="flex flex-1 flex-col">
         <p className="text-xs text-fg-3">
           {t("dashboard.d3.fps.label")}
